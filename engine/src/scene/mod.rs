@@ -167,6 +167,8 @@ pub struct SceneInstance {
     view_projection: Mat4,
     /// Layers that could not be built, with why: for `inspect` and logs.
     skipped: Vec<String>,
+    /// The ids of layers whose finished picture another layer reads.
+    provides: std::collections::HashSet<i64>,
     /// The videos the scene's layers show, held for as long as it plays.
     videos: Vec<crate::video::VideoHold>,
     /// The camera follows the pointer, shifting layers by their depth.

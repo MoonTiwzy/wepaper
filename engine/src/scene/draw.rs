@@ -49,6 +49,9 @@ impl Canvas {
     }
 }
 
+/// Finished pictures of layers: the layer's id, the buffer, and the size shaders are told it has.
+type Pictures = Vec<(i64, Target, [f32; 2])>;
+
 /// The buffers a layer holds while its chain runs.
 struct Chain {
     ping: [Option<Target>; 2],
@@ -111,16 +114,19 @@ impl SceneInstance {
             }
         }
         let mut background: Option<Target> = None;
+        // The finished pictures of layers that others read, kept until the frame is done.
+        let mut pictures: Pictures = Vec::new();
         for layer in &self.layers {
             if !layer.shown {
                 continue;
             }
             if let LayerKind::Image(image) = &layer.kind {
-                draw_image(engine, &frame, layer, image, canvas, &mut background, density);
+                let keep = self.provides.contains(&layer.id);
+                draw_image(engine, &frame, layer, image, canvas, &mut background, &mut pictures, keep, density);
             }
         }
-        if let Some(background) = background {
-            engine.pool.give(background);
+        for target in background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)) {
+            engine.pool.give(target);
         }
         engine.pool.end_frame();
     }
@@ -170,7 +176,18 @@ impl SceneInstance {
 
 /// Draws one image layer: its base pass, then each visible effect's steps, the last
 /// of them straight into the scene.
-fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &ImageLayer, scene: Canvas, background: &mut Option<Target>, density: f32) {
+#[allow(clippy::too_many_arguments)]
+fn draw_image(
+    engine: &mut Engine,
+    frame: &Frame<'_>,
+    layer: &Layer,
+    image: &ImageLayer,
+    scene: Canvas,
+    background: &mut Option<Target>,
+    pictures: &mut Pictures,
+    keep: bool,
+    density: f32,
+) {
     // Parallax moves a layer by how far it is from the camera's centre and from
     // the pointer, scaled by its depth: near layers travel further than far ones.
     let world = match frame.parallax {
@@ -212,10 +229,10 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
     }
     let background_texture = background.as_ref().map(|t| &t.texture);
 
-    if steps.is_empty() {
+    if steps.is_empty() && !keep {
         scene.bind(&engine.gl);
         engine.gl.set_blend(image.blend);
-        apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, engine.white());
+        apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, pictures, engine.white());
         image.quad.draw();
         return;
     }
@@ -238,17 +255,17 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
         match image.mode {
             // The compose shader places itself by texture coordinate and reads the scene by position.
             ImageMode::Compose => {
-                apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, engine.white());
+                apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, pictures, engine.white());
                 image.quad_unit.draw();
             }
             ImageMode::Fullscreen => {
                 let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, engine.white());
+                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, pictures, engine.white());
                 engine.fullscreen.draw();
             }
             ImageMode::Normal => {
                 let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, engine.white());
+                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, pictures, engine.white());
                 image.base_quad.draw();
             }
         }
@@ -266,7 +283,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
                     }
                 }
                 Step::Draw { shade, target } => {
-                    let to_scene = last && target.is_none();
+                    let to_scene = last && target.is_none() && !keep;
                     let next = 1 - chain.current.unwrap_or(1);
                     if to_scene {
                         scene.bind(&engine.gl);
@@ -287,11 +304,11 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
                     let reading: Vec<Option<&Texture>> =
                         chain.named.iter().enumerate().map(|(i, t)| if Some(i) == *target { None } else { t.as_ref().map(|t| &t.texture) }).collect();
                     if to_scene && !fullscreen {
-                        apply(&engine.gl, shade, frame, &state, previous, &reading, background_texture, engine.white());
+                        apply(&engine.gl, shade, frame, &state, previous, &reading, background_texture, pictures, engine.white());
                         image.quad_unit.draw();
                     } else {
                         let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                        apply(&engine.gl, shade, frame, &flat, previous, &reading, background_texture, engine.white());
+                        apply(&engine.gl, shade, frame, &flat, previous, &reading, background_texture, pictures, engine.white());
                         engine.fullscreen.draw();
                     }
                     if to_scene {
@@ -312,8 +329,16 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
         }
         Ok(())
     })();
-    if let Err(error) = ok {
+    if let Err(error) = &ok {
         log::warn!("layer {}: {error}", layer.name);
+    }
+    // A layer others read keeps its finished picture for the rest of the frame.
+    if keep
+        && ok.is_ok()
+        && let Some(index) = chain.current
+        && let Some(picture) = chain.ping[index].take()
+    {
+        pictures.push((layer.id, picture, image.size));
     }
     for target in chain.ping.into_iter().flatten().chain(chain.named.into_iter().flatten()) {
         engine.pool.give(target);
@@ -336,7 +361,17 @@ fn ensure_named(engine: &mut Engine, chain: &mut Chain, image: &ImageLayer, slot
 
 /// Binds a pass's program and textures and sets every uniform it has.
 #[allow(clippy::too_many_arguments)]
-fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous: Option<&Texture>, named: &[Option<&Texture>], background: Option<&Texture>, white: &Texture) {
+fn apply(
+    gl: &Gl,
+    shade: &Shade,
+    frame: &Frame<'_>,
+    state: &LayerState,
+    previous: Option<&Texture>,
+    named: &[Option<&Texture>],
+    background: Option<&Texture>,
+    pictures: &Pictures,
+    white: &Texture,
+) {
     shade.program.bind();
     // Per texture unit: the resolution shaders are told, and the sprite frame showing.
     let mut resolutions = [[1.0f32; 4]; 16];
@@ -357,6 +392,11 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
             TextureRef::Previous => (previous.unwrap_or(white).raw(), authored),
             TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white).raw(), authored),
             TextureRef::Background => (background.unwrap_or(white).raw(), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+            TextureRef::Layer(id) => match pictures.iter().find(|(layer, ..)| layer == id) {
+                Some((_, picture, size)) => (picture.texture.raw(), [size[0], size[1], size[0], size[1]]),
+                // A layer drawn later, or hidden, has no picture yet.
+                None => (white.raw(), authored),
+            },
             TextureRef::Text(surface) => match surface.texture.borrow().as_ref() {
                 Some(texture) => (texture.raw(), [texture.width as f32, texture.height as f32, texture.width as f32, texture.height as f32]),
                 None => (white.raw(), authored),

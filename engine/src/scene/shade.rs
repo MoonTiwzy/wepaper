@@ -27,6 +27,8 @@ pub(crate) enum TextureRef {
     Video(SharedVideo),
     /// A text layer's rasterised text.
     Text(Rc<super::text::TextSurface>),
+    /// The finished picture of another layer, by its id.
+    Layer(i64),
 }
 
 /// What a texture slot is asked to hold, before it is resolved.
@@ -181,6 +183,10 @@ impl Shade {
                 if name == "_rt_FullFrameBuffer" {
                     *wants_background = true;
                     return Some(TextureRef::Background);
+                }
+                if let Some(rest) = name.strip_prefix("_rt_imageLayerComposite_") {
+                    // `<id>_a`: the picture of layer <id> after its effects.
+                    return rest.split('_').next().and_then(|id| id.parse().ok()).map(TextureRef::Layer);
                 }
                 if name.starts_with("_rt_") || name.starts_with("_alias_") {
                     return input.buffers.iter().position(|b| b == name).map(TextureRef::Buffer);

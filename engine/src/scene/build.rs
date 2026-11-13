@@ -96,6 +96,7 @@ impl SceneInstance {
             view_projection: Mat4::IDENTITY,
             skipped,
             project,
+            provides: std::collections::HashSet::new(),
             videos: Vec::new(),
             parallax: scene.general.parallax.value.then(|| super::Parallax {
                 amount: scene.general.parallax_amount.value,
@@ -131,8 +132,13 @@ impl SceneInstance {
     fn hold_videos(&mut self) {
         let mut streams: Vec<crate::video::SharedVideo> = Vec::new();
         let mut wants_audio = false;
+        let mut provides = std::collections::HashSet::new();
         let mut note = |shade: &Shade| {
             wants_audio |= shade.wants_audio;
+            provides.extend(shade.samplers.iter().filter_map(|(_, _, source)| match source {
+                TextureRef::Layer(id) => Some(*id),
+                _ => None,
+            }));
             for (_, _, source) in &shade.samplers {
                 if let TextureRef::Video(video) = source
                     && !streams.iter().any(|known| std::rc::Rc::ptr_eq(known, video))
@@ -153,6 +159,7 @@ impl SceneInstance {
         }
         self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
         self.wants_audio = wants_audio;
+        self.provides = provides;
     }
 }
 
