@@ -8,6 +8,8 @@
 //! - [`gpu`]: OpenGL: the context, textures, programs, pooled render targets.
 //! - [`share`]: the cache every playing wallpaper draws its resources from.
 //! - [`scene`]: a scene becomes layers and passes, and a frame is drawn.
+//! - [`particles`]: particle systems, simulated on the CPU.
+//! - `script`: SceneScript, behind the `script` feature.
 //!
 //! Nothing here knows about Wayland or the control protocol; the `wepaper` binary
 //! brings those.
@@ -28,8 +30,11 @@ pub mod glsl;
 pub mod gpu;
 pub mod locate;
 pub mod math;
+pub mod particles;
 pub mod read;
 pub mod scene;
+#[cfg(feature = "script")]
+pub mod script;
 pub mod share;
 
 use std::path::{Path, PathBuf};
