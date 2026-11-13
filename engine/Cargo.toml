@@ -1,0 +1,28 @@
+[package]
+name = "wepaper-engine"
+description = "The wepaper engine: a wallpaper folder in, frames out."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["script"]
+script = ["dep:rquickjs"]
+
+[dependencies]
+wepaper-json.workspace = true
+fontdue = "0.9"
+glow = "0.16"
+khronos-egl = { version = "6", features = ["dynamic"] }
+libc = "0.2"
+libloading = "0.8"
+log = "0.4"
+png = "0.17"
+rquickjs = { version = "0.9", default-features = false, optional = true }
+zune-jpeg = "0.4"
+
+[lints]
+workspace = true

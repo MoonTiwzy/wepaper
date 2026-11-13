@@ -1,17 +1,16 @@
 [package]
-name = "wepaper-plugin"
-description = "Plugins of wepaper: manifests, discovery and supervision."
+name = "wepaper-web"
+description = "Web wallpapers for wepaper: a renderer plugin on WebKitGTK."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+authors.workspace = true
 
 [dependencies]
-wepaper-json.workspace = true
 wepaper-ipc.workspace = true
-log.workspace = true
-libc.workspace = true
+wepaper-json.workspace = true
 
 [lints]
 workspace = true

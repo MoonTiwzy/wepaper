@@ -584,14 +584,16 @@ name = "wepaper"
 version = "0.1.0"
 dependencies = [
  "lexopt",
+ "libc",
  "log",
- "png",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-egl",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
  "wepaper-engine",
- "wepaper-formats",
- "wepaper-gl",
  "wepaper-ipc",
  "wepaper-json",
- "wepaper-vfs",
 ]
 
 [[package]]
@@ -600,35 +602,14 @@ version = "0.1.0"
 dependencies = [
  "fontdue",
  "glow",
- "libc",
- "log",
- "wepaper-formats",
- "wepaper-gl",
- "wepaper-json",
- "wepaper-media",
- "wepaper-particles",
- "wepaper-shader",
- "wepaper-vfs",
-]
-
-[[package]]
-name = "wepaper-formats"
-version = "0.1.0"
-dependencies = [
- "png",
- "wepaper-json",
- "zune-jpeg",
-]
-
-[[package]]
-name = "wepaper-gl"
-version = "0.1.0"
-dependencies = [
- "glow",
  "khronos-egl",
  "libc",
  "libloading",
  "log",
+ "png",
+ "rquickjs",
+ "wepaper-json",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -643,78 +624,11 @@ name = "wepaper-json"
 version = "0.1.0"
 
 [[package]]
-name = "wepaper-media"
-version = "0.1.0"
-dependencies = [
- "glow",
- "libc",
- "libloading",
- "log",
- "wepaper-gl",
-]
-
-[[package]]
-name = "wepaper-particles"
-version = "0.1.0"
-dependencies = [
- "wepaper-json",
-]
-
-[[package]]
-name = "wepaper-plugin"
-version = "0.1.0"
-dependencies = [
- "libc",
- "log",
- "wepaper-ipc",
- "wepaper-json",
-]
-
-[[package]]
-name = "wepaper-script"
-version = "0.1.0"
-dependencies = [
- "log",
- "rquickjs",
- "wepaper-json",
-]
-
-[[package]]
-name = "wepaper-shader"
-version = "0.1.0"
-dependencies = [
- "wepaper-json",
-]
-
-[[package]]
-name = "wepaper-vfs"
-version = "0.1.0"
-
-[[package]]
 name = "wepaper-web"
 version = "0.1.0"
 dependencies = [
  "wepaper-ipc",
  "wepaper-json",
-]
-
-[[package]]
-name = "wepaperd"
-version = "0.1.0"
-dependencies = [
- "lexopt",
- "libc",
- "log",
- "wayland-backend",
- "wayland-client",
- "wayland-egl",
- "wayland-protocols",
- "wayland-protocols-wlr",
- "wepaper-engine",
- "wepaper-gl",
- "wepaper-ipc",
- "wepaper-json",
- "wepaper-plugin",
 ]
 
 [[package]]
