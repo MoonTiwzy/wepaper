@@ -1,0 +1,8 @@
+{
+  "name": "Example hook",
+  "description": "Appends a line to a log whenever a wallpaper is shown. A starting point for your own hook.",
+  "kind": "hook",
+  "events": ["shown"],
+  "exec": "./on-shown.sh",
+  "enabled": false
+}

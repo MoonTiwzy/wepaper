@@ -34,6 +34,7 @@ pub mod glsl;
 pub mod gpu;
 pub mod locate;
 pub mod math;
+#[cfg(not(lead_build))]
 pub mod particles;
 pub mod post;
 pub mod read;

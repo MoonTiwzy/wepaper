@@ -146,6 +146,10 @@ impl VideoStream {
             let settings: &[(&str, &str)] = &[
                 ("vo", "libmpv"),
                 ("hwdec", if options.hardware_decode { "auto-safe" } else { "no" }),
+                // Without this the renderer sets up every GPU decoder's interop at start
+                // (a CUDA context on NVIDIA: a hundred megabytes of video memory) in case
+                // it is ever wanted.
+                ("gpu-hwdec-interop", if options.hardware_decode { "auto" } else { "no" }),
                 ("loop-file", "inf"),
                 ("terminal", "no"),
                 ("msg-level", "all=no"),
@@ -157,9 +161,22 @@ impl VideoStream {
                 ("aid", if options.audio { "auto" } else { "no" }),
                 ("volume", &volume),
                 ("audio-client-name", "wepaper"),
-                // The plainest renderer: planes in, one pass, no intermediate buffers.
+                // The plainest renderer: planes in, one pass, no intermediate buffers,
+                // nothing mapped or cached on the GPU beyond the frame itself.
                 ("gpu-dumb-mode", "yes"),
                 ("dither", "no"),
+                ("deband", "no"),
+                ("scale", "bilinear"),
+                ("dscale", "bilinear"),
+                ("cscale", "bilinear"),
+                ("fbo-format", "rgba8"),
+                ("opengl-pbo", "no"),
+                ("vd-lavc-dr", "no"),
+                ("gpu-shader-cache", "no"),
+                ("icc-profile-auto", "no"),
+                ("hdr-compute-peak", "no"),
+                ("video-sync", "audio"),
+                ("audio-buffer", "0.1"),
                 // A wallpaper loops a local file: reading ahead only costs memory.
                 ("cache", "no"),
                 ("demuxer-max-bytes", "4MiB"),

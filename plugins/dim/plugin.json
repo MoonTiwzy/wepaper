@@ -1,0 +1,8 @@
+{
+  "name": "Dim",
+  "description": "Darkens the wallpaper so that windows and text stand out.",
+  "kind": "shader",
+  "shader": "dim.frag",
+  "enabled": false,
+  "params": { "u_Amount": { "default": 0.35, "min": 0, "max": 1 } }
+}

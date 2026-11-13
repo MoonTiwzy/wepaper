@@ -17,6 +17,7 @@ wepaper-ipc = { path = "ipc", version = "0.1.0" }
 wepaper-json = { path = "json", version = "0.1.0" }
 
 [workspace.lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(lead_build)'] }
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "warn"
 
