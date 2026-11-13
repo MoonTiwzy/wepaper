@@ -65,7 +65,13 @@ impl SceneInstance {
     /// to where the frame is wanted.
     pub fn render(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32)) {
         self.viewport = crate::Viewport { width: size.0.max(1), height: size.1.max(1) };
-        let canvas = Canvas { framebuffer: to, size: (self.viewport.width, self.viewport.height) };
+        let size = (self.viewport.width, self.viewport.height);
+        // A scene that blooms is drawn into a buffer first: the bloom reads the finished frame.
+        let staged = match self.bloom.as_ref().filter(|bloom| bloom.enabled) {
+            Some(_) => engine.pool.take(size.0, size.1, TextureFormat::Rgba8).inspect_err(|e| log::warn!("bloom: {e}")).ok(),
+            None => None,
+        };
+        let canvas = Canvas { framebuffer: staged.as_ref().map_or(to, |target| Some(target.framebuffer())), size };
         for video in &self.videos {
             video.stream.borrow_mut().poll();
         }
@@ -125,7 +131,37 @@ impl SceneInstance {
                 draw_image(engine, &frame, layer, image, canvas, &mut background, &mut pictures, keep, density);
             }
         }
-        for target in background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)) {
+        if let (Some(staged), Some(bloom)) = (&staged, &self.bloom) {
+            let flat = LayerState { mvp: Mat4::IDENTITY, model: Mat4::IDENTITY, color: [1.0; 3], alpha: 1.0, brightness: 1.0, authored: frame.screen };
+            let run = |engine: &mut Engine, shade: &super::shade::Shade, input: &Texture, extra: Option<&Texture>| {
+                engine.gl.set_blend(Blend::None);
+                apply(&engine.gl, shade, &frame, &flat, Some(input), &[extra], None, &pictures, engine.white());
+                engine.fullscreen.draw();
+            };
+            let small = |divisor: u32| ((size.0 / divisor).max(1), (size.1 / divisor).max(1));
+            let targets = (
+                engine.pool.take(small(4).0, small(4).1, TextureFormat::Rgba8),
+                engine.pool.take(small(8).0, small(8).1, TextureFormat::Rgba8),
+                engine.pool.take(small(8).0, small(8).1, TextureFormat::Rgba8),
+            );
+            if let (Ok(quarter), Ok(across), Ok(down)) = targets {
+                quarter.bind();
+                run(engine, &bloom.bright, &staged.texture, None);
+                across.bind();
+                run(engine, &bloom.across, &quarter.texture, None);
+                down.bind();
+                run(engine, &bloom.down, &across.texture, None);
+                engine.gl.bind_framebuffer(to, size);
+                run(engine, &bloom.combine, &staged.texture, Some(&down.texture));
+                for target in [quarter, across, down] {
+                    engine.pool.give(target);
+                }
+            } else {
+                // No memory for the bloom's buffers: the frame without it.
+                staged.blit(to, size);
+            }
+        }
+        for target in background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)).chain(staged) {
             engine.pool.give(target);
         }
         engine.pool.end_frame();
@@ -185,9 +221,10 @@ fn draw_image(
     scene: Canvas,
     background: &mut Option<Target>,
     pictures: &mut Pictures,
-    keep: bool,
+    provides: bool,
     density: f32,
 ) {
+    let keep = provides;
     // Parallax moves a layer by how far it is from the camera's centre and from
     // the pointer, scaled by its depth: near layers travel further than far ones.
     let world = match frame.parallax {
@@ -212,7 +249,7 @@ fn draw_image(
     }
 
     let needs_background =
-        image.mode != ImageMode::Normal || image.base.wants_background || steps.iter().any(|s| matches!(s, Step::Draw { shade, .. } if shade.wants_background));
+        image.mode != ImageMode::Normal || image.blend_pass.is_some() || image.base.wants_background || steps.iter().any(|s| matches!(s, Step::Draw { shade, .. } if shade.wants_background));
     if needs_background {
         let copy = match background.take() {
             Some(copy) => copy,
@@ -229,6 +266,8 @@ fn draw_image(
     }
     let background_texture = background.as_ref().map(|t| &t.texture);
 
+    // A layer with a blend mode, or one others read, always ends in a buffer.
+    let keep = keep || image.blend_pass.is_some();
     if steps.is_empty() && !keep {
         scene.bind(&engine.gl);
         engine.gl.set_blend(image.blend);
@@ -322,10 +361,20 @@ fn draw_image(
         // The chain ended in a buffer: put its picture into the scene.
         if !landed && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref()) {
             scene.bind(&engine.gl);
-            engine.gl.set_blend(image.blend);
-            let mvp = if fullscreen { Mat4::IDENTITY } else { state.mvp };
-            engine.composite(&result.texture, &mvp, 1.0);
-            if fullscreen { engine.fullscreen.draw() } else { image.quad_unit.draw() }
+            match &image.blend_pass {
+                // The blend shader reads the frame behind the layer and writes the mix.
+                Some(blend) if !fullscreen => {
+                    engine.gl.set_blend(Blend::None);
+                    apply(&engine.gl, blend, frame, &state, Some(&result.texture), &[], background_texture, pictures, engine.white());
+                    image.quad_unit.draw();
+                }
+                _ => {
+                    engine.gl.set_blend(image.blend);
+                    let mvp = if fullscreen { Mat4::IDENTITY } else { state.mvp };
+                    engine.composite(&result.texture, &mvp, 1.0);
+                    if fullscreen { engine.fullscreen.draw() } else { image.quad_unit.draw() }
+                }
+            }
         }
         Ok(())
     })();
@@ -333,7 +382,7 @@ fn draw_image(
         log::warn!("layer {}: {error}", layer.name);
     }
     // A layer others read keeps its finished picture for the rest of the frame.
-    if keep
+    if provides
         && ok.is_ok()
         && let Some(index) = chain.current
         && let Some(picture) = chain.ping[index].take()

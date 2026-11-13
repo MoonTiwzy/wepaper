@@ -78,6 +78,9 @@ pub(crate) struct ImageLayer {
     pub(crate) base_quad: Mesh,
     /// The layer's text, when its picture is text.
     pub(crate) text: Option<text::TextState>,
+    /// The pass that puts the layer's picture into the frame with a blend mode
+    /// (multiply, screen, ...) instead of plain blending, when it has one.
+    pub(crate) blend_pass: Option<Shade>,
 }
 
 /// What a layer is.
@@ -113,6 +116,19 @@ pub(crate) struct Layer {
     /// Whether it and every parent are visible.
     pub(crate) shown: bool,
     pub(crate) kind: LayerKind,
+}
+
+/// The passes of the scene's bloom, in the order they run.
+pub(crate) struct Bloom {
+    /// Keeps what is brighter than the threshold, at a quarter of the size.
+    pub(crate) bright: Shade,
+    /// Blurs across, down to an eighth of the size.
+    pub(crate) across: Shade,
+    /// Blurs down.
+    pub(crate) down: Shade,
+    /// Adds the result to the frame.
+    pub(crate) combine: Shade,
+    pub(crate) enabled: bool,
 }
 
 /// The scene's camera parallax settings.
@@ -167,6 +183,8 @@ pub struct SceneInstance {
     view_projection: Mat4,
     /// Layers that could not be built, with why: for `inspect` and logs.
     skipped: Vec<String>,
+    /// The scene's bloom: bright parts of the finished frame, blurred and added back.
+    bloom: Option<Bloom>,
     /// The ids of layers whose finished picture another layer reads.
     provides: std::collections::HashSet<i64>,
     /// The videos the scene's layers show, held for as long as it plays.
@@ -250,6 +268,11 @@ impl SceneInstance {
                 }
             }
             Change::Flag(Slot::LayerVisible(layer), on) => self.layers[layer].visible = on,
+            Change::Flag(Slot::Bloom, on) => {
+                if let Some(bloom) = &mut self.bloom {
+                    bloom.enabled = on;
+                }
+            }
             Change::Flag(Slot::EffectVisible(layer, effect), on) => {
                 if let LayerKind::Image(image) = &mut self.layers[layer].kind
                     && let Some(effect) = image.effects.get_mut(effect)

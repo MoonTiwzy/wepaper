@@ -34,6 +34,11 @@ impl SceneInstance {
         }
 
         bindings.link(&scene.general.zoom, Slot::Zoom);
+        bindings.link(&scene.general.bloom, Slot::Bloom);
+        // The bloom is built when the scene can ever bloom: now, or when a property says so.
+        let bloom = (scene.general.bloom.value || scene.general.bloom.user.is_some())
+            .then(|| build_bloom(engine, files, &mut bindings, &scene))
+            .and_then(|bloom| bloom.inspect_err(|why| log::warn!("bloom: {why}")).ok());
         let mut layers = Vec::with_capacity(scene.objects.len());
         for (index, object) in scene.objects.iter().enumerate() {
             let kind = match &object.kind {
@@ -96,6 +101,7 @@ impl SceneInstance {
             view_projection: Mat4::IDENTITY,
             skipped,
             project,
+            bloom,
             provides: std::collections::HashSet::new(),
             videos: Vec::new(),
             parallax: scene.general.parallax.value.then(|| super::Parallax {
@@ -161,6 +167,23 @@ impl SceneInstance {
         self.wants_audio = wants_audio;
         self.provides = provides;
     }
+}
+
+/// The scene's bloom passes, from the stock shaders.
+fn build_bloom(engine: &mut Engine, files: &Files, bindings: &mut Bindings, scene: &Scene) -> Result<super::Bloom, String> {
+    let general = &scene.general;
+    let number = |value: &Dyn<f32>| Dyn { value: Value::from(value.value), user: value.user.clone(), script: None, animation: None };
+    let constants = [("bloomstrength".to_owned(), number(&general.bloom_strength)), ("bloomthreshold".to_owned(), number(&general.bloom_threshold))];
+    let mut pass = |shader: &str, textures: &[TextureChoice], constants: &[(String, Dyn<Value>)]| {
+        Shade::compile(&mut engine.share, files, &PassInput { shader, textures, combos: &Combos::new(), constants, buffers: &["_bloom".to_owned()] }, bindings)
+    };
+    Ok(super::Bloom {
+        bright: pass("downsample_quarter_bloom", &[TextureChoice::Previous], &constants)?,
+        across: pass("downsample_eighth_blur_v", &[TextureChoice::Previous], &[])?,
+        down: pass("blur_h_bloom", &[TextureChoice::Previous], &[])?,
+        combine: pass("combine", &[TextureChoice::Previous, TextureChoice::Buffer(0)], &[])?,
+        enabled: general.bloom.value,
+    })
 }
 
 /// Registers what drives an object's own fields.
@@ -257,7 +280,20 @@ fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, inde
         quad_unit,
         base_quad,
         text: None,
+        blend_pass: blend_pass(engine, files, bindings, image.blend_mode),
     })
+}
+
+/// The pass that composites a layer with blend mode `mode`; `None` for plain blending.
+fn blend_pass(engine: &mut Engine, files: &Files, bindings: &mut Bindings, mode: i32) -> Option<Shade> {
+    if mode == 0 {
+        return None;
+    }
+    let combos: Combos = [("BLENDMODE".to_owned(), mode), ("TRANSFORM".to_owned(), 1)].into();
+    let textures = [TextureChoice::Previous, TextureChoice::Named("_rt_FullFrameBuffer".to_owned())];
+    Shade::compile(&mut engine.share, files, &PassInput { shader: "passthroughblend", textures: &textures, combos: &combos, constants: &[], buffers: &[] }, bindings)
+        .inspect_err(|why| log::warn!("blend mode {mode}: {why}"))
+        .ok()
 }
 
 /// The three quads a layer is drawn with: in layer space over the picture, in layer
@@ -341,6 +377,7 @@ fn build_text(engine: &mut Engine, files: &Files, bindings: &mut Bindings, text:
         quad_unit,
         base_quad,
         text: Some(TextState { text: text.text.value.clone(), font, style, size, surface, dirty: true }),
+        blend_pass: blend_pass(engine, files, bindings, text.blend_mode),
     })
 }
 

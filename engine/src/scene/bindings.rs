@@ -32,6 +32,8 @@ pub(crate) enum Slot {
     LayerText(usize),
     /// How far the scene's camera is zoomed in.
     Zoom,
+    /// Whether the scene blooms.
+    Bloom,
 }
 
 /// A link from a user property to a slot.
@@ -81,7 +83,7 @@ impl Bindings {
             .filter(|binding| binding.link.name == property)
             .filter_map(|binding| {
                 Some(match binding.slot {
-                    Slot::LayerVisible(_) | Slot::EffectVisible(..) => Change::Flag(binding.slot, holds(value, binding.link.condition.as_deref())),
+                    Slot::LayerVisible(_) | Slot::EffectVisible(..) | Slot::Bloom => Change::Flag(binding.slot, holds(value, binding.link.condition.as_deref())),
                     Slot::LayerText(_) => Change::Text(binding.slot, String::from_doc(value)?),
                     Slot::Value(index) => Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len())),
                     Slot::LayerAlpha(_) | Slot::Zoom => Change::Floats(binding.slot, value_floats(value, 1)),
