@@ -244,6 +244,31 @@ impl Gl {
         self.surface_changed();
     }
 
+    /// Sends everything drawn so far to the GPU and sleeps until it is done.
+    ///
+    /// Presenting a frame the GPU is still working on makes some drivers wait for
+    /// it by spinning a CPU core. Waiting here, asleep, costs nothing; what comes
+    /// after finds the work done.
+    ///
+    /// Returns how long the GPU took, so that a caller whose frames are light can
+    /// stop asking: for those the naps cost more than the spin they avoid.
+    pub fn wait_for_gpu(&self, patience: std::time::Duration) -> std::time::Duration {
+        let gl = &self.0.raw;
+        let started = std::time::Instant::now();
+        // SAFETY: a sync object is made, polled without blocking and deleted, all on the current context.
+        unsafe {
+            let Ok(fence) = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0) else { return std::time::Duration::ZERO };
+            gl.flush();
+            let mut nap = std::time::Duration::from_micros(250);
+            while !matches!(gl.client_wait_sync(fence, 0, 0), glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED) && started.elapsed() < patience {
+                std::thread::sleep(nap);
+                nap = (nap * 2).min(std::time::Duration::from_millis(1));
+            }
+            gl.delete_sync(fence);
+        }
+        started.elapsed()
+    }
+
     /// Sets how draws blend.
     pub fn set_blend(&self, blend: Blend) {
         let mut state = self.0.state.borrow_mut();

@@ -56,6 +56,10 @@ struct Slot {
     clock: f64,
     last_tick: Instant,
     last_draw: Instant,
+    /// When the next frame is due under the frame cap.
+    due: Instant,
+    /// How many more frames are presented without waiting for the GPU first.
+    light_frames: u32,
     /// The surface lost its contents (it was resized, or just made): draw even without a new frame.
     stale: bool,
     /// The output's wallpaper is known but not loaded yet: its size is not.
@@ -72,7 +76,7 @@ struct Slot {
 
 impl Slot {
     fn new(now: Instant) -> Self {
-        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, waiting: false, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
+        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, due: now, light_frames: 0, stale: true, waiting: false, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
     }
 }
 
@@ -382,8 +386,7 @@ impl Daemon {
     /// Draws every output that is due a frame. Returns when to wake up for the next one, if a timer is what it waits for.
     fn draw_due(&mut self) -> Option<Instant> {
         let now = Instant::now();
-        // A frame cap leaves a millisecond of slack so that a display at the same rate is not halved.
-        let interval = (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)).saturating_sub(Duration::from_millis(1)));
+        let interval = (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)));
         let mut wake: Option<Instant> = None;
         // Somebody listens to the system's sound only while a playing wallpaper reads the spectrum.
         let listen = self.settings.audio_response && self.slots.values().any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
@@ -418,11 +421,15 @@ impl Daemon {
             if let Some(interval) = interval
                 && !slot.stale
             {
-                let due = slot.last_draw + interval;
-                if now < due {
-                    wake = Some(wake.map_or(due, |at| at.min(due)));
+                // A frame may come up to a millisecond early: a display at the cap's
+                // own rate would otherwise miss every other refresh.
+                if now + Duration::from_millis(1) < slot.due {
+                    wake = Some(wake.map_or(slot.due, |at| at.min(slot.due)));
                     continue;
                 }
+                // Due times advance by whole intervals, so being late once is not
+                // paid for again; after a long gap they start over from now.
+                slot.due = (slot.due + interval).max(now);
             }
             if !slot.paused {
                 // A long gap (a suspended laptop, a stalled compositor) does not fast-forward the scene.
@@ -476,6 +483,17 @@ impl Daemon {
                 slot.frames = (now, 0, slot.frames.1);
             }
             slot.frames.1 += 1;
+            // The GPU finishes a heavy frame while we sleep, not while the driver spins
+            // in the swap. Light frames are not worth the naps: they are asked about
+            // once a second only, in case the scene has grown heavier.
+            if slot.light_frames == 0 {
+                let took = self.engine.gl().wait_for_gpu(Duration::from_millis(50));
+                if took < Duration::from_micros(600) {
+                    slot.light_frames = 60;
+                }
+            } else {
+                slot.light_frames -= 1;
+            }
             // The request for the next frame rides on the commit the swap makes.
             self.display.request_frame(id);
             if let Some(egl) = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.sheet.as_ref()).and_then(|sheet| sheet.egl.as_ref())
