@@ -11,10 +11,12 @@
 mod hub;
 pub(crate) mod mpv;
 mod stream;
+mod transcode;
 mod wallpaper;
 
 pub use hub::{SharedVideo, VideoHub};
 pub use stream::{VideoError, VideoOptions, VideoStream, Waker};
+pub use transcode::Limits;
 pub(crate) use wallpaper::VideoHold;
 pub use wallpaper::VideoInstance;
 

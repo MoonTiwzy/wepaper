@@ -11,6 +11,7 @@
 //! - [`video`]: libmpv decodes video straight into our textures.
 //! - [`audio`]: sound layers, and the spectrum of what the system plays.
 //! - [`particles`]: particle systems, simulated on the CPU.
+//! - [`post`]: output shaders run over the finished frame.
 //! - `script`: SceneScript, behind the `script` feature.
 //!
 //! Nothing here knows about Wayland or the control protocol; the `wepaper` binary
@@ -34,6 +35,7 @@ pub mod gpu;
 pub mod locate;
 pub mod math;
 pub mod particles;
+pub mod post;
 pub mod read;
 pub mod scene;
 #[cfg(feature = "script")]
@@ -257,6 +259,7 @@ impl Engine {
         }
         if let Some(dir) = &options.cache_dir {
             share.video_dir = dir.join("video");
+            share.videos.cache = Some(dir.join("video"));
         }
         let white = share.white();
         Ok(Self {

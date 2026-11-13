@@ -5,6 +5,7 @@
 //! draws the outputs that are due a frame.
 
 mod control;
+mod plugins;
 mod server;
 mod settings;
 mod wayland;
@@ -36,6 +37,7 @@ Without a wallpaper it shows what it showed last.
       --state FILE     where what is shown is remembered (default $XDG_STATE_HOME/wepaper/state.json)
       --assets DIR     Wallpaper Engine's assets folder (default: found in Steam)
       --set KEY=VALUE  a setting for this run, e.g. --set fps=30 (repeatable)
+      --plugins DIR    one more folder to look for plugins in (repeatable)
 ";
 
 /// Set by SIGINT and SIGTERM.
@@ -58,13 +60,17 @@ struct Slot {
     stale: bool,
     /// Why the last wallpaper asked for did not show.
     error: Option<String>,
+    /// The plugin process that draws this output's wallpaper, when the engine does not.
+    renderer: Option<plugins::Renderer>,
+    /// Where the frame is drawn before output shaders run over it.
+    staging: Option<gpu::Target>,
     /// Frames drawn in the current second, and the count of the last full one.
     frames: (Instant, u32, u32),
 }
 
 impl Slot {
     fn new(now: Instant) -> Self {
-        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, error: None, frames: (now, 0, 0) }
+        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
     }
 }
 
@@ -84,6 +90,12 @@ struct Daemon {
     slots: HashMap<u32, Slot>,
     /// When the outputs were last looked at for drawing.
     last_round: Instant,
+    last_upkeep: Instant,
+    /// How many videos are being re-encoded right now.
+    optimising: usize,
+    plugins: plugins::Plugins,
+    /// The compiled shader plugins, by plugin id, in the order they run.
+    shaders: Vec<(String, wepaper_engine::post::PostPass)>,
     quit: bool,
 }
 
@@ -93,6 +105,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let mut config_file = xdg_dir("XDG_CONFIG_HOME", ".config").join("config.json");
     let mut state_file = xdg_dir("XDG_STATE_HOME", ".local/state").join("state.json");
     let mut from_flags = Vec::new();
+    let mut plugin_dirs: Vec<PathBuf> = Vec::new();
     while let Some(arg) = args.next().map_err(|e| e.to_string())? {
         match arg {
             Long("socket") => socket = Some(value(&mut args)?.into()),
@@ -100,6 +113,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
             Long("state") => state_file = value(&mut args)?.into(),
             Long("assets") => assets = Some(value(&mut args)?.into()),
             Long("set") => from_flags.push(crate::cli::parse_property(&value(&mut args)?)?),
+            Long("plugins") => plugin_dirs.push(value(&mut args)?.into()),
             Short('h') | Long("help") => {
                 print!("{USAGE}");
                 return Ok(());
@@ -120,7 +134,8 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
     }
 
-    let server = Server::bind(&socket.unwrap_or_else(wepaper_ipc::default_socket))?;
+    let socket = socket.unwrap_or_else(wepaper_ipc::default_socket);
+    let server = Server::bind(&socket)?;
     let (connection, mut queue, display) = Display::connect()?;
     // SAFETY: the display pointer is the connection's, which the daemon keeps for as long as the context.
     let context = unsafe { gpu::Context::wayland(connection.backend().display_ptr().cast()) }.map_err(|e| e.to_string())?;
@@ -135,7 +150,43 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let options = Options { assets, cache_dir: Some(crate::cli::cache_dir()), max_texture_side: settings.texture_max_side };
     let engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
 
-    let mut daemon = Daemon { connection, display, context, engine, server, settings, from_flags, config_file, state, state_file, slots: HashMap::new(), last_round: Instant::now(), quit: false };
+    let found = plugins::discover(&plugins::search_dirs(&plugin_dirs));
+    let mut shaders = Vec::new();
+    for manifest in found.iter().filter(|m| m.kind == plugins::Kind::Shader) {
+        let compiled = std::fs::read_to_string(manifest.dir.join(&manifest.shader))
+            .map_err(|e| e.to_string())
+            .and_then(|source| wepaper_engine::post::PostPass::compile(context.gl(), &source).map_err(|e| e.to_string()));
+        match compiled {
+            Ok(mut pass) => {
+                pass.enabled = manifest.enabled;
+                for (name, value) in &manifest.params {
+                    pass.set(name, *value);
+                }
+                shaders.push((manifest.id.clone(), pass));
+            }
+            Err(why) => log::warn!("shader plugin {}: {why}", manifest.id),
+        }
+    }
+    let now = Instant::now();
+    let mut daemon = Daemon {
+        connection,
+        display,
+        context,
+        engine,
+        server,
+        settings,
+        from_flags,
+        config_file,
+        state,
+        state_file,
+        slots: HashMap::new(),
+        last_round: now,
+        last_upkeep: now,
+        optimising: 0,
+        plugins: plugins::Plugins::new(found, socket),
+        shaders,
+        quit: false,
+    };
     daemon.apply_sound();
     if let Some(wallpaper) = wallpaper {
         // Shown once the outputs are known; until then it is what "last" is.
@@ -143,7 +194,9 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         daemon.state.last = Shown { wallpaper: Some(folder), ..Shown::default() };
         daemon.state.outputs.clear();
     }
+    daemon.plugins.announce(&plugins::Happening { event: "started", ..Default::default() });
     let result = daemon.run(&mut queue);
+    daemon.plugins.announce(&plugins::Happening { event: "stopping", ..Default::default() });
     // Wallpapers and surfaces go while the context is still there to free them with.
     daemon.slots.clear();
     daemon.display.heads.clear();
@@ -241,28 +294,77 @@ impl Daemon {
     fn load(&mut self, id: u32, folder: &std::path::Path, properties: &[(String, wepaper_json::Value)]) -> Result<(), String> {
         // Videos are stored no wider than the widest output: nobody sees more.
         let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
-        self.engine.videos().options.max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
+        let max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
+        self.engine.videos().options.max_width = max_width;
         self.engine.videos().options.hardware_decode = self.settings.video_hardware;
+        // Under a frame cap, a video's extra frames would be decoded for nothing.
+        self.engine.videos().limits = wepaper_engine::video::Limits { max_width, max_fps: self.settings.fps as f32 };
         let viewport = self.viewport(id);
-        let loaded = self.engine.load(folder, viewport, properties);
+        let (_, project) = self.engine.open(folder).map_err(|e| e.to_string())?;
+        let kind = project.kind.name();
+        let name = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.name.clone()).unwrap_or_default();
+
+        // A kind the engine does not draw goes to the plugin that does.
+        let loaded = if let Some(manifest) = self.plugins.renderer_for(kind).cloned() {
+            let mut arguments: Vec<String> = ["--dir", &folder.to_string_lossy(), "--file", &project.file, "--output", &name, "--layer", self.settings.layer.name(), "--namespace", wayland::NAMESPACE]
+                .map(str::to_owned)
+                .into();
+            arguments.extend(["--fps".to_owned(), self.settings.fps.to_string(), "--volume".to_owned(), format!("{:.0}", self.settings.volume)]);
+            if self.settings.mute {
+                arguments.push("--muted".to_owned());
+            }
+            if self.settings.passthrough {
+                arguments.push("--passthrough".to_owned());
+            }
+            for (property, value) in properties {
+                arguments.extend(["--property".to_owned(), format!("{property}={}", value.to_json())]);
+            }
+            self.plugins.render(&manifest, &arguments).map(Err)
+        } else {
+            self.engine.load(folder, viewport, properties).map(Ok).map_err(|e| e.to_string())
+        };
         let Some(slot) = self.slots.get_mut(&id) else { return Err("the output is gone".to_owned()) };
         match loaded {
-            Ok(mut wallpaper) => {
-                wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
-                wallpaper.set_paused(slot.paused);
-                slot.wallpaper = Some(wallpaper);
+            Ok(shown) => {
                 slot.clock = 0.0;
                 slot.stale = true;
                 slot.error = None;
+                match shown {
+                    Ok(mut wallpaper) => {
+                        wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
+                        wallpaper.set_paused(slot.paused);
+                        slot.wallpaper = Some(wallpaper);
+                        slot.renderer = None;
+                    }
+                    Err(mut renderer) => {
+                        if slot.paused {
+                            renderer.send(&wepaper_json::obj! { "cmd" => "pause" });
+                        }
+                        slot.wallpaper = None;
+                        slot.renderer = Some(renderer);
+                        // Our own surface goes blank under the plugin's: a new one has nothing on it.
+                        if let Some(head) = self.display.heads.iter_mut().find(|head| head.id == id) {
+                            head.sheet = None;
+                        }
+                        self.display.cover(id, self.settings.layer, self.settings.passthrough);
+                    }
+                }
                 // What the old wallpaper held alone is freed now, not at the next load.
                 self.engine.trim();
                 // SAFETY: returns memory the loader freed to the system; no pointers are invalidated.
                 unsafe { libc::malloc_trim(0) };
+                self.plugins.announce(&plugins::Happening {
+                    event: "shown",
+                    output: name,
+                    wallpaper: folder.to_string_lossy().into_owned(),
+                    title: project.title.clone(),
+                    kind: kind.to_owned(),
+                });
                 Ok(())
             }
             Err(error) => {
-                slot.error = Some(error.to_string());
-                Err(error.to_string())
+                slot.error = Some(error.clone());
+                Err(error)
             }
         }
     }
@@ -277,6 +379,20 @@ impl Daemon {
         let listen = self.settings.audio_response && self.slots.values().any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
         self.engine.listen(listen, now.duration_since(self.last_round).as_secs_f32().min(0.1));
         self.last_round = now;
+        // Once a second is plenty for looking after the videos' cheaper copies.
+        if now.duration_since(self.last_upkeep) >= Duration::from_secs(1) {
+            self.last_upkeep = now;
+            self.optimising = self.engine.videos().optimise();
+            self.plugins.upkeep();
+            // A renderer plugin that died leaves its output empty, and says so.
+            for slot in self.slots.values_mut() {
+                if slot.renderer.as_mut().is_some_and(|renderer| !renderer.alive()) {
+                    let plugin = slot.renderer.take().map(|r| r.plugin.clone()).unwrap_or_default();
+                    slot.error = Some(format!("the {plugin} plugin stopped"));
+                    log::error!("the {plugin} plugin stopped");
+                }
+            }
+        }
         let ids: Vec<u32> = self.display.heads.iter().map(|head| head.id).collect();
         for id in ids {
             let Some(head) = self.display.heads.iter().find(|head| head.id == id) else { continue };
@@ -310,7 +426,27 @@ impl Daemon {
             self.context.disable_vsync();
             let input = FrameInput { time: slot.clock, pointer: head.pointer, daytime: control::daytime() };
             let size = sheet.pixels();
-            if !wallpaper.draw(&mut self.engine, &input, None, size, slot.stale) {
+            let shaded = self.shaders.iter().any(|(_, pass)| pass.enabled);
+            if shaded {
+                // The frame goes into a buffer first, then through the output shaders onto the surface.
+                if slot.staging.as_ref().is_none_or(|t| (t.width(), t.height()) != size) {
+                    slot.staging = gpu::Target::new(self.engine.gl(), size.0, size.1, gpu::TextureFormat::Rgba8).inspect_err(|e| log::warn!("{e}")).ok();
+                }
+            } else {
+                slot.staging = None;
+            }
+            let drew = match &slot.staging {
+                Some(staging) => {
+                    let drew = wallpaper.draw(&mut self.engine, &input, Some(staging.framebuffer()), size, slot.stale);
+                    if drew {
+                        let passes: Vec<&wepaper_engine::post::PostPass> = self.shaders.iter().map(|(_, pass)| pass).collect();
+                        self.engine.post(&passes, staging, None, size, slot.clock as f32);
+                    }
+                    drew
+                }
+                None => wallpaper.draw(&mut self.engine, &input, None, size, slot.stale),
+            };
+            if !drew {
                 continue; // A video without a new frame: what is on screen stands.
             }
             if log::log_enabled!(log::Level::Trace) {
@@ -345,8 +481,14 @@ impl Daemon {
     fn apply_sound(&mut self) {
         let (audio, volume) = (!self.settings.mute && self.settings.volume > 0.0, self.settings.volume);
         self.engine.videos().set_sound(audio, volume);
-        for wallpaper in self.slots.values_mut().filter_map(|slot| slot.wallpaper.as_mut()) {
-            wallpaper.set_sound(audio, volume);
+        for slot in self.slots.values_mut() {
+            if let Some(wallpaper) = &mut slot.wallpaper {
+                wallpaper.set_sound(audio, volume);
+            }
+            if let Some(renderer) = &mut slot.renderer {
+                renderer.send(&wepaper_json::obj! { "cmd" => "volume", "value" => volume });
+                renderer.send(&wepaper_json::obj! { "cmd" => "mute", "value" => !audio });
+            }
         }
     }
 

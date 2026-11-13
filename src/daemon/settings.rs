@@ -206,7 +206,8 @@ mod tests {
         let settings = Settings::default();
         assert_eq!((settings.fps, settings.volume, settings.mute, settings.fill, settings.layer), (0, 100.0, true, Fill::Cover, Layer::Background));
         assert!(!settings.passthrough && !settings.video_hardware);
-        let keys: Vec<&str> = settings.to_value().members().map(|(k, _)| k).collect();
+        let tree = settings.to_value();
+        let keys: Vec<&str> = tree.members().map(|(k, _)| k).collect();
         assert_eq!(keys, KEYS, "every setting is listed, and the list is every setting");
     }
 

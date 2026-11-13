@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn a_second_daemon_is_refused_and_a_dead_socket_is_replaced() {
         let (server, path) = server("second");
-        assert!(Server::bind(&path).unwrap_err().contains("already listening"));
+        assert!(Server::bind(&path).err().is_some_and(|why| why.contains("already listening")));
         std::mem::forget(server); // The socket file stays, nobody answers: a crashed daemon.
         let _ = std::fs::remove_file(&path);
         std::os::unix::net::UnixListener::bind(&path).map(drop).unwrap();

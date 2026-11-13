@@ -105,6 +105,8 @@ pub struct VideoStream {
     ended: bool,
     /// Counts the frames drawn into the texture.
     serial: u64,
+    /// A file was started part way in: once it plays, loops go back to its beginning.
+    restart_at_zero: bool,
 }
 
 unsafe extern "C" fn proc_address(context: *mut c_void, name: *const c_char) -> *mut c_void {
@@ -200,7 +202,7 @@ impl VideoStream {
             let signal = Box::into_raw(Box::new(Signal { fresh: AtomicBool::new(false), waker }));
             (api.render_context_set_update_callback)(render, Some(on_update), signal.cast());
 
-            let stream = Self { api, gl: gl.clone(), handle, render, signal, target: None, max_width: options.max_width, holders: Vec::new(), paused: false, ended: false, serial: 0 };
+            let stream = Self { api, gl: gl.clone(), handle, render, signal, target: None, max_width: options.max_width, holders: Vec::new(), paused: false, ended: false, serial: 0, restart_at_zero: false };
             let file = text(&path.to_string_lossy())?;
             let mut command = [c"loadfile".as_ptr(), file.as_ptr(), std::ptr::null()];
             let code = (api.command)(handle, command.as_mut_ptr());
@@ -242,6 +244,10 @@ impl VideoStream {
                 let event = &*(self.api.wait_event)(self.handle, 0.0);
                 match event.event_id {
                     mpv::EVENT_NONE => break,
+                    mpv::EVENT_FILE_LOADED if self.restart_at_zero => {
+                        self.restart_at_zero = false;
+                        self.set(c"start", "none");
+                    }
                     mpv::EVENT_SHUTDOWN | mpv::EVENT_END_FILE => self.ended = event.event_id == mpv::EVENT_SHUTDOWN || event.error < 0,
                     _ => {}
                 }
@@ -314,6 +320,22 @@ impl VideoStream {
     /// Whether the file stopped and will not play again (it could not be read).
     pub fn ended(&self) -> bool {
         self.ended
+    }
+
+    /// The width of the video as stored in its file, when libmpv knows it.
+    pub fn source_width(&self) -> Option<u32> {
+        self.property_i64(c"width").filter(|w| *w > 0).map(|w| w as u32)
+    }
+
+    /// Carries on from the same moment in another file: a cheaper copy of the same video.
+    pub fn switch_to(&mut self, path: &Path) {
+        let Ok(file) = CString::new(path.to_string_lossy().as_bytes()) else { return };
+        let position = self.property_f64(c"time-pos").unwrap_or(0.0);
+        self.set(c"start", &format!("{position:.3}"));
+        let mut command = [c"loadfile".as_ptr(), file.as_ptr(), c"replace".as_ptr(), std::ptr::null()];
+        // SAFETY: the handle is alive and the strings outlive the call.
+        unsafe { (self.api.command)(self.handle, command.as_mut_ptr()) };
+        self.restart_at_zero = true;
     }
 
     /// The video's frame rate, when libmpv knows it.

@@ -7,6 +7,7 @@ use wepaper_engine::doc::FromDoc;
 use wepaper_ipc::{PROTOCOL, Request, error, ok, split_path};
 use wepaper_json::{Map, Value, obj};
 
+use super::plugins::{Happening, Kind};
 use super::settings::{KEYS, Settings};
 use super::{Daemon, Shown};
 
@@ -60,6 +61,17 @@ impl Daemon {
                     }
                     Value::Object(node)
                 }
+                (None, Some(folder)) if slot.renderer.is_some() => {
+                    let plugin = slot.renderer.as_ref().map(|r| r.plugin.clone()).unwrap_or_default();
+                    obj! {
+                        "path" => folder.to_string_lossy().into_owned(),
+                        "kind" => plugin.clone(),
+                        "title" => "",
+                        "state" => "playing",
+                        "plugin" => plugin,
+                        "properties" => Value::Object(slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+                    }
+                }
                 _ => Value::Null,
             };
             outputs.insert(
@@ -77,14 +89,33 @@ impl Daemon {
             );
         }
         let memory = self.engine.gl().memory();
+        let mut plugins = Map::new();
+        for manifest in &self.plugins.manifests {
+            let mut node = Map::new();
+            node.insert("name", Value::from(&manifest.name));
+            node.insert("kind", Value::from(manifest.kind.name()));
+            node.insert("enabled", Value::from(manifest.enabled));
+            match manifest.kind {
+                Kind::Service => node.insert("running", Value::from(self.plugins.running(&manifest.id))),
+                Kind::Shader => {
+                    let params = self.shaders.iter().find(|(id, _)| *id == manifest.id).map(|(_, pass)| pass.params.clone()).unwrap_or_default();
+                    node.insert("params", Value::Object(params.into_iter().map(|(name, value)| (name, Value::from(value))).collect()));
+                }
+                Kind::Renderer => node.insert("handles", Value::Array(manifest.handles.iter().map(Value::from).collect())),
+                Kind::Hook => {}
+            }
+            plugins.insert(manifest.id.clone(), Value::Object(node));
+        }
         obj! {
             "config" => self.settings.to_value(),
+            "plugins" => Value::Object(plugins),
             "outputs" => Value::Object(outputs),
             "memory" => obj! {
                 "textures" => memory.textures,
                 "buffers" => memory.targets,
                 "video" => memory.video,
                 "videos" => self.engine.videos().playing(),
+                "optimising" => self.optimising,
                 "listening" => self.engine.listening(),
                 "peak_effect_buffers" => self.engine.peak_buffers(),
             },
@@ -132,8 +163,10 @@ impl Daemon {
                 for id in ids {
                     if let Some(slot) = self.slots.get_mut(&id) {
                         slot.wallpaper = None;
+                        slot.renderer = None;
                         slot.shown = Shown::default();
                         slot.error = None;
+                        slot.stale = true;
                     }
                 }
                 self.state.last = Shown::default();
@@ -172,7 +205,12 @@ impl Daemon {
                 if let Some(wallpaper) = &mut slot.wallpaper {
                     wallpaper.set_paused(paused);
                 }
+                if let Some(renderer) = &mut slot.renderer {
+                    renderer.send(&obj! { "cmd" => if paused { "pause" } else { "resume" } });
+                }
             }
+            let output = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.name.clone()).unwrap_or_default();
+            self.plugins.announce(&Happening { event: if paused { "paused" } else { "resumed" }, output, ..Happening::default() });
         }
         if paused {
             // A frozen output needs no effect buffers until it plays again.
@@ -227,6 +265,38 @@ impl Daemon {
                         if let Some(wallpaper) = &mut slot.wallpaper {
                             wallpaper.set_fill(fill.unwrap_or(self.settings.fill));
                         }
+                    }
+                }
+                self.save_state();
+                Ok(())
+            }
+            ["plugins", id, "enabled"] => {
+                let enabled = bool::from_doc(value).ok_or("enabled takes true or false")?;
+                let manifest = self.plugins.manifests.iter_mut().find(|m| m.id == *id).ok_or_else(|| format!("there is no plugin \"{id}\""))?;
+                manifest.enabled = enabled;
+                if let Some((_, pass)) = self.shaders.iter_mut().find(|(shader, _)| shader == id) {
+                    pass.enabled = enabled;
+                }
+                self.redraw_all();
+                Ok(())
+            }
+            ["plugins", id, "params", param] => {
+                let number = f32::from_doc(value).ok_or("a parameter takes a number")?;
+                let (_, pass) = self.shaders.iter_mut().find(|(shader, _)| shader == id).ok_or_else(|| format!("there is no shader plugin \"{id}\""))?;
+                if !pass.set(param, number) {
+                    return Err(format!("the shader of \"{id}\" has no parameter \"{param}\""));
+                }
+                self.redraw_all();
+                Ok(())
+            }
+            ["outputs", name, "wallpaper", "properties", property] if self.targets(Some(name))?.iter().any(|id| self.slots.get(id).is_some_and(|slot| slot.renderer.is_some())) => {
+                for id in self.targets(Some(name))? {
+                    let Some(slot) = self.slots.get_mut(&id) else { continue };
+                    if let Some(renderer) = &mut slot.renderer {
+                        let mut values = Map::new();
+                        values.insert(*property, value.clone());
+                        renderer.send(&obj! { "cmd" => "properties", "values" => Value::Object(values) });
+                        slot.shown.properties.insert((*property).to_owned(), value.clone());
                     }
                 }
                 self.save_state();
@@ -306,6 +376,11 @@ impl Daemon {
     fn settings_changed(&mut self, key: &str) {
         match key {
             "volume" | "mute" => self.apply_sound(),
+            "fps" => {
+                for renderer in self.slots.values_mut().filter_map(|slot| slot.renderer.as_mut()) {
+                    renderer.send(&obj! { "cmd" => "fps", "value" => self.settings.fps });
+                }
+            }
             "fill" => {
                 for slot in self.slots.values_mut() {
                     slot.stale = true;
@@ -330,6 +405,13 @@ impl Daemon {
             _ => {}
         }
         self.notify(&format!("config/{key}"), self.settings.to_value().get(key).clone());
+    }
+
+    /// Has every output draw again, though nothing in its wallpaper changed.
+    fn redraw_all(&mut self) {
+        for slot in self.slots.values_mut() {
+            slot.stale = true;
+        }
     }
 
     /// Writes what an output shows right now to a PNG.

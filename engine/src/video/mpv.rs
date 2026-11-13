@@ -59,6 +59,7 @@ pub(crate) const RENDER_UPDATE_FRAME: u64 = 1;
 pub(crate) const EVENT_NONE: c_int = 0;
 pub(crate) const EVENT_SHUTDOWN: c_int = 1;
 pub(crate) const EVENT_END_FILE: c_int = 7;
+pub(crate) const EVENT_FILE_LOADED: c_int = 8;
 pub(crate) const FORMAT_INT64: c_int = 4;
 pub(crate) const FORMAT_DOUBLE: c_int = 5;
 
