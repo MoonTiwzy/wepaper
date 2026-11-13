@@ -5,11 +5,13 @@
 //! - [`read`]: bytes on disk become data (archives, layered files, textures).
 //! - [`doc`]: JSON documents become typed values (project, scene, material, effect).
 //! - [`glsl`]: the shader dialect becomes GLSL 330.
+//! - [`gpu`]: OpenGL: the context, textures, programs, pooled render targets.
 //!
 //! Nothing here knows about Wayland or the control protocol; the `wepaper` binary
 //! brings those.
 
 pub mod doc;
 pub mod glsl;
+pub mod gpu;
 pub mod math;
 pub mod read;

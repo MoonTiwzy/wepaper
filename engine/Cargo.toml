@@ -24,5 +24,8 @@ png = "0.17"
 rquickjs = { version = "0.9", default-features = false, optional = true }
 zune-jpeg = "0.4"
 
+[dev-dependencies]
+glow = "0.16"
+
 [lints]
 workspace = true
