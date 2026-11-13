@@ -1,0 +1,15 @@
+[Unit]
+Description=wepaper: Wallpaper Engine wallpapers as the desktop background
+Documentation=https://github.com/MoonTiwzy/wepaper
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/wepaper daemon
+ExecReload=%h/.local/bin/wepaper reload
+Restart=on-failure
+RestartSec=2
+Slice=session.slice
+
+[Install]
+WantedBy=graphical-session.target

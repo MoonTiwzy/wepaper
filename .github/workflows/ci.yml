@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Wayland and EGL headers
+        run: sudo apt-get update && sudo apt-get install -y libwayland-dev libegl-dev
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Lint
+        run: cargo clippy --workspace --exclude wepaper-web --all-targets -- -D warnings
+      - name: Test
+        # GPU tests skip themselves on runners without an EGL device; corpus tests
+        # need a Wallpaper Engine install and are skipped without one.
+        run: cargo test --workspace --exclude wepaper-web
+      - name: Build without scripts
+        run: cargo build --no-default-features

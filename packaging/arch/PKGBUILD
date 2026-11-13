@@ -1,0 +1,52 @@
+# Maintainer: MoonTiwzy
+pkgname=wepaper-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Wallpaper Engine wallpapers as the Wayland desktop background"
+arch=('x86_64')
+url="https://github.com/MoonTiwzy/wepaper"
+license=('GPL-2.0-or-later')
+depends=('libglvnd' 'wayland')
+makedepends=('cargo' 'git')
+optdepends=('mpv: video wallpapers, video textures and sound'
+            'ffmpeg: cheaper copies of videos larger than the monitor'
+            'libpulse: audio-reactive wallpapers (parec)'
+            'fontconfig: text layers that name a system font'
+            'webkitgtk-6.0: web wallpapers (wepaper-web)'
+            'gtk4-layer-shell: web wallpapers (wepaper-web)')
+provides=('wepaper')
+conflicts=('wepaper')
+source=("git+https://github.com/MoonTiwzy/wepaper.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd wepaper
+    printf '%s.r%s.%s' "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+    cd wepaper
+    cargo build --release --locked
+    # The web plugin is built when what it needs is installed.
+    if pkg-config --exists webkitgtk-6.0 gtk4-layer-shell-0 2>/dev/null; then
+        cargo build --release --locked -p wepaper-web
+    fi
+}
+
+package() {
+    cd wepaper
+    install -Dm755 target/release/wepaper "$pkgdir/usr/bin/wepaper"
+    install -Dm644 packaging/systemd/wepaper.service "$pkgdir/usr/lib/systemd/user/wepaper.service"
+    sed -i 's|%h/.local/bin/wepaper|/usr/bin/wepaper|g' "$pkgdir/usr/lib/systemd/user/wepaper.service"
+    for plugin in plugins/*/; do
+        cp -r --parents "$plugin" "$pkgdir/usr/share/wepaper/" 2>/dev/null || {
+            install -d "$pkgdir/usr/share/wepaper/plugins"
+            cp -r "$plugin" "$pkgdir/usr/share/wepaper/plugins/"
+        }
+    done
+    if [[ -x target/release/wepaper-web ]]; then
+        install -Dm755 target/release/wepaper-web "$pkgdir/usr/bin/wepaper-web"
+    fi
+    install -Dm644 README.md "$pkgdir/usr/share/doc/wepaper/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/wepaper/LICENSE"
+}
