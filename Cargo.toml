@@ -1,0 +1,77 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+default-members = [
+    "crates/*",
+    "apps/wepaper",
+    "apps/wepaperd",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/MoonTiwzy/wepaper"
+homepage = "https://github.com/MoonTiwzy/wepaper"
+authors = ["MoonTiwzy"]
+
+[workspace.dependencies]
+wepaper-json = { path = "crates/wepaper-json", version = "0.1.0" }
+wepaper-vfs = { path = "crates/wepaper-vfs", version = "0.1.0" }
+wepaper-formats = { path = "crates/wepaper-formats", version = "0.1.0" }
+wepaper-shader = { path = "crates/wepaper-shader", version = "0.1.0" }
+wepaper-gl = { path = "crates/wepaper-gl", version = "0.1.0" }
+wepaper-media = { path = "crates/wepaper-media", version = "0.1.0" }
+wepaper-particles = { path = "crates/wepaper-particles", version = "0.1.0" }
+wepaper-script = { path = "crates/wepaper-script", version = "0.1.0" }
+wepaper-engine = { path = "crates/wepaper-engine", version = "0.1.0" }
+wepaper-ipc = { path = "crates/wepaper-ipc", version = "0.1.0" }
+wepaper-plugin = { path = "crates/wepaper-plugin", version = "0.1.0" }
+
+glow = "0.16"
+khronos-egl = { version = "6", features = ["dynamic"] }
+libloading = "0.8"
+libc = "0.2"
+log = "0.4"
+lexopt = "0.3"
+png = "0.17"
+zune-jpeg = "0.4"
+fontdue = "0.9"
+rquickjs = { version = "0.9", default-features = false }
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+wayland-egl = "0.32"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+undocumented_unsafe_blocks = "warn"
+
+# Dependencies are optimised even in development: a debug-built decoder or
+# rasteriser turns a one-second load into ten.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+panic = "abort"
+strip = true
+
+# `cargo build --profile dist`: the build packagers ship.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

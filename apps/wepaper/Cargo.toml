@@ -1,0 +1,22 @@
+[package]
+name = "wepaper"
+description = "The wepaper command line: controls the daemon and works on wallpapers offline."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wepaper-json.workspace = true
+wepaper-vfs.workspace = true
+wepaper-formats.workspace = true
+wepaper-engine.workspace = true
+wepaper-gl.workspace = true
+wepaper-ipc.workspace = true
+lexopt.workspace = true
+log.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+[package]
+name = "wepaperd"
+description = "The wepaper daemon: Wallpaper Engine wallpapers as the Wayland desktop background."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wepaper-json.workspace = true
+wepaper-engine.workspace = true
+wepaper-gl.workspace = true
+wepaper-ipc.workspace = true
+wepaper-plugin.workspace = true
+lexopt.workspace = true
+log.workspace = true
+libc.workspace = true
+wayland-client.workspace = true
+wayland-backend.workspace = true
+wayland-protocols.workspace = true
+wayland-protocols-wlr.workspace = true
+wayland-egl.workspace = true
+
+[lints]
+workspace = true

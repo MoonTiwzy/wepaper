@@ -1,0 +1,16 @@
+[package]
+name = "wepaper-formats"
+description = "Wallpaper Engine file formats: textures, projects, scenes, materials, effects, puppets."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+wepaper-json.workspace = true
+png.workspace = true
+zune-jpeg.workspace = true
+
+[lints]
+workspace = true

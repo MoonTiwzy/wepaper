@@ -1,0 +1,13 @@
+[package]
+name = "wepaper-json"
+description = "Lenient JSON for wepaper: values, a forgiving parser and a writer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
