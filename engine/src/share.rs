@@ -52,7 +52,7 @@ pub struct Share {
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
     pub max_texture_side: u32,
-    fonts: HashMap<String, Option<Rc<fontdue::Font>>>,
+    fonts: HashMap<String, Option<Rc<ab_glyph::FontVec>>>,
     /// The videos being played.
     pub videos: VideoHub,
     /// Where videos packed inside textures are unpacked to.
@@ -139,12 +139,14 @@ impl Share {
 
     /// The font a text layer names: a file of the wallpaper or the assets, or a
     /// system font (`systemfont_arial`). Loaded once; `None` when there is no such font.
-    pub fn font(&mut self, files: &Files, name: &str) -> Option<Rc<fontdue::Font>> {
+    pub fn font(&mut self, files: &Files, name: &str) -> Option<Rc<ab_glyph::FontVec>> {
         if let Some(font) = self.fonts.get(name) {
             return font.clone();
         }
         let bytes = files.read(name).ok().or_else(|| std::fs::read(crate::scene::system_font(name)?).ok());
-        let font = bytes.and_then(|bytes| match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+        // Only the file is kept: glyphs are read out of it as text needs them, so a
+        // font of thirty thousand glyphs costs its eight megabytes and no more.
+        let font = bytes.and_then(|bytes| match ab_glyph::FontVec::try_from_vec(bytes) {
             Ok(font) => Some(Rc::new(font)),
             Err(error) => {
                 log::warn!("font {name}: {error}");

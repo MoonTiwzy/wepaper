@@ -14,7 +14,7 @@ script = ["dep:rquickjs"]
 
 [dependencies]
 wepaper-json.workspace = true
-fontdue = "0.9"
+ab_glyph = "0.2"
 glow = "0.16"
 khronos-egl = { version = "6", features = ["dynamic"] }
 libc = "0.2"

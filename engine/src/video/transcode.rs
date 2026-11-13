@@ -38,7 +38,8 @@ pub fn cached_path(dir: &Path, source: &Path, limits: Limits) -> PathBuf {
     let mut key = fnv(FNV_SEED, source.to_string_lossy().as_bytes());
     key = fnv(key, &meta.map_or(0, |m| m.len()).to_le_bytes());
     key = fnv(key, &modified.to_le_bytes());
-    dir.join(format!("{key:016x}-w{}-f{:.0}.mp4", limits.max_width, limits.max_fps))
+    // The last part names how copies are encoded: changing the encoding retires old copies.
+    dir.join(format!("{key:016x}-w{}-f{:.0}-e2.mp4", limits.max_width, limits.max_fps))
 }
 
 /// A re-encode running in the background.
@@ -73,8 +74,11 @@ pub(crate) fn arguments(source: &Path, part: &Path, limits: Limits) -> Vec<Strin
     if !filters.is_empty() {
         args.extend(["-vf".to_owned(), filters.join(",")]);
     }
-    // Quality close to the source, and a stream that is cheap to decode: that is the point.
-    args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-tune", "fastdecode", "-pix_fmt", "yuv420p", "-c:a", "copy", "-f", "mp4"].map(str::to_owned));
+    // Quality close to the source, and a stream that is cheap to decode, which is the
+    // point: no arithmetic coding or in-loop filter (fastdecode), and one reference
+    // frame with no B-frames, so the decoder holds two frames instead of a dozen.
+    args.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-tune", "fastdecode", "-refs", "1", "-bf", "0"].map(str::to_owned));
+    args.extend(["-pix_fmt", "yuv420p", "-c:a", "copy", "-f", "mp4"].map(str::to_owned));
     args.push(part.to_string_lossy().into_owned());
     args
 }
@@ -143,7 +147,7 @@ mod tests {
         let args = arguments(Path::new("/in.mp4"), Path::new("/out.part"), Limits { max_width: 2560, max_fps: 30.0 });
         let line = args.join(" ");
         assert!(line.contains("scale='min(2560,iw)':-2") && line.contains("fps='min(30.000,source_fps)'"));
-        assert!(line.contains("-tune fastdecode") && line.contains("-c:a copy") && line.ends_with("/out.part"));
+        assert!(line.contains("-tune fastdecode") && line.contains("-refs 1 -bf 0") && line.contains("-c:a copy") && line.ends_with("/out.part"));
         let plain = arguments(Path::new("/in.mp4"), Path::new("/out.part"), Limits { max_width: 0, max_fps: 0.0 }).join(" ");
         assert!(!plain.contains("-vf"), "no limits, no filters");
     }

@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use fontdue::layout::{CoordinateSystem, HorizontalAlign, Layout, LayoutSettings, TextStyle, VerticalAlign, WrapStyle};
+use ab_glyph::{Font, FontVec, Glyph, PxScale, ScaleFont, point};
 
 use crate::gpu::{Gl, Sampling, Texture, TextureFormat};
 
@@ -41,7 +41,7 @@ pub(crate) struct TextStyleSpec {
 /// The text of a layer, what it is drawn with, and the texture it is drawn into.
 pub(crate) struct TextState {
     pub(crate) text: String,
-    pub(crate) font: Rc<fontdue::Font>,
+    pub(crate) font: Rc<FontVec>,
     pub(crate) style: TextStyleSpec,
     /// The box the text is laid out in, in scene units.
     pub(crate) size: [f32; 2],
@@ -50,68 +50,97 @@ pub(crate) struct TextState {
     pub(crate) dirty: bool,
 }
 
+/// One line of text: its glyphs with their offsets from the line's start, and its width.
+struct Line {
+    glyphs: Vec<(ab_glyph::GlyphId, f32)>,
+    width: f32,
+}
+
+/// Lays `text` out in lines: at its own line breaks, and at `wrap_at` pixels when given.
+fn lines<F: Font>(font: &impl ScaleFont<F>, text: &str, wrap_at: Option<f32>) -> Vec<Line> {
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = Line { glyphs: Vec::new(), width: 0.0 };
+        // Where the line can be broken: the glyph count and width just before the last space.
+        let mut break_at: Option<(usize, f32)> = None;
+        let mut previous = None;
+        for character in paragraph.chars().filter(|c| *c != '\r') {
+            let id = font.glyph_id(character);
+            let mut kern = previous.map_or(0.0, |before| font.kern(before, id));
+            let advance = font.h_advance(id);
+            if character == ' ' {
+                break_at = Some((line.glyphs.len(), line.width));
+            }
+            if let Some(limit) = wrap_at
+                && line.width + kern + advance > limit
+                && let Some((count, width)) = break_at.take()
+            {
+                // The words after the last space move to a new line.
+                let rest: Vec<(ab_glyph::GlyphId, f32)> = line.glyphs.split_off(count);
+                let first = rest.iter().position(|(glyph, _)| *glyph != font.glyph_id(' ')).unwrap_or(rest.len());
+                let shift = rest.get(first).map_or(0.0, |(_, x)| *x);
+                out.push(Line { glyphs: std::mem::take(&mut line.glyphs), width });
+                line.glyphs = rest[first..].iter().map(|(glyph, x)| (*glyph, x - shift)).collect();
+                line.width = if line.glyphs.is_empty() { 0.0 } else { line.width - shift };
+                (previous, kern) = (None, 0.0);
+                // A line does not start with the space it was broken at.
+                if character == ' ' && line.glyphs.is_empty() {
+                    continue;
+                }
+            }
+            line.glyphs.push((id, line.width + kern));
+            line.width += kern + advance;
+            previous = Some(id);
+        }
+        out.push(line);
+    }
+    out
+}
+
 /// Coverage of `text` laid out in a box of `size` scene units, at `density` pixels a
 /// unit: (width, height, one byte a pixel, rows top to bottom).
-pub(crate) fn rasterize(font: &fontdue::Font, text: &str, style: &TextStyleSpec, size: [f32; 2], density: f32) -> (u32, u32, Vec<u8>) {
+pub(crate) fn rasterize(font: &FontVec, text: &str, style: &TextStyleSpec, size: [f32; 2], density: f32) -> (u32, u32, Vec<u8>) {
     let density = density.clamp(0.05, 4.0);
     let width = ((size[0] * density).ceil() as u32).clamp(1, MAX_SIDE);
     let height = ((size[1] * density).ceil() as u32).clamp(1, MAX_SIDE);
     let mut pixels = vec![0u8; (width * height) as usize];
     let padding = style.padding * density;
     let inner = ((width as f32 - 2.0 * padding).max(1.0), (height as f32 - 2.0 * padding).max(1.0));
+    // The size is that of the em square; the rasteriser wants the height from ascent to descent.
+    let em = (style.point_size * POINT * density).max(1.0);
+    let scale = PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0));
+    let scaled = font.as_scaled(scale);
     // Lines break where the text says, and at a width only when the layer sets one.
-    let wrap_at = (style.max_width > 0.0).then(|| style.max_width * density);
-    let mut layout: Layout = Layout::new(CoordinateSystem::PositiveYDown);
-    layout.reset(&LayoutSettings {
-        x: 0.0,
-        y: padding,
-        max_width: wrap_at,
-        max_height: Some(inner.1),
-        horizontal_align: HorizontalAlign::Left,
-        vertical_align: match style.vertical {
-            1 => VerticalAlign::Top,
-            -1 => VerticalAlign::Bottom,
-            _ => VerticalAlign::Middle,
-        },
-        wrap_style: WrapStyle::Word,
-        wrap_hard_breaks: true,
-        ..LayoutSettings::default()
-    });
-    layout.append(&[font], &TextStyle::new(text, (style.point_size * POINT * density).max(1.0), 0));
-    // Each line is placed in the box by its own width: a line wider than the box
-    // overhangs on both sides instead of being broken.
-    let glyphs = layout.glyphs();
-    let lines: Vec<(usize, usize)> = layout.lines().map(|lines| lines.iter().map(|line| (line.glyph_start, line.glyph_end)).collect()).unwrap_or_default();
-    for (start, end) in lines {
-        let Some(line) = glyphs.get(start..=end.min(glyphs.len().saturating_sub(1))) else { continue };
-        let left = line.iter().map(|g| g.x).fold(f32::INFINITY, f32::min);
-        let right = line.iter().map(|g| g.x + g.width as f32).fold(f32::NEG_INFINITY, f32::max);
-        if !left.is_finite() || !right.is_finite() {
-            continue;
-        }
-        let shift = match style.horizontal {
-            -1 => padding - left,
-            1 => padding + inner.0 - right,
-            _ => padding + (inner.0 - (right - left)) / 2.0 - left,
+    let lines = lines(&scaled, text, (style.max_width > 0.0).then(|| style.max_width * density));
+    let line_height = scaled.height() + scaled.line_gap();
+    let block = line_height * lines.len() as f32;
+    let top = match style.vertical {
+        1 => padding,
+        -1 => padding + inner.1 - block,
+        _ => padding + (inner.1 - block) / 2.0,
+    };
+    for (index, line) in lines.iter().enumerate() {
+        // Each line is placed by its own width: one wider than the box overhangs
+        // on both sides instead of being broken.
+        let left = match style.horizontal {
+            -1 => padding,
+            1 => padding + inner.0 - line.width,
+            _ => padding + (inner.0 - line.width) / 2.0,
         };
-        for glyph in line.iter().filter(|g| g.width > 0 && g.height > 0) {
-            let (_, coverage) = font.rasterize_config(glyph.key);
-            let (x0, y0) = ((glyph.x + shift).round() as i64, glyph.y.round() as i64);
-            for row in 0..glyph.height {
-                let y = y0 + row as i64;
-                if y < 0 || y >= i64::from(height) {
-                    continue;
-                }
-                for column in 0..glyph.width {
-                    let x = x0 + column as i64;
-                    if x < 0 || x >= i64::from(width) {
-                        continue;
-                    }
+        let baseline = top + index as f32 * line_height + scaled.ascent();
+        for (id, x) in &line.glyphs {
+            let glyph: Glyph = id.with_scale_and_position(scale, point(left + x, baseline));
+            let Some(outline) = font.outline_glyph(glyph) else { continue };
+            let bounds = outline.px_bounds();
+            let (x0, y0) = (bounds.min.x as i64, bounds.min.y as i64);
+            outline.draw(|gx, gy, coverage| {
+                let (x, y) = (x0 + i64::from(gx), y0 + i64::from(gy));
+                if x >= 0 && y >= 0 && x < i64::from(width) && y < i64::from(height) {
                     let at = (y as u32 * width + x as u32) as usize;
                     // Glyphs that touch keep the stronger coverage.
-                    pixels[at] = pixels[at].max(coverage[row * glyph.width + column]);
+                    pixels[at] = pixels[at].max((coverage.clamp(0.0, 1.0) * 255.0) as u8);
                 }
-            }
+            });
         }
     }
     (width, height, pixels)
@@ -156,9 +185,9 @@ pub(crate) fn system_font(name: &str) -> Option<std::path::PathBuf> {
 mod tests {
     use super::*;
 
-    fn font() -> Option<fontdue::Font> {
+    fn font() -> Option<FontVec> {
         let path = system_font("sans")?;
-        fontdue::Font::from_bytes(std::fs::read(path).ok()?, fontdue::FontSettings::default()).ok()
+        FontVec::try_from_vec(std::fs::read(path).ok()?).ok()
     }
 
     fn bounds(width: u32, pixels: &[u8]) -> Option<(u32, u32, u32, u32)> {
@@ -198,5 +227,26 @@ mod tests {
         let huge = TextStyleSpec { point_size: 900.0, ..style };
         let (w, h, clipped) = rasterize(&font, "WWWW\nWWWW", &huge, [64.0, 64.0], 1.0);
         assert_eq!(clipped.len(), (w * h) as usize);
+    }
+}
+
+#[cfg(test)]
+mod wrapping {
+    use super::*;
+
+    #[test]
+    fn lines_break_at_the_text_and_at_a_width_only_when_asked() {
+        let Some(path) = system_font("sans") else { return };
+        let Ok(font) = FontVec::try_from_vec(std::fs::read(path).unwrap_or_default()) else { return };
+        let scaled = font.as_scaled(PxScale::from(20.0));
+        let unwrapped = lines(&scaled, "one two three four five six\nseven", None);
+        assert_eq!(unwrapped.len(), 2, "without a width only the text's own breaks count");
+        let wrapped = lines(&scaled, "one two three four five six", Some(unwrapped[0].width / 2.5));
+        assert!(wrapped.len() >= 3, "a width breaks the line between words");
+        assert!(wrapped.iter().all(|line| line.width <= unwrapped[0].width / 2.5 + 1.0), "and no line is wider than it");
+        let glyphs: usize = wrapped.iter().map(|line| line.glyphs.len()).sum();
+        assert!(glyphs >= "onetwothreefourfivesix".len(), "no letter is lost at a break");
+        let long_word = lines(&scaled, "incomprehensibilities", Some(10.0));
+        assert_eq!(long_word.len(), 1, "a word with nowhere to break stays whole");
     }
 }
