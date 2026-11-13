@@ -305,9 +305,13 @@ impl VideoStream {
         // libmpv's own "top" is our texture's first row, as with pictures from files.
         let mut fbo = mpv::OpenglFbo { fbo: target.framebuffer().0.get() as c_int, w: w as c_int, h: h as c_int, internal_format: 0 };
         let mut flip: c_int = 0;
+        // Left to itself libmpv sleeps in the call until the frame's display time,
+        // which would hold up everything else this thread draws.
+        let mut block: c_int = 0;
         let mut params = [
             mpv::RenderParam { kind: mpv::RENDER_PARAM_OPENGL_FBO, data: (&raw mut fbo).cast() },
             mpv::RenderParam { kind: mpv::RENDER_PARAM_FLIP_Y, data: (&raw mut flip).cast() },
+            mpv::RenderParam { kind: mpv::RENDER_PARAM_BLOCK_FOR_TARGET_TIME, data: (&raw mut block).cast() },
             mpv::RenderParam { kind: mpv::RENDER_PARAM_INVALID, data: std::ptr::null_mut() },
         ];
         // SAFETY: the render context is alive and our GL context is current; the
