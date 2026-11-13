@@ -1,0 +1,19 @@
+//! Wallpaper Engine's shader dialect becomes GLSL 330.
+//!
+//! The dialect is GLSL written to also compile as HLSL: `attribute` and `varying`,
+//! `gl_FragColor`, and HLSL's names for things (`mul`, `lerp`, `frac`, `saturate`,
+//! `texSample2D`). Its settings live in comments: `// [COMBO] {...}` declares a
+//! compile-time switch, and the JSON after a `uniform` line says which material
+//! value feeds it and what it defaults to.
+//!
+//! Translation is textual and cheap: includes are inlined ([`Source::load`]), the
+//! comments are read ([`Declared`]), and [`Source::assemble`] puts a prelude of
+//! `#define`s in front that maps the dialect onto GLSL. The driver does the rest.
+
+mod declared;
+mod fixups;
+mod prelude;
+mod source;
+
+pub use declared::{ComboDecl, Declared, SamplerDecl, UniformDecl};
+pub use source::{Combos, Source, Stage};
