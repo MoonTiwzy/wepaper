@@ -118,6 +118,25 @@ impl Share {
         self.videos.open(&unpacked).map_err(|e| e.to_string())
     }
 
+    /// A path on disk for a file of the wallpaper: the file itself when it is one,
+    /// else a copy unpacked from the archive into the cache. Players that take a
+    /// file name (libmpv) need one.
+    pub fn on_disk(&self, files: &Files, path: &str) -> Result<std::path::PathBuf, String> {
+        let located = files.locate(path).ok_or_else(|| format!("{path} is not in the wallpaper"))?;
+        if let Some(disk) = located.disk {
+            return Ok(disk);
+        }
+        let extension = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("bin");
+        let unpacked = self.video_dir.join(format!("{:016x}.{extension}", located.key));
+        if !unpacked.is_file() {
+            let data = files.read(path).map_err(|e| e.to_string())?;
+            std::fs::create_dir_all(&self.video_dir).map_err(|e| e.to_string())?;
+            let part = unpacked.with_extension(format!("{}.part", std::process::id()));
+            std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &unpacked)).map_err(|e| e.to_string())?;
+        }
+        Ok(unpacked)
+    }
+
     /// The font a text layer names: a file of the wallpaper or the assets, or a
     /// system font (`systemfont_arial`). Loaded once; `None` when there is no such font.
     pub fn font(&mut self, files: &Files, name: &str) -> Option<Rc<fontdue::Font>> {

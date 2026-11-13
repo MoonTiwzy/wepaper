@@ -13,7 +13,7 @@ use crate::{Engine, Fill, LoadError, Viewport};
 
 use super::bindings::{Bindings, Slot};
 use super::shade::{PassInput, Shade, TextureChoice, TextureRef};
-use super::{BufferSpec, Effect, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, Step};
+use super::{BufferSpec, Effect, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, SoundLayer, Step};
 
 impl SceneInstance {
     /// Builds a playing copy of the scene in `files` for an output of `viewport`.
@@ -59,6 +59,10 @@ impl SceneInstance {
                         LayerKind::Group
                     }
                 },
+                ObjectKind::Sound(sound) => {
+                    let file = sound.files.first().and_then(|file| engine.share.on_disk(files, file).inspect_err(|why| log::warn!("sound {file}: {why}")).ok());
+                    LayerKind::Sound(SoundLayer { file, looping: sound.mode != "single", volume: sound.volume.value.clamp(0.0, 1.0), player: None })
+                }
                 ObjectKind::Unsupported(what) => {
                     skipped.push(format!("layer {}: {what} objects are not drawn", object.name));
                     LayerKind::Group
@@ -95,8 +99,24 @@ impl SceneInstance {
             skipped,
             project,
             videos: Vec::new(),
+            parallax: scene.general.parallax.value.then(|| super::Parallax {
+                amount: scene.general.parallax_amount.value,
+                delay: scene.general.parallax_delay.value.max(0.0),
+                mouse_influence: scene.general.parallax_mouse_influence.value,
+            }),
+            eased_pointer: [0.5, 0.5],
+            shake: scene.general.shake.value.then(|| super::Shake {
+                amplitude: scene.general.shake_amplitude.value,
+                roughness: scene.general.shake_roughness.value,
+                speed: scene.general.shake_speed.value,
+            }),
+            last_time: 0.0,
+            wants_audio: false,
+            paused: false,
         };
         instance.hold_videos();
+        let (sound, volume) = (engine.share.videos.options.audio, engine.share.videos.options.volume);
+        instance.set_sound(sound, volume);
         // Every property takes effect once: the wallpaper's own value, or the user's.
         let defaults: Vec<(String, Value)> = instance.project.properties.iter().map(|p| (p.name.clone(), p.default.clone())).collect();
         for (name, value) in defaults.iter().chain(values) {
@@ -112,7 +132,9 @@ impl SceneInstance {
     /// Takes a place on every video the layers show, each video once.
     fn hold_videos(&mut self) {
         let mut streams: Vec<crate::video::SharedVideo> = Vec::new();
+        let mut wants_audio = false;
         let mut note = |shade: &Shade| {
+            wants_audio |= shade.wants_audio;
             for (_, _, source) in &shade.samplers {
                 if let TextureRef::Video(video) = source
                     && !streams.iter().any(|known| std::rc::Rc::ptr_eq(known, video))
@@ -132,6 +154,7 @@ impl SceneInstance {
             }
         }
         self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
+        self.wants_audio = wants_audio;
     }
 }
 

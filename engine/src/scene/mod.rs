@@ -83,8 +83,19 @@ pub(crate) struct ImageLayer {
 /// What a layer is.
 pub(crate) enum LayerKind {
     Image(Box<ImageLayer>),
+    /// A sound, playing while the engine's sound is on.
+    Sound(SoundLayer),
     /// Nothing drawn (yet): keeps the hierarchy and its transforms.
     Group,
+}
+
+/// A sound layer: the file it plays and, while sound is on, the player.
+pub(crate) struct SoundLayer {
+    pub(crate) file: Option<std::path::PathBuf>,
+    pub(crate) looping: bool,
+    /// The layer's own volume, 0 to 1.
+    pub(crate) volume: f32,
+    pub(crate) player: Option<crate::audio::Sound>,
 }
 
 /// One object of the scene, as it plays.
@@ -102,6 +113,23 @@ pub(crate) struct Layer {
     /// Whether it and every parent are visible.
     pub(crate) shown: bool,
     pub(crate) kind: LayerKind,
+}
+
+/// The scene's camera parallax settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Parallax {
+    pub(crate) amount: f32,
+    /// Seconds the camera takes to catch up with the pointer.
+    pub(crate) delay: f32,
+    pub(crate) mouse_influence: f32,
+}
+
+/// The scene's camera shake settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Shake {
+    pub(crate) amplitude: f32,
+    pub(crate) roughness: f32,
+    pub(crate) speed: f32,
 }
 
 /// What a frame is drawn from.
@@ -142,6 +170,17 @@ pub struct SceneInstance {
     skipped: Vec<String>,
     /// The videos the scene's layers show, held for as long as it plays.
     videos: Vec<crate::video::VideoHold>,
+    /// The camera follows the pointer, shifting layers by their depth.
+    parallax: Option<Parallax>,
+    /// The pointer as the parallax sees it: eased towards where it really is.
+    eased_pointer: [f32; 2],
+    /// The camera shakes.
+    shake: Option<Shake>,
+    /// The time of the last frame, for what eases over time.
+    last_time: f64,
+    /// A shader of the scene reads the audio spectrum.
+    wants_audio: bool,
+    paused: bool,
 }
 
 impl SceneInstance {
@@ -240,11 +279,43 @@ impl SceneInstance {
         Ok(())
     }
 
-    /// Pauses or resumes the scene's videos. A video shared with another output
-    /// stops only when every output showing it is paused.
+    /// Pauses or resumes the scene's videos and sounds. A video shared with another
+    /// output stops only when every output showing it is paused.
     pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
         for video in &self.videos {
             video.set_paused(paused);
+        }
+        for layer in &self.layers {
+            if let LayerKind::Sound(SoundLayer { player: Some(player), .. }) = &layer.kind {
+                player.set_paused(paused);
+            }
+        }
+    }
+
+    /// Whether the scene reads the audio spectrum, so that somebody has to listen.
+    pub fn wants_audio(&self) -> bool {
+        self.wants_audio
+    }
+
+    /// Switches the scene's sound layers on or off and sets their volume (0 to 100).
+    /// Off, nothing is decoded: there are no players at all.
+    pub fn set_sound(&mut self, on: bool, volume: f32) {
+        for layer in &mut self.layers {
+            let visible = layer.visible;
+            let LayerKind::Sound(sound) = &mut layer.kind else { continue };
+            let level = volume * sound.volume;
+            match (&sound.player, on && visible) {
+                (Some(player), true) => player.set_volume(level),
+                (Some(_), false) => sound.player = None,
+                (None, true) => {
+                    sound.player = sound.file.as_ref().and_then(|file| crate::audio::Sound::play(file, sound.looping, level));
+                    if let Some(player) = &sound.player {
+                        player.set_paused(self.paused);
+                    }
+                }
+                (None, false) => {}
+            }
         }
     }
 

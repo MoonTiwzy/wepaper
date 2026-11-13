@@ -82,6 +82,8 @@ struct Daemon {
     state_file: PathBuf,
     /// By output id.
     slots: HashMap<u32, Slot>,
+    /// When the outputs were last looked at for drawing.
+    last_round: Instant,
     quit: bool,
 }
 
@@ -133,7 +135,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let options = Options { assets, cache_dir: Some(crate::cli::cache_dir()), max_texture_side: settings.texture_max_side };
     let engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
 
-    let mut daemon = Daemon { connection, display, context, engine, server, settings, from_flags, config_file, state, state_file, slots: HashMap::new(), quit: false };
+    let mut daemon = Daemon { connection, display, context, engine, server, settings, from_flags, config_file, state, state_file, slots: HashMap::new(), last_round: Instant::now(), quit: false };
     daemon.apply_sound();
     if let Some(wallpaper) = wallpaper {
         // Shown once the outputs are known; until then it is what "last" is.
@@ -271,6 +273,10 @@ impl Daemon {
         // A frame cap leaves a millisecond of slack so that a display at the same rate is not halved.
         let interval = (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)).saturating_sub(Duration::from_millis(1)));
         let mut wake: Option<Instant> = None;
+        // Somebody listens to the system's sound only while a playing wallpaper reads the spectrum.
+        let listen = self.settings.audio_response && self.slots.values().any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
+        self.engine.listen(listen, now.duration_since(self.last_round).as_secs_f32().min(0.1));
+        self.last_round = now;
         let ids: Vec<u32> = self.display.heads.iter().map(|head| head.id).collect();
         for id in ids {
             let Some(head) = self.display.heads.iter().find(|head| head.id == id) else { continue };
@@ -339,6 +345,9 @@ impl Daemon {
     fn apply_sound(&mut self) {
         let (audio, volume) = (!self.settings.mute && self.settings.volume > 0.0, self.settings.volume);
         self.engine.videos().set_sound(audio, volume);
+        for wallpaper in self.slots.values_mut().filter_map(|slot| slot.wallpaper.as_mut()) {
+            wallpaper.set_sound(audio, volume);
+        }
     }
 
     /// Remembers what the outputs show, for the next run.

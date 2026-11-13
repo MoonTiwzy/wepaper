@@ -42,6 +42,10 @@ impl SceneInstance {
                         image.effects.iter().enumerate().map(|(index, effect)| (index.to_string(), obj! { "name" => &effect.name, "visible" => effect.visible })).collect();
                     node.insert("effects", Value::Object(effects));
                 }
+                LayerKind::Sound(sound) => {
+                    node.insert("kind", Value::from("sound"));
+                    node.insert("volume", Value::from(sound.volume));
+                }
                 LayerKind::Group => node.insert("kind", Value::from("group")),
             }
             layers.insert(layer.id.to_string(), Value::Object(node));

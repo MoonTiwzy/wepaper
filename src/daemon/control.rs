@@ -85,6 +85,7 @@ impl Daemon {
                 "buffers" => memory.targets,
                 "video" => memory.video,
                 "videos" => self.engine.videos().playing(),
+                "listening" => self.engine.listening(),
                 "peak_effect_buffers" => self.engine.peak_buffers(),
             },
         }

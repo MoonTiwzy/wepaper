@@ -15,6 +15,14 @@ struct Frame<'a> {
     screen: [f32; 2],
     view_projection: Mat4,
     values: &'a [Vec<f32>],
+    /// The pointer as the parallax sees it.
+    eased_pointer: [f32; 2],
+    /// What the pointer's place adds to every layer's position, before its depth.
+    parallax: Option<([f32; 2], f32)>,
+    scene_center: [f32; 2],
+    audio: &'a crate::audio::Spectrum,
+    /// Where spectrum bands are gathered before they go to a uniform.
+    scratch: std::cell::RefCell<Vec<f32>>,
 }
 
 /// What is the same for every pass of a layer.
@@ -42,7 +50,18 @@ impl SceneInstance {
             video.stream.borrow_mut().poll();
         }
         self.update_transforms();
-        self.view_projection = self.camera();
+        let dt = (input.time - self.last_time).clamp(0.0, 0.25) as f32;
+        self.last_time = input.time;
+        // The parallax camera trails the pointer.
+        if let Some(parallax) = &self.parallax {
+            let ease = if parallax.delay > 0.0 { (dt / parallax.delay).min(1.0) } else { 1.0 };
+            for axis in 0..2 {
+                self.eased_pointer[axis] += (input.pointer[axis] - self.eased_pointer[axis]) * ease;
+            }
+        }
+        self.view_projection = self.camera(input.time as f32);
+        // A copy: the frame borrows it while the engine is being drawn with.
+        let spectrum = engine.listener.spectrum().clone();
         let frame = Frame {
             time: input.time as f32,
             daytime: input.daytime,
@@ -50,6 +69,15 @@ impl SceneInstance {
             screen: [self.viewport.width as f32, self.viewport.height as f32],
             view_projection: self.view_projection,
             values: &self.bindings.values,
+            eased_pointer: self.eased_pointer,
+            // The pointer counts from the top left; the scene's y points up.
+            parallax: self.parallax.map(|p| {
+                let pointer = [(0.5 - self.eased_pointer[0]) * self.scene_size[0], (self.eased_pointer[1] - 0.5) * self.scene_size[1]];
+                ([pointer[0] * p.mouse_influence, pointer[1] * p.mouse_influence], p.amount)
+            }),
+            scene_center: [self.scene_size[0] / 2.0, self.scene_size[1] / 2.0],
+            audio: &spectrum,
+            scratch: std::cell::RefCell::new(Vec::with_capacity(64)),
         };
         self.target.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
         // How many output pixels one scene unit covers: layer buffers are sized by it.
@@ -98,7 +126,7 @@ impl SceneInstance {
     }
 
     /// The projection that puts the scene on the output the way `fill` says.
-    fn camera(&self) -> Mat4 {
+    fn camera(&self, time: f32) -> Mat4 {
         let [scene_w, scene_h] = self.scene_size;
         let (out_w, out_h) = (self.viewport.width as f32, self.viewport.height as f32);
         let (sx, sy) = (out_w / scene_w, out_h / scene_h);
@@ -109,7 +137,16 @@ impl SceneInstance {
             Fill::Contain => (out_w / sx.min(sy) / 2.0, out_h / sx.min(sy) / 2.0),
         };
         let (half_w, half_h) = (half_w / self.zoom, half_h / self.zoom);
-        let (cx, cy) = (scene_w / 2.0, scene_h / 2.0);
+        let (mut cx, mut cy) = (scene_w / 2.0, scene_h / 2.0);
+        if let Some(shake) = &self.shake {
+            // Two sines an axis at unrelated rates wander without repeating visibly;
+            // roughness adds the faster one.
+            let t = time * shake.speed;
+            let wander = |a: f32, b: f32| (t * a).sin() + shake.roughness * 0.5 * (t * b + 1.7).sin();
+            let reach = shake.amplitude * scene_h * 0.01;
+            cx += wander(1.0, 2.9) * reach;
+            cy += wander(1.3, 3.7) * reach;
+        }
         Mat4::orthographic(cx - half_w, cx + half_w, cy - half_h, cy + half_h, -10000.0, 10000.0)
     }
 }
@@ -117,9 +154,19 @@ impl SceneInstance {
 /// Draws one image layer: its base pass, then each visible effect's steps, the last
 /// of them straight into the scene.
 fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &ImageLayer, scene: &Target, background: &mut Option<Target>, density: f32) {
+    // Parallax moves a layer by how far it is from the camera's centre and from
+    // the pointer, scaled by its depth: near layers travel further than far ones.
+    let world = match frame.parallax {
+        Some((pointer, amount)) if layer.parallax_depth != [0.0, 0.0] => {
+            let from_center = [layer.world.0[12] - frame.scene_center[0], layer.world.0[13] - frame.scene_center[1]];
+            let shift = [(from_center[0] + pointer[0]) * layer.parallax_depth[0] * amount, (from_center[1] + pointer[1]) * layer.parallax_depth[1] * amount];
+            Mat4::translation([shift[0], shift[1], 0.0]).mul(&layer.world)
+        }
+        _ => layer.world,
+    };
     let state = LayerState {
-        mvp: frame.view_projection.mul(&layer.world),
-        model: layer.world,
+        mvp: frame.view_projection.mul(&world),
+        model: world,
         color: image.color,
         alpha: image.alpha,
         brightness: image.brightness,
@@ -157,7 +204,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
     }
 
     // The layer's buffers: as large as the layer reaches the output, never larger than authored.
-    let reach = density * layer.world.0[0].abs().max(layer.world.0[5].abs()).max(1e-6);
+    let reach = density * world.0[0].abs().max(world.0[5].abs()).max(1e-6);
     let scale = reach.min(1.0);
     let size = match image.mode {
         ImageMode::Fullscreen => (scene.width(), scene.height()),
@@ -318,7 +365,7 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
             Feed::Time => set(&[frame.time]),
             Feed::Daytime => set(&[frame.daytime]),
             Feed::PointerPosition => set(&frame.pointer),
-            Feed::ParallaxPosition => set(&[0.5, 0.5]),
+            Feed::ParallaxPosition => set(&frame.eased_pointer),
             Feed::Screen => set(&[frame.screen[0], frame.screen[1], frame.screen[0] / frame.screen[1]]),
             Feed::TexelSize => set(&[1.0 / frame.screen[0], 1.0 / frame.screen[1]]),
             Feed::TexelSizeHalf => set(&[0.5 / frame.screen[0], 0.5 / frame.screen[1]]),
@@ -340,7 +387,11 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
             Feed::Color => set(&state.color),
             Feed::Alpha => set(&[state.alpha]),
             Feed::Brightness => set(&[state.brightness]),
-            Feed::Audio { bands, .. } => set(&vec![0.0; *bands]),
+            Feed::Audio { bands, right } => {
+                let mut scratch = frame.scratch.borrow_mut();
+                frame.audio.bands(*bands, *right, &mut scratch);
+                set(&scratch);
+            }
         }
     }
 }

@@ -9,6 +9,7 @@
 //! - [`share`]: the cache every playing wallpaper draws its resources from.
 //! - [`scene`]: a scene becomes layers and passes, and a frame is drawn.
 //! - [`video`]: libmpv decodes video straight into our textures.
+//! - [`audio`]: sound layers, and the spectrum of what the system plays.
 //! - [`particles`]: particle systems, simulated on the CPU.
 //! - `script`: SceneScript, behind the `script` feature.
 //!
@@ -26,6 +27,7 @@
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 
+pub mod audio;
 pub mod doc;
 pub mod glsl;
 pub mod gpu;
@@ -172,6 +174,19 @@ impl Wallpaper {
         }
     }
 
+    /// Whether the wallpaper reads the audio spectrum.
+    pub fn wants_audio(&self) -> bool {
+        matches!(self, Wallpaper::Scene(scene) if scene.wants_audio())
+    }
+
+    /// Switches the wallpaper's own sound on or off and sets its volume (0 to 100).
+    /// A video's sound follows the engine's video settings instead.
+    pub fn set_sound(&mut self, on: bool, volume: f32) {
+        if let Wallpaper::Scene(scene) = self {
+            scene.set_sound(on, volume);
+        }
+    }
+
     /// The current values of the user properties.
     pub fn properties(&self) -> Vec<PropertyValue> {
         match self {
@@ -223,6 +238,7 @@ pub struct Engine {
     pub(crate) fullscreen: Mesh,
     pub(crate) white: Rc<share::SharedTexture>,
     pub(crate) blit: Program,
+    pub(crate) listener: audio::Listener,
     assets: Option<PathBuf>,
 }
 
@@ -250,6 +266,7 @@ impl Engine {
             blit: Program::link(gl, BLIT_VERTEX, BLIT_FRAGMENT).map_err(|e| LoadError(e.to_string()))?,
             white,
             share,
+            listener: audio::Listener::new(),
             assets: options.assets.or_else(locate::assets),
         })
     }
@@ -313,6 +330,17 @@ impl Engine {
             }
             other => Err(LoadError(format!("{} wallpapers are not drawn by the engine", other.name()))),
         }
+    }
+
+    /// Brings the audio spectrum up to date, once per round of drawing. `wanted` is
+    /// whether anything shown reads it; while nothing does, nothing listens.
+    pub fn listen(&mut self, wanted: bool, dt: f32) {
+        self.listener.update(wanted, dt);
+    }
+
+    /// Whether the system's sound is being recorded for the spectrum right now.
+    pub fn listening(&self) -> bool {
+        self.listener.listening()
     }
 
     /// The videos being played, and how new ones are.

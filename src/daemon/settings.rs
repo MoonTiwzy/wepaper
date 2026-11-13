@@ -43,6 +43,8 @@ pub struct Settings {
     pub layer: Layer,
     /// The pointer passes through to what is under the wallpaper.
     pub passthrough: bool,
+    /// Wallpapers that react to sound hear what the system plays.
+    pub audio_response: bool,
     /// Decode video on the GPU: less CPU, more video memory.
     pub video_hardware: bool,
     /// Video frames are kept no wider than this; 0 means the widest output.
@@ -53,12 +55,12 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { fps: 0, volume: 100.0, mute: true, fill: Fill::Cover, layer: Layer::Background, passthrough: false, video_hardware: false, video_max_width: 0, texture_max_side: 0 }
+        Self { fps: 0, volume: 100.0, mute: true, fill: Fill::Cover, layer: Layer::Background, passthrough: false, audio_response: true, video_hardware: false, video_max_width: 0, texture_max_side: 0 }
     }
 }
 
 /// The names of the settings, in the order they are listed.
-pub const KEYS: &[&str] = &["fps", "volume", "mute", "fill", "layer", "passthrough", "video_hardware", "video_max_width", "texture_max_side"];
+pub const KEYS: &[&str] = &["fps", "volume", "mute", "fill", "layer", "passthrough", "audio_response", "video_hardware", "video_max_width", "texture_max_side"];
 
 impl Settings {
     /// The settings as the `config` node of the control tree.
@@ -70,6 +72,7 @@ impl Settings {
             "fill" => self.fill.name(),
             "layer" => self.layer.name(),
             "passthrough" => self.passthrough,
+            "audio_response" => self.audio_response,
             "video_hardware" => self.video_hardware,
             "video_max_width" => self.video_max_width,
             "texture_max_side" => self.texture_max_side,
@@ -95,6 +98,7 @@ impl Settings {
                 }
             }
             "passthrough" => self.passthrough = flag()?,
+            "audio_response" => self.audio_response = flag()?,
             "video_hardware" => self.video_hardware = flag()?,
             "video_max_width" => self.video_max_width = number(0.0, 16384.0)? as u32,
             "texture_max_side" => self.texture_max_side = number(0.0, 16384.0)? as u32,

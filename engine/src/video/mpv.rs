@@ -8,77 +8,77 @@ use std::sync::OnceLock;
 
 /// `mpv_handle`: one player.
 #[repr(C)]
-pub(super) struct Handle {
+pub(crate) struct Handle {
     _opaque: [u8; 0],
 }
 
 /// `mpv_render_context`: a player's renderer on our GL context.
 #[repr(C)]
-pub(super) struct RenderContext {
+pub(crate) struct RenderContext {
     _opaque: [u8; 0],
 }
 
 /// `mpv_render_param`: a tagged pointer.
 #[repr(C)]
-pub(super) struct RenderParam {
-    pub(super) kind: c_int,
-    pub(super) data: *mut c_void,
+pub(crate) struct RenderParam {
+    pub(crate) kind: c_int,
+    pub(crate) data: *mut c_void,
 }
 
 /// `mpv_opengl_init_params`.
 #[repr(C)]
-pub(super) struct OpenglInitParams {
-    pub(super) get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
-    pub(super) get_proc_address_ctx: *mut c_void,
+pub(crate) struct OpenglInitParams {
+    pub(crate) get_proc_address: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
+    pub(crate) get_proc_address_ctx: *mut c_void,
 }
 
 /// `mpv_opengl_fbo`.
 #[repr(C)]
-pub(super) struct OpenglFbo {
-    pub(super) fbo: c_int,
-    pub(super) w: c_int,
-    pub(super) h: c_int,
-    pub(super) internal_format: c_int,
+pub(crate) struct OpenglFbo {
+    pub(crate) fbo: c_int,
+    pub(crate) w: c_int,
+    pub(crate) h: c_int,
+    pub(crate) internal_format: c_int,
 }
 
 /// `mpv_event`.
 #[repr(C)]
-pub(super) struct Event {
-    pub(super) event_id: c_int,
-    pub(super) error: c_int,
-    pub(super) reply_userdata: u64,
-    pub(super) data: *mut c_void,
+pub(crate) struct Event {
+    pub(crate) event_id: c_int,
+    pub(crate) error: c_int,
+    pub(crate) reply_userdata: u64,
+    pub(crate) data: *mut c_void,
 }
 
-pub(super) const RENDER_PARAM_INVALID: c_int = 0;
-pub(super) const RENDER_PARAM_API_TYPE: c_int = 1;
-pub(super) const RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
-pub(super) const RENDER_PARAM_OPENGL_FBO: c_int = 3;
-pub(super) const RENDER_PARAM_FLIP_Y: c_int = 4;
-pub(super) const RENDER_UPDATE_FRAME: u64 = 1;
-pub(super) const EVENT_NONE: c_int = 0;
-pub(super) const EVENT_SHUTDOWN: c_int = 1;
-pub(super) const EVENT_END_FILE: c_int = 7;
-pub(super) const FORMAT_INT64: c_int = 4;
-pub(super) const FORMAT_DOUBLE: c_int = 5;
+pub(crate) const RENDER_PARAM_INVALID: c_int = 0;
+pub(crate) const RENDER_PARAM_API_TYPE: c_int = 1;
+pub(crate) const RENDER_PARAM_OPENGL_INIT_PARAMS: c_int = 2;
+pub(crate) const RENDER_PARAM_OPENGL_FBO: c_int = 3;
+pub(crate) const RENDER_PARAM_FLIP_Y: c_int = 4;
+pub(crate) const RENDER_UPDATE_FRAME: u64 = 1;
+pub(crate) const EVENT_NONE: c_int = 0;
+pub(crate) const EVENT_SHUTDOWN: c_int = 1;
+pub(crate) const EVENT_END_FILE: c_int = 7;
+pub(crate) const FORMAT_INT64: c_int = 4;
+pub(crate) const FORMAT_DOUBLE: c_int = 5;
 
 /// The functions, resolved once.
-pub(super) struct Api {
+pub(crate) struct Api {
     _library: libloading::Library,
-    pub(super) create: unsafe extern "C" fn() -> *mut Handle,
-    pub(super) initialize: unsafe extern "C" fn(*mut Handle) -> c_int,
-    pub(super) terminate_destroy: unsafe extern "C" fn(*mut Handle),
-    pub(super) set_option_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
-    pub(super) set_property_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
-    pub(super) get_property: unsafe extern "C" fn(*mut Handle, *const c_char, c_int, *mut c_void) -> c_int,
-    pub(super) command: unsafe extern "C" fn(*mut Handle, *mut *const c_char) -> c_int,
-    pub(super) wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut Event,
-    pub(super) error_string: unsafe extern "C" fn(c_int) -> *const c_char,
-    pub(super) render_context_create: unsafe extern "C" fn(*mut *mut RenderContext, *mut Handle, *mut RenderParam) -> c_int,
-    pub(super) render_context_set_update_callback: unsafe extern "C" fn(*mut RenderContext, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
-    pub(super) render_context_update: unsafe extern "C" fn(*mut RenderContext) -> u64,
-    pub(super) render_context_render: unsafe extern "C" fn(*mut RenderContext, *mut RenderParam) -> c_int,
-    pub(super) render_context_free: unsafe extern "C" fn(*mut RenderContext),
+    pub(crate) create: unsafe extern "C" fn() -> *mut Handle,
+    pub(crate) initialize: unsafe extern "C" fn(*mut Handle) -> c_int,
+    pub(crate) terminate_destroy: unsafe extern "C" fn(*mut Handle),
+    pub(crate) set_option_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
+    pub(crate) set_property_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
+    pub(crate) get_property: unsafe extern "C" fn(*mut Handle, *const c_char, c_int, *mut c_void) -> c_int,
+    pub(crate) command: unsafe extern "C" fn(*mut Handle, *mut *const c_char) -> c_int,
+    pub(crate) wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut Event,
+    pub(crate) error_string: unsafe extern "C" fn(c_int) -> *const c_char,
+    pub(crate) render_context_create: unsafe extern "C" fn(*mut *mut RenderContext, *mut Handle, *mut RenderParam) -> c_int,
+    pub(crate) render_context_set_update_callback: unsafe extern "C" fn(*mut RenderContext, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
+    pub(crate) render_context_update: unsafe extern "C" fn(*mut RenderContext) -> u64,
+    pub(crate) render_context_render: unsafe extern "C" fn(*mut RenderContext, *mut RenderParam) -> c_int,
+    pub(crate) render_context_free: unsafe extern "C" fn(*mut RenderContext),
 }
 
 // SAFETY: the table holds function pointers into a library that stays loaded, and the
@@ -88,7 +88,7 @@ unsafe impl Send for Api {}
 unsafe impl Sync for Api {}
 
 /// libmpv, loaded on first use; `None` when it is not installed.
-pub(super) fn api() -> Option<&'static Api> {
+pub(crate) fn api() -> Option<&'static Api> {
     static API: OnceLock<Option<Api>> = OnceLock::new();
     API.get_or_init(|| {
         let api = ["libmpv.so.2", "libmpv.so"].into_iter().find_map(load);

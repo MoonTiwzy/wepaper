@@ -9,7 +9,7 @@
 //! [`VideoHub`] hands every asker the same [`VideoStream`].
 
 mod hub;
-mod mpv;
+pub(crate) mod mpv;
 mod stream;
 mod wallpaper;
 
