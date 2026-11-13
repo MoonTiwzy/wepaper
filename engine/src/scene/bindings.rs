@@ -30,6 +30,8 @@ pub(crate) enum Slot {
     EffectVisible(usize, usize),
     /// A text layer's text.
     LayerText(usize),
+    /// How far the scene's camera is zoomed in.
+    Zoom,
 }
 
 /// A link from a user property to a slot.
@@ -82,7 +84,7 @@ impl Bindings {
                     Slot::LayerVisible(_) | Slot::EffectVisible(..) => Change::Flag(binding.slot, holds(value, binding.link.condition.as_deref())),
                     Slot::LayerText(_) => Change::Text(binding.slot, String::from_doc(value)?),
                     Slot::Value(index) => Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len())),
-                    Slot::LayerAlpha(_) => Change::Floats(binding.slot, value_floats(value, 1)),
+                    Slot::LayerAlpha(_) | Slot::Zoom => Change::Floats(binding.slot, value_floats(value, 1)),
                     Slot::LayerColor(_) | Slot::LayerOrigin(_) | Slot::LayerScale(_) | Slot::LayerAngles(_) => {
                         Change::Floats(binding.slot, value_floats(value, 3))
                     }

@@ -34,6 +34,10 @@ impl SceneInstance {
                     node.insert("color", vector(&image.color));
                     node.insert("brightness", Value::from(image.brightness));
                     node.insert("size", vector(&image.size));
+                    if let Some(text) = &image.text {
+                        node.insert("kind", Value::from("text"));
+                        node.insert("text", Value::from(&text.text));
+                    }
                     let effects: Map =
                         image.effects.iter().enumerate().map(|(index, effect)| (index.to_string(), obj! { "name" => &effect.name, "visible" => effect.visible })).collect();
                     node.insert("effects", Value::Object(effects));
@@ -119,6 +123,12 @@ impl SceneInstance {
                             "brightness" => image.brightness = number()?,
                             _ => image.color = three()?,
                         }
+                    }
+                    ["text"] => {
+                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no text")) };
+                        let text = image.text.as_mut().ok_or_else(|| format!("layer {id} has no text"))?;
+                        text.text = String::from_doc(value).ok_or("expected text")?;
+                        text.dirty = true;
                     }
                     ["effects", effect, "visible"] => {
                         let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no effects")) };

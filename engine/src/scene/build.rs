@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use wepaper_json::Value;
 
-use crate::doc::{Blending, Dyn, EffectDoc, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object, ObjectKind, Project, Scene};
+use crate::doc::{Alignment, Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object, ObjectKind, Project, Scene, TextObject};
 use crate::glsl::Combos;
 use crate::gpu::{Blend, Mesh, Target, TextureFormat};
 use crate::math::Mat4;
@@ -33,6 +33,7 @@ impl SceneInstance {
             skipped.push("the scene uses a perspective camera, which is drawn flat".to_owned());
         }
 
+        bindings.link(&scene.general.zoom, Slot::Zoom);
         let mut layers = Vec::with_capacity(scene.objects.len());
         for (index, object) in scene.objects.iter().enumerate() {
             let kind = match &object.kind {
@@ -50,6 +51,14 @@ impl SceneInstance {
                         }
                     }
                 }
+                ObjectKind::Text(text) => match build_text(engine, files, &mut bindings, text) {
+                    Ok(layer) => LayerKind::Image(Box::new(layer)),
+                    Err(why) => {
+                        log::warn!("text layer {} ({}) is skipped: {why}", object.name, object.id);
+                        skipped.push(format!("layer {}: {why}", object.name));
+                        LayerKind::Group
+                    }
+                },
                 ObjectKind::Unsupported(what) => {
                     skipped.push(format!("layer {}: {what} objects are not drawn", object.name));
                     LayerKind::Group
@@ -78,6 +87,7 @@ impl SceneInstance {
             bindings,
             scene_size: scene_size.unwrap_or([1920.0, 1080.0]),
             clear: scene.general.clear_color.value,
+            zoom: scene.general.zoom.value.max(0.01),
             viewport,
             fill: Fill::Cover,
             target,
@@ -138,6 +148,14 @@ fn bind_object(bindings: &mut Bindings, index: usize, object: &Object) {
             bindings.link(&effect.visible, Slot::EffectVisible(index, effect_index));
         }
     }
+    if let ObjectKind::Text(text) = &object.kind {
+        bindings.link(&text.text, Slot::LayerText(index));
+        bindings.link(&text.alpha, Slot::LayerAlpha(index));
+        bindings.link(&text.color, Slot::LayerColor(index));
+        for (effect_index, effect) in text.effects.iter().enumerate() {
+            bindings.link(&effect.visible, Slot::EffectVisible(index, effect_index));
+        }
+    }
 }
 
 fn read_doc(files: &Files, path: &str) -> Result<Value, String> {
@@ -188,29 +206,8 @@ fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, inde
     };
     let size = if mode == ImageMode::Fullscreen { scene_size } else { image.size.or(model.size).or(picture_size).unwrap_or(scene_size) };
 
-    // Where the origin sits on the layer.
-    let (w, h) = (size[0], size[1]);
-    let (ax, ay) = (-f32::from(image.alignment.horizontal) * w / 2.0, -f32::from(image.alignment.vertical) * h / 2.0);
-    let (x0, x1, y0, y1) = (ax - w / 2.0, ax + w / 2.0, ay - h / 2.0, ay + h / 2.0);
-    let [u, v] = extent;
-    let gl = &engine.gl;
-    let mesh = |corners: &[[f32; 5]; 4]| Mesh::quad(gl, corners).map_err(|e| e.to_string());
-    let quad = mesh(&[[x0, y0, 0.0, 0.0, v], [x1, y0, 0.0, u, v], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, u, 0.0]])?;
-    let quad_unit = mesh(&[[x0, y0, 0.0, 0.0, 1.0], [x1, y0, 0.0, 1.0, 1.0], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, 1.0, 0.0]])?;
-    let base_quad = mesh(&[[-1.0, -1.0, 0.0, 0.0, 0.0], [1.0, -1.0, 0.0, u, 0.0], [-1.0, 1.0, 0.0, 0.0, v], [1.0, 1.0, 0.0, u, v]])?;
-
-    let mut buffers: Vec<BufferSpec> = Vec::new();
-    let mut effects = Vec::new();
-    for effect_use in &image.effects {
-        match build_effect(engine, files, bindings, effect_use, &mut buffers) {
-            Ok(steps) => effects.push(Effect { name: effect_use.name.clone(), visible: effect_use.visible.value, steps }),
-            Err(why) => {
-                // Without the effect the chain still joins up: the layer shows as if it were off.
-                log::warn!("effect {} is skipped: {why}", effect_use.file);
-                effects.push(Effect { name: effect_use.name.clone(), visible: false, steps: Vec::new() });
-            }
-        }
-    }
+    let (quad, quad_unit, base_quad) = quads(engine, size, image.alignment, extent)?;
+    let (effects, buffers) = build_effects(engine, files, bindings, &image.effects);
     let _ = index;
 
     Ok(ImageLayer {
@@ -231,6 +228,85 @@ fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, inde
         quad,
         quad_unit,
         base_quad,
+        text: None,
+    })
+}
+
+/// The three quads a layer is drawn with: in layer space over the picture, in layer
+/// space over a whole buffer, and in clip space over the picture.
+fn quads(engine: &Engine, size: [f32; 2], alignment: Alignment, extent: [f32; 2]) -> Result<(Mesh, Mesh, Mesh), String> {
+    // Where the origin sits on the layer.
+    let (w, h) = (size[0], size[1]);
+    let (ax, ay) = (-f32::from(alignment.horizontal) * w / 2.0, -f32::from(alignment.vertical) * h / 2.0);
+    let (x0, x1, y0, y1) = (ax - w / 2.0, ax + w / 2.0, ay - h / 2.0, ay + h / 2.0);
+    let [u, v] = extent;
+    let mesh = |corners: &[[f32; 5]; 4]| Mesh::quad(&engine.gl, corners).map_err(|e| e.to_string());
+    Ok((
+        mesh(&[[x0, y0, 0.0, 0.0, v], [x1, y0, 0.0, u, v], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, u, 0.0]])?,
+        mesh(&[[x0, y0, 0.0, 0.0, 1.0], [x1, y0, 0.0, 1.0, 1.0], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, 1.0, 0.0]])?,
+        mesh(&[[-1.0, -1.0, 0.0, 0.0, 0.0], [1.0, -1.0, 0.0, u, 0.0], [-1.0, 1.0, 0.0, 0.0, v], [1.0, 1.0, 0.0, u, v]])?,
+    ))
+}
+
+/// A layer's effects and the buffers they declare. An effect that cannot be built
+/// is kept switched off, so the chain still joins up and the layer shows without it.
+fn build_effects(engine: &mut Engine, files: &Files, bindings: &mut Bindings, uses: &[EffectUse]) -> (Vec<Effect>, Vec<BufferSpec>) {
+    let mut buffers: Vec<BufferSpec> = Vec::new();
+    let mut effects = Vec::new();
+    for effect_use in uses {
+        match build_effect(engine, files, bindings, effect_use, &mut buffers) {
+            Ok(steps) => effects.push(Effect { name: effect_use.name.clone(), visible: effect_use.visible.value, steps }),
+            Err(why) => {
+                log::warn!("effect {} is skipped: {why}", effect_use.file);
+                effects.push(Effect { name: effect_use.name.clone(), visible: false, steps: Vec::new() });
+            }
+        }
+    }
+    (effects, buffers)
+}
+
+/// A text layer: an image layer whose picture is rasterised text.
+fn build_text(engine: &mut Engine, files: &Files, bindings: &mut Bindings, text: &TextObject) -> Result<ImageLayer, String> {
+    use super::text::{TextState, TextStyleSpec, TextSurface};
+    let font = engine
+        .share
+        .font(files, &text.font)
+        .or_else(|| engine.share.font(files, "fonts/NotoSans-Regular.ttf"))
+        .or_else(|| engine.share.font(files, "systemfont_sans"))
+        .ok_or_else(|| format!("font {} is not there and neither is a fallback", text.font))?;
+    let side = |name: &str, low: &str, high: &str| if name == low { -1 } else if name == high { 1 } else { 0 };
+    let style = TextStyleSpec {
+        point_size: text.point_size.value,
+        horizontal: side(&text.horizontal_align, "left", "right"),
+        vertical: side(&text.vertical_align, "bottom", "top"),
+        padding: text.padding,
+        max_width: if text.limit_width { text.max_width.value } else { 0.0 },
+    };
+    // A text layer without a box gets one that holds a few lines of its size.
+    let size = text.size.unwrap_or([style.point_size * 24.0, style.point_size * 4.0]);
+    let surface = std::rc::Rc::new(TextSurface::default());
+    let base = Shade::compile(
+        &mut engine.share,
+        files,
+        &PassInput { shader: "font", textures: &[TextureChoice::Text(surface.clone())], combos: &Combos::new(), constants: &[], buffers: &[] },
+        bindings,
+    )?;
+    let (quad, quad_unit, base_quad) = quads(engine, size, Alignment::default(), [1.0, 1.0])?;
+    let (effects, buffers) = build_effects(engine, files, bindings, &text.effects);
+    Ok(ImageLayer {
+        mode: ImageMode::Normal,
+        size,
+        alpha: text.alpha.value,
+        color: text.color.value,
+        brightness: text.brightness.value,
+        blend: Blend::Alpha,
+        base,
+        effects,
+        buffers,
+        quad,
+        quad_unit,
+        base_quad,
+        text: Some(TextState { text: text.text.value.clone(), font, style, size, surface, dirty: true }),
     })
 }
 
@@ -295,7 +371,7 @@ fn build_effect(engine: &mut Engine, files: &Files, bindings: &mut Bindings, eff
         // An effect works on the layer's picture unless it says otherwise.
         if textures.is_empty() {
             textures.push(TextureChoice::Previous);
-        } else if textures[0] == TextureChoice::Default {
+        } else if matches!(textures[0], TextureChoice::Default) {
             textures[0] = TextureChoice::Previous;
         }
 

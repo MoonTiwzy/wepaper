@@ -25,10 +25,12 @@ pub(crate) enum TextureRef {
     Background,
     /// The current frame of a video.
     Video(SharedVideo),
+    /// A text layer's rasterised text.
+    Text(Rc<super::text::TextSurface>),
 }
 
 /// What a texture slot is asked to hold, before it is resolved.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone)]
 pub(crate) enum TextureChoice {
     /// Whatever the shader defaults to.
     Default,
@@ -38,6 +40,8 @@ pub(crate) enum TextureChoice {
     Previous,
     /// A named buffer of the layer.
     Buffer(usize),
+    /// A text layer's rasterised text.
+    Text(Rc<super::text::TextSurface>),
 }
 
 /// Where a uniform's value comes from when the pass is drawn.
@@ -193,6 +197,7 @@ impl Shade {
             let chosen = match input.textures.get(slot).unwrap_or(&TextureChoice::Default) {
                 TextureChoice::Previous => Some(TextureRef::Previous),
                 TextureChoice::Buffer(index) => Some(TextureRef::Buffer(*index)),
+                TextureChoice::Text(surface) => Some(TextureRef::Text(surface.clone())),
                 TextureChoice::Named(name) => resolve(share, name, &mut wants_background),
                 TextureChoice::Default => None,
             };
@@ -213,6 +218,10 @@ impl Shade {
             }
         }
         for (slot, texture) in textures.iter().enumerate() {
+            if let Some(TextureRef::Text(_)) = texture {
+                // Rasterised text is one byte a pixel.
+                combos.insert(format!("TEX{slot}FORMAT"), 9);
+            }
             if let Some(TextureRef::Shared(texture)) = texture {
                 combos.insert(format!("TEX{slot}FORMAT"), texture.format_code);
                 if slot == 0 && texture.sprites.is_some() {

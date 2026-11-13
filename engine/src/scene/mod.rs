@@ -10,6 +10,7 @@ mod bindings;
 mod build;
 mod draw;
 mod shade;
+mod text;
 mod tree;
 
 use wepaper_json::Value;
@@ -18,6 +19,8 @@ use crate::doc::Project;
 use crate::gpu::{Blend, Mesh, Target};
 use crate::math::Mat4;
 use crate::{Fill, Viewport};
+
+pub(crate) use text::system_font;
 
 use bindings::{Bindings, Change, Slot};
 use shade::Shade;
@@ -73,6 +76,8 @@ pub(crate) struct ImageLayer {
     pub(crate) quad_unit: Mesh,
     /// Clip space, texture coordinates over the picture.
     pub(crate) base_quad: Mesh,
+    /// The layer's text, when its picture is text.
+    pub(crate) text: Option<text::TextState>,
 }
 
 /// What a layer is.
@@ -127,6 +132,8 @@ pub struct SceneInstance {
     /// The scene's own size.
     scene_size: [f32; 2],
     clear: [f32; 3],
+    /// How far the camera is zoomed in; 1 shows the whole scene.
+    zoom: f32,
     viewport: Viewport,
     fill: Fill,
     target: Target,
@@ -185,6 +192,7 @@ impl SceneInstance {
             Change::Floats(slot, floats) => {
                 let three = [floats.first().copied().unwrap_or(0.0), floats.get(1).copied().unwrap_or(0.0), floats.get(2).copied().unwrap_or(0.0)];
                 match slot {
+                    Slot::Zoom => self.zoom = three[0].max(0.01),
                     Slot::LayerOrigin(layer) => self.layers[layer].origin = three,
                     Slot::LayerScale(layer) => self.layers[layer].scale = three,
                     Slot::LayerAngles(layer) => self.layers[layer].angles = three,
@@ -207,6 +215,15 @@ impl SceneInstance {
                     && let Some(effect) = image.effects.get_mut(effect)
                 {
                     effect.visible = on;
+                }
+            }
+            Change::Text(Slot::LayerText(layer), new) => {
+                if let LayerKind::Image(image) = &mut self.layers[layer].kind
+                    && let Some(text) = &mut image.text
+                    && text.text != new
+                {
+                    text.text = new;
+                    text.dirty = true;
                 }
             }
             Change::Flag(..) | Change::Text(..) => {}

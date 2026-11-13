@@ -54,6 +54,16 @@ impl SceneInstance {
         self.target.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
         // How many output pixels one scene unit covers: layer buffers are sized by it.
         let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0).abs().max((frame.view_projection.0[5] * frame.screen[1] / 2.0).abs());
+        // Text that changed is drawn into its texture before anything samples it.
+        for layer in &mut self.layers {
+            if let LayerKind::Image(image) = &mut layer.kind
+                && let Some(text) = &mut image.text
+                && layer.shown
+            {
+                let reach = density * layer.world.0[0].abs().max(layer.world.0[5].abs());
+                text.refresh(&engine.gl, reach.min(2.0));
+            }
+        }
         let mut background: Option<Target> = None;
         for layer in &self.layers {
             if !layer.shown {
@@ -98,6 +108,7 @@ impl SceneInstance {
             Fill::Cover => (out_w / sx.max(sy) / 2.0, out_h / sx.max(sy) / 2.0),
             Fill::Contain => (out_w / sx.min(sy) / 2.0, out_h / sx.min(sy) / 2.0),
         };
+        let (half_w, half_h) = (half_w / self.zoom, half_h / self.zoom);
         let (cx, cy) = (scene_w / 2.0, scene_h / 2.0);
         Mat4::orthographic(cx - half_w, cx + half_w, cy - half_h, cy + half_h, -10000.0, 10000.0)
     }
@@ -282,6 +293,10 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
             TextureRef::Previous => (previous.unwrap_or(white).raw(), authored),
             TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white).raw(), authored),
             TextureRef::Background => (background.unwrap_or(white).raw(), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+            TextureRef::Text(surface) => match surface.texture.borrow().as_ref() {
+                Some(texture) => (texture.raw(), [texture.width as f32, texture.height as f32, texture.width as f32, texture.height as f32]),
+                None => (white.raw(), authored),
+            },
             TextureRef::Video(video) => {
                 let video = video.borrow();
                 match (video.texture(), video.size()) {

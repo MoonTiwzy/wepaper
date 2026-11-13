@@ -21,7 +21,7 @@ libc = "0.2"
 libloading = "0.8"
 log = "0.4"
 png = "0.17"
-rquickjs = { version = "0.9", default-features = false, optional = true }
+rquickjs = { version = "0.9", default-features = false, features = ["loader"], optional = true }
 zune-jpeg = "0.4"
 
 [dev-dependencies]

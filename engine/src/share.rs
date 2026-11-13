@@ -52,6 +52,7 @@ pub struct Share {
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
     pub max_texture_side: u32,
+    fonts: HashMap<String, Option<Rc<fontdue::Font>>>,
     /// The videos being played.
     pub videos: VideoHub,
     /// Where videos packed inside textures are unpacked to.
@@ -67,6 +68,7 @@ impl Share {
             programs: HashMap::new(),
             shaders: HashMap::new(),
             white: None,
+            fonts: HashMap::new(),
             max_texture_side: u32::MAX,
             videos: VideoHub::new(gl),
             video_dir: std::env::temp_dir().join("wepaper-video"),
@@ -114,6 +116,24 @@ impl Share {
             std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &unpacked)).map_err(|e| e.to_string())?;
         }
         self.videos.open(&unpacked).map_err(|e| e.to_string())
+    }
+
+    /// The font a text layer names: a file of the wallpaper or the assets, or a
+    /// system font (`systemfont_arial`). Loaded once; `None` when there is no such font.
+    pub fn font(&mut self, files: &Files, name: &str) -> Option<Rc<fontdue::Font>> {
+        if let Some(font) = self.fonts.get(name) {
+            return font.clone();
+        }
+        let bytes = files.read(name).ok().or_else(|| std::fs::read(crate::scene::system_font(name)?).ok());
+        let font = bytes.and_then(|bytes| match fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()) {
+            Ok(font) => Some(Rc::new(font)),
+            Err(error) => {
+                log::warn!("font {name}: {error}");
+                None
+            }
+        });
+        self.fonts.insert(name.to_owned(), font.clone());
+        font
     }
 
     /// The shader called `name` (`shaders/<name>.vert` and `.frag`), read once.
