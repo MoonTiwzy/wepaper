@@ -28,6 +28,6 @@ for dir in "$workshop"/*/; do
     warnings=$(grep -c 'warn:' "$out/$id.log")
     printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$status" "${difference:--}" "$ms" "$warnings" >> "$out/summary.unsorted"
 done
-sort -t$'\t' -k3,3 -g -r "$out/summary.unsorted" > "$out/summary.tsv"
+LC_ALL=C sort -t$'\t' -k3,3 -g -r "$out/summary.unsorted" > "$out/summary.tsv"
 rm -f "$out/summary.unsorted"
 echo "scenes: $(wc -l < "$out/summary.tsv"), failed: $(grep -c FAILED "$out/summary.tsv")"
