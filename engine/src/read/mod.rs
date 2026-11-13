@@ -8,6 +8,7 @@ mod archive;
 mod files;
 pub mod lz4;
 pub mod picture;
+pub mod puppet;
 mod texture;
 
 pub use archive::Archive;
