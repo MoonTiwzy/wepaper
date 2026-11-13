@@ -132,6 +132,8 @@ pub struct SceneInstance {
     view_projection: Mat4,
     /// Layers that could not be built, with why: for `inspect` and logs.
     skipped: Vec<String>,
+    /// The videos the scene's layers show, held for as long as it plays.
+    videos: Vec<crate::video::VideoHold>,
 }
 
 impl SceneInstance {
@@ -218,6 +220,14 @@ impl SceneInstance {
             self.viewport = viewport;
         }
         Ok(())
+    }
+
+    /// Pauses or resumes the scene's videos. A video shared with another output
+    /// stops only when every output showing it is paused.
+    pub fn set_paused(&mut self, paused: bool) {
+        for video in &self.videos {
+            video.set_paused(paused);
+        }
     }
 
     /// Changes how the scene fills an output of another shape.

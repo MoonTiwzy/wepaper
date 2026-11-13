@@ -38,6 +38,9 @@ struct Chain {
 impl SceneInstance {
     /// Draws the frame for `input` and returns the target that holds it.
     pub fn render(&mut self, engine: &mut Engine, input: &FrameInput) -> &Target {
+        for video in &self.videos {
+            video.stream.borrow_mut().poll();
+        }
         self.update_transforms();
         self.view_projection = self.camera();
         let frame = Frame {
@@ -274,14 +277,22 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
                     sprites[*unit as usize & 15] =
                         Some(([sprite.width / w, sprite.skew.0 / h, sprite.skew.1 / w, sprite.height / h], [sprite.x / w, sprite.y / h]));
                 }
-                (&shared.texture, shared.resolution)
+                (shared.texture.raw(), shared.resolution)
             }
-            TextureRef::Previous => (previous.unwrap_or(white), authored),
-            TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white), authored),
-            TextureRef::Background => (background.unwrap_or(white), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+            TextureRef::Previous => (previous.unwrap_or(white).raw(), authored),
+            TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white).raw(), authored),
+            TextureRef::Background => (background.unwrap_or(white).raw(), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+            TextureRef::Video(video) => {
+                let video = video.borrow();
+                match (video.texture(), video.size()) {
+                    (Some(texture), Some((w, h))) => (texture.raw(), [w as f32, h as f32, w as f32, h as f32]),
+                    // Until its first frame a video shows nothing.
+                    _ => (white.raw(), authored),
+                }
+            }
         };
         resolutions[*unit as usize & 15] = resolution;
-        gl.bind_texture(*unit, texture.raw());
+        gl.bind_texture(*unit, texture);
         shade.program.set_sampler(uniform, *unit);
     }
     for (uniform, feed) in &shade.feeds {
@@ -320,6 +331,16 @@ fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous
 }
 
 impl Engine {
+    /// Fills whatever is bound with `color`.
+    pub(crate) fn clear(&self, color: [f32; 4]) {
+        use glow::HasContext;
+        // SAFETY: plain state and a clear on the bound framebuffer.
+        unsafe {
+            self.gl.raw().clear_color(color[0], color[1], color[2], color[3]);
+            self.gl.raw().clear(glow::COLOR_BUFFER_BIT);
+        }
+    }
+
     /// Sets up the built-in program that draws `texture` as it is; the caller draws the mesh.
     pub(crate) fn composite(&self, texture: &Texture, mvp: &Mat4, alpha: f32) {
         self.blit.bind();

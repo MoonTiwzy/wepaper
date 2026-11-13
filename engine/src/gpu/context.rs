@@ -81,8 +81,12 @@ struct State {
     viewport: (i32, i32),
 }
 
+/// Looks a GL function up by name; what foreign renderers (libmpv) are handed.
+pub(crate) type Loader = Box<dyn Fn(&std::ffi::CStr) -> *const std::ffi::c_void>;
+
 struct Shared {
     raw: glow::Context,
+    loader: Loader,
     caps: Caps,
     memory: Cell<Memory>,
     state: RefCell<State>,
@@ -97,7 +101,7 @@ struct Shared {
 pub struct Gl(Rc<Shared>);
 
 impl Gl {
-    pub(super) fn new(raw: glow::Context, compatibility: bool) -> Self {
+    pub(super) fn new(raw: glow::Context, compatibility: bool, loader: Loader) -> Self {
         // SAFETY: the context `raw` was loaded from is current (the caller made it so).
         let caps = unsafe {
             raw.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
@@ -115,12 +119,17 @@ impl Gl {
                 max_texture_size: raw.get_parameter_i32(glow::MAX_TEXTURE_SIZE).max(0) as u32,
             }
         };
-        Self(Rc::new(Shared { raw, caps, memory: Cell::default(), state: RefCell::default(), cache_dir: RefCell::default() }))
+        Self(Rc::new(Shared { raw, loader, caps, memory: Cell::default(), state: RefCell::default(), cache_dir: RefCell::default() }))
     }
 
     /// The raw functions, for what the cache does not cover.
     pub fn raw(&self) -> &glow::Context {
         &self.0.raw
+    }
+
+    /// The address of the GL function called `name`, null when there is none.
+    pub(crate) fn proc_address(&self, name: &std::ffi::CStr) -> *const std::ffi::c_void {
+        (self.0.loader)(name)
     }
 
     /// What the context can do.
@@ -142,7 +151,7 @@ impl Gl {
         self.0.cache_dir.borrow().clone()
     }
 
-    pub(super) fn account(&self, class: MemoryClass, bytes: i64) {
+    pub(crate) fn account(&self, class: MemoryClass, bytes: i64) {
         let mut memory = self.0.memory.get();
         let slot = match class {
             MemoryClass::Textures => &mut memory.textures,
@@ -151,6 +160,12 @@ impl Gl {
         };
         *slot = slot.saturating_add_signed(bytes);
         self.0.memory.set(memory);
+    }
+
+    /// Moves `bytes` from one class to another: the same memory, counted for what it is used for.
+    pub(crate) fn reclassify(&self, from: MemoryClass, to: MemoryClass, bytes: u64) {
+        self.account(from, -(bytes as i64));
+        self.account(to, bytes as i64);
     }
 
     /// Forgets the cached framebuffer and viewport: another surface is current now,

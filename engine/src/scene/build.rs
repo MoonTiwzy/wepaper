@@ -84,7 +84,9 @@ impl SceneInstance {
             view_projection: Mat4::IDENTITY,
             skipped,
             project,
+            videos: Vec::new(),
         };
+        instance.hold_videos();
         // Every property takes effect once: the wallpaper's own value, or the user's.
         let defaults: Vec<(String, Value)> = instance.project.properties.iter().map(|p| (p.name.clone(), p.default.clone())).collect();
         for (name, value) in defaults.iter().chain(values) {
@@ -93,6 +95,33 @@ impl SceneInstance {
             }
         }
         Ok(instance)
+    }
+}
+
+impl SceneInstance {
+    /// Takes a place on every video the layers show, each video once.
+    fn hold_videos(&mut self) {
+        let mut streams: Vec<crate::video::SharedVideo> = Vec::new();
+        let mut note = |shade: &Shade| {
+            for (_, _, source) in &shade.samplers {
+                if let TextureRef::Video(video) = source
+                    && !streams.iter().any(|known| std::rc::Rc::ptr_eq(known, video))
+                {
+                    streams.push(video.clone());
+                }
+            }
+        };
+        for layer in &self.layers {
+            if let LayerKind::Image(image) = &layer.kind {
+                note(&image.base);
+                for step in image.effects.iter().flat_map(|e| &e.steps) {
+                    if let Step::Draw { shade, .. } = step {
+                        note(shade);
+                    }
+                }
+            }
+        }
+        self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
     }
 }
 

@@ -11,6 +11,7 @@ use std::rc::{Rc, Weak};
 use crate::glsl::{Combos, Declared, Source, Stage};
 use crate::gpu::{Gl, Program, Sampling, Texture, TextureFormat};
 use crate::read::{FNV_SEED, Files, PixelFormat, Pixels, SpriteSheet, TextureFile, fnv, picture};
+use crate::video::{SharedVideo, VideoHub};
 
 /// A texture with what shaders and layers need to know about it.
 pub struct SharedTexture {
@@ -22,6 +23,14 @@ pub struct SharedTexture {
     pub sprites: Option<SpriteSheet>,
     /// The format's number in the shaders' `TEXnFORMAT` combos.
     pub format_code: i32,
+}
+
+/// What a texture name leads to.
+pub enum Loaded {
+    /// A picture on the GPU.
+    Picture(Rc<SharedTexture>),
+    /// A video, playing.
+    Video(SharedVideo),
 }
 
 /// A shader's two stages with their merged declarations.
@@ -43,12 +52,25 @@ pub struct Share {
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
     pub max_texture_side: u32,
+    /// The videos being played.
+    pub videos: VideoHub,
+    /// Where videos packed inside textures are unpacked to.
+    pub video_dir: std::path::PathBuf,
 }
 
 impl Share {
     /// An empty cache.
     pub fn new(gl: &Gl) -> Self {
-        Self { gl: gl.clone(), textures: HashMap::new(), programs: HashMap::new(), shaders: HashMap::new(), white: None, max_texture_side: u32::MAX }
+        Self {
+            gl: gl.clone(),
+            textures: HashMap::new(),
+            programs: HashMap::new(),
+            shaders: HashMap::new(),
+            white: None,
+            max_texture_side: u32::MAX,
+            videos: VideoHub::new(gl),
+            video_dir: std::env::temp_dir().join("wepaper-video"),
+        }
     }
 
     /// A 1x1 white texture: what a slot samples when its texture is missing.
@@ -64,17 +86,34 @@ impl Share {
     }
 
     /// The texture a material calls `name`, loaded once however many ask.
-    pub fn texture(&mut self, files: &Files, name: &str) -> Result<Rc<SharedTexture>, String> {
+    pub fn texture(&mut self, files: &Files, name: &str) -> Result<Loaded, String> {
         let path = texture_path(files, name).ok_or_else(|| format!("texture {name} is not in the wallpaper or the assets"))?;
         let located = files.locate(&path).expect("just found");
         let key = fnv(located.key, &self.max_texture_side.to_le_bytes());
         if let Some(texture) = self.textures.get(&key).and_then(Weak::upgrade) {
-            return Ok(texture);
+            return Ok(Loaded::Picture(texture));
         }
         let bytes = files.read(&path).map_err(|e| e.to_string())?;
-        let texture = Rc::new(upload(&self.gl, &bytes, self.max_texture_side).map_err(|e| format!("texture {name}: {e}"))?);
+        let file = TextureFile::parse(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
+        if file.video {
+            return self.video(&file, &bytes, located.key).map(Loaded::Video).map_err(|e| format!("texture {name}: {e}"));
+        }
+        let texture = Rc::new(upload(&self.gl, &file, &bytes, self.max_texture_side).map_err(|e| format!("texture {name}: {e}"))?);
         self.textures.insert(key, Rc::downgrade(&texture));
-        Ok(texture)
+        Ok(Loaded::Picture(texture))
+    }
+
+    /// Plays the video packed in a texture: unpacked once into the cache, then
+    /// played from there by the one decoder everybody shares.
+    fn video(&mut self, file: &TextureFile, bytes: &[u8], key: u64) -> Result<SharedVideo, String> {
+        let unpacked = self.video_dir.join(format!("{key:016x}.mp4"));
+        if !unpacked.is_file() {
+            let Pixels::Video(data) = file.pixels(bytes, 0, 0).map_err(|e| e.to_string())? else { return Err("no video data".to_owned()) };
+            std::fs::create_dir_all(&self.video_dir).map_err(|e| e.to_string())?;
+            let part = unpacked.with_extension(format!("{}.part", std::process::id()));
+            std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &unpacked)).map_err(|e| e.to_string())?;
+        }
+        self.videos.open(&unpacked).map_err(|e| e.to_string())
     }
 
     /// The shader called `name` (`shaders/<name>.vert` and `.frag`), read once.
@@ -174,9 +213,8 @@ fn texture_path(files: &Files, name: &str) -> Option<String> {
     [format!("materials/{name}.tex"), format!("{name}.tex"), name.to_owned()].into_iter().find(|path| files.exists(path))
 }
 
-/// Parses a texture container and puts it on the GPU.
-fn upload(gl: &Gl, bytes: &[u8], max_side: u32) -> Result<SharedTexture, String> {
-    let file = TextureFile::parse(bytes).map_err(|e| e.to_string())?;
+/// Puts a parsed texture container on the GPU.
+fn upload(gl: &Gl, file: &TextureFile, bytes: &[u8], max_side: u32) -> Result<SharedTexture, String> {
     let image = file.images.first().filter(|i| !i.mips.is_empty()).ok_or("the texture has no picture")?;
     let sampling = Sampling { clamp: file.clamp, nearest: file.nearest };
     // Levels larger than the budget are never read, let alone uploaded.
@@ -214,6 +252,9 @@ fn upload(gl: &Gl, bytes: &[u8], max_side: u32) -> Result<SharedTexture, String>
         TextureFormat::R8 => 9,
         _ => 0,
     };
-    let resolution = [file.width as f32, file.height as f32, file.image_width as f32, file.image_height as f32];
-    Ok(SharedTexture { texture, resolution, sprites: file.sprites, format_code })
+    // A picture stored encoded is as large as the picture; raw levels are padded.
+    let stored = if file.is_encoded() { (levels[0].0, levels[0].1) } else { (file.width, file.height) };
+    let picture = (file.image_width.min(stored.0), file.image_height.min(stored.1));
+    let resolution = [stored.0 as f32, stored.1 as f32, picture.0 as f32, picture.1 as f32];
+    Ok(SharedTexture { texture, resolution, sprites: file.sprites.clone(), format_code })
 }

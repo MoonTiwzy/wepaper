@@ -8,6 +8,7 @@
 //! - [`gpu`]: OpenGL: the context, textures, programs, pooled render targets.
 //! - [`share`]: the cache every playing wallpaper draws its resources from.
 //! - [`scene`]: a scene becomes layers and passes, and a frame is drawn.
+//! - [`video`]: libmpv decodes video straight into our textures.
 //! - [`particles`]: particle systems, simulated on the CPU.
 //! - `script`: SceneScript, behind the `script` feature.
 //!
@@ -36,6 +37,7 @@ pub mod scene;
 #[cfg(feature = "script")]
 pub mod script;
 pub mod share;
+pub mod video;
 
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -45,8 +47,9 @@ use wepaper_json::Value;
 use doc::{Kind, Project};
 use gpu::{Gl, GpuError, Mesh, Program, TargetPool, Texture};
 use read::{Archive, Files};
-use scene::SceneInstance;
+use scene::{FrameInput, PropertyValue, SceneInstance};
 use share::Share;
+use video::VideoInstance;
 
 /// Why a wallpaper did not load.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +111,83 @@ impl Fill {
     }
 }
 
+/// A playing wallpaper of any kind the engine draws itself.
+pub enum Wallpaper {
+    /// A scene.
+    Scene(Box<SceneInstance>),
+    /// A video.
+    Video(VideoInstance),
+}
+
+impl Wallpaper {
+    /// The wallpaper's `project.json`.
+    pub fn project(&self) -> &Project {
+        match self {
+            Wallpaper::Scene(scene) => scene.project(),
+            Wallpaper::Video(video) => video.project(),
+        }
+    }
+
+    /// Draws the frame for `input` into `to` (`None`: the current surface) of `size`.
+    ///
+    /// Returns whether anything was drawn: a video draws only when it has a new
+    /// frame, unless `force` says the destination's contents are gone.
+    pub fn draw(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32), force: bool) -> bool {
+        match self {
+            Wallpaper::Scene(scene) => {
+                scene.render(engine, input).blit(to, size);
+                true
+            }
+            Wallpaper::Video(video) => video.draw(engine, to, size, force),
+        }
+    }
+
+    /// Whether the wallpaper needs a frame every display refresh (a scene), or only
+    /// when its source has a new one (a video).
+    pub fn animates(&self) -> bool {
+        matches!(self, Wallpaper::Scene(_))
+    }
+
+    /// Changes the size the wallpaper is drawn at.
+    pub fn resize(&mut self, engine: &Engine, viewport: Viewport) -> Result<(), LoadError> {
+        match self {
+            Wallpaper::Scene(scene) => scene.resize(engine, viewport),
+            Wallpaper::Video(_) => Ok(()),
+        }
+    }
+
+    /// Changes how the wallpaper fills an output of another shape.
+    pub fn set_fill(&mut self, fill: Fill) {
+        match self {
+            Wallpaper::Scene(scene) => scene.set_fill(fill),
+            Wallpaper::Video(video) => video.set_fill(fill),
+        }
+    }
+
+    /// Pauses or resumes what plays on its own clock (videos, sound).
+    pub fn set_paused(&mut self, paused: bool) {
+        match self {
+            Wallpaper::Scene(scene) => scene.set_paused(paused),
+            Wallpaper::Video(video) => video.set_paused(paused),
+        }
+    }
+
+    /// The current values of the user properties.
+    pub fn properties(&self) -> Vec<PropertyValue> {
+        match self {
+            Wallpaper::Scene(scene) => scene.properties(),
+            Wallpaper::Video(_) => Vec::new(),
+        }
+    }
+
+    /// Sets a user property.
+    pub fn set_property(&mut self, name: &str, value: &Value) {
+        if let Wallpaper::Scene(scene) = self {
+            scene.set_property(name, value);
+        }
+    }
+}
+
 /// What an engine is set up with.
 #[derive(Debug, Clone, Default)]
 pub struct Options {
@@ -142,6 +222,9 @@ impl Engine {
         let mut share = Share::new(gl);
         if options.max_texture_side > 0 {
             share.max_texture_side = options.max_texture_side;
+        }
+        if let Some(dir) = &options.cache_dir {
+            share.video_dir = dir.join("video");
         }
         let white = share.white();
         Ok(Self {
@@ -196,6 +279,29 @@ impl Engine {
         let scene = SceneInstance::build(self, &files, project, viewport, values)?;
         self.share.sweep();
         Ok(scene)
+    }
+
+    /// Loads a wallpaper of any kind the engine draws: a scene or a video.
+    pub fn load(&mut self, wallpaper: &Path, viewport: Viewport, values: &[(String, Value)]) -> Result<Wallpaper, LoadError> {
+        let (files, project) = self.open(wallpaper)?;
+        match project.kind {
+            Kind::Scene => {
+                let scene = SceneInstance::build(self, &files, project, viewport, values)?;
+                self.share.sweep();
+                Ok(Wallpaper::Scene(Box::new(scene)))
+            }
+            Kind::Video => {
+                let dir = locate::wallpaper(&wallpaper.to_string_lossy()).ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
+                let stream = self.share.videos.open(&dir.join(&project.file)).map_err(|e| LoadError(e.to_string()))?;
+                Ok(Wallpaper::Video(VideoInstance::new(project, stream)))
+            }
+            other => Err(LoadError(format!("{} wallpapers are not drawn by the engine", other.name()))),
+        }
+    }
+
+    /// The videos being played, and how new ones are.
+    pub fn videos(&mut self) -> &mut video::VideoHub {
+        &mut self.share.videos
     }
 
     /// Frees what is held only for reuse: idle buffers and dead cache entries.

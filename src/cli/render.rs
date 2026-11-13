@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use wepaper_engine::gpu::Context;
+use wepaper_engine::gpu::{Context, Target, TextureFormat};
 use wepaper_engine::scene::FrameInput;
 use wepaper_engine::{Engine, Fill, Options, Viewport};
 
@@ -11,7 +11,7 @@ use super::{Failure, cache_dir, parse_property, parse_size};
 pub const USAGE: &str = "\
 wepaper render <wallpaper> -o <file.png> [options]
 
-Renders one frame of a scene wallpaper to a PNG. Needs no compositor.
+Renders one frame of a scene or video wallpaper to a PNG. Needs no compositor.
 
   <wallpaper>          a wallpaper folder, or a workshop id
   -o, --output FILE    where to write the PNG
@@ -64,19 +64,26 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let options = Options { assets, cache_dir: cache.then(cache_dir), ..Options::default() };
     let mut engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
     let viewport = Viewport { width: size.0, height: size.1 };
-    let mut scene = engine.load_scene(Path::new(&wallpaper), viewport, &properties).map_err(|e| e.to_string())?;
-    scene.set_fill(fill);
+    let mut wallpaper = engine.load(Path::new(&wallpaper), viewport, &properties).map_err(|e| e.to_string())?;
+    wallpaper.set_fill(fill);
+    let frame = Target::new(context.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
+    frame.clear([0.0, 0.0, 0.0, 1.0]);
+    // A video has nothing to show until its decoder delivers a frame.
+    let patience = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !engine.videos().poll_all() && std::time::Instant::now() < patience {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     let loaded = started.elapsed();
 
     // Frames before the last one are spaced a sixtieth of a second apart, ending at `time`.
     let frames = frames.max(1);
     let drawing = std::time::Instant::now();
-    for frame in 0..frames {
-        let moment = (time - f64::from(frames - 1 - frame) / 60.0).max(0.0);
-        scene.render(&mut engine, &FrameInput { time: moment, pointer: [0.5, 0.5], daytime: 0.5 });
+    for index in 0..frames {
+        let moment = (time - f64::from(frames - 1 - index) / 60.0).max(0.0);
+        let input = FrameInput { time: moment, pointer: [0.5, 0.5], daytime: 0.5 };
+        wallpaper.draw(&mut engine, &input, Some(frame.framebuffer()), size, true);
     }
-    let target = scene.render(&mut engine, &FrameInput { time, pointer: [0.5, 0.5], daytime: 0.5 });
-    let pixels = target.read_rgba();
+    let pixels = frame.read_rgba();
     let drawn = drawing.elapsed();
     write_png(&output, size.0, size.1, &pixels)?;
 
@@ -84,12 +91,19 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         let memory = context.gl().memory();
         let mb = |bytes: u64| bytes as f64 / 1048576.0;
         eprintln!("gpu: {}", context.description);
-        eprintln!("load: {:.0} ms, {} frames: {:.1} ms", loaded.as_secs_f64() * 1e3, frames + 1, drawn.as_secs_f64() * 1e3);
-        eprintln!("video memory: textures {:.1} MB, buffers {:.1} MB; most effect buffers at once: {}", mb(memory.textures), mb(memory.targets), engine.peak_buffers());
-        eprintln!("layers: {}, skipped: {}", scene.layer_count(), scene.skipped().len());
+        eprintln!("load: {:.0} ms, {} frames: {:.1} ms", loaded.as_secs_f64() * 1e3, frames, drawn.as_secs_f64() * 1e3);
+        eprintln!(
+            "video memory: textures {:.1} MB, buffers {:.1} MB, video {:.1} MB; most effect buffers at once: {}",
+            mb(memory.textures),
+            mb(memory.targets),
+            mb(memory.video),
+            engine.peak_buffers()
+        );
     }
-    for line in scene.skipped() {
-        log::info!("{line}");
+    if let wepaper_engine::Wallpaper::Scene(scene) = &wallpaper {
+        for line in scene.skipped() {
+            log::info!("{line}");
+        }
     }
     Ok(())
 }

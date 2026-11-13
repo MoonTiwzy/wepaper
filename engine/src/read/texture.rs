@@ -294,6 +294,11 @@ impl TextureFile {
         })
     }
 
+    /// Whether the levels hold an encoded picture (PNG, JPEG) rather than pixels.
+    pub fn is_encoded(&self) -> bool {
+        self.encoded
+    }
+
     /// The contents of level `level` of image `image`, unpacked when it was packed.
     ///
     /// `bytes` is the file [`parse`](Self::parse) read.

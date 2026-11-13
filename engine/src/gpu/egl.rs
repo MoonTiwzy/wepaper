@@ -98,13 +98,13 @@ impl Context {
             }
         };
         egl.make_current(display, None, None, Some(context)).map_err(|e| fail("eglMakeCurrent without a surface", e))?;
-        // SAFETY: the context made current above is the one these functions belong to.
-        let raw = unsafe {
-            glow::Context::from_loader_function(|symbol| {
-                egl.get_proc_address(symbol).map_or(std::ptr::null(), |address| address as *const c_void)
-            })
+        let lookup = {
+            let egl = egl.clone();
+            move |symbol: &str| egl.get_proc_address(symbol).map_or(std::ptr::null(), |address| address as *const c_void)
         };
-        let gl = Gl::new(raw, compatibility);
+        // SAFETY: the context made current above is the one these functions belong to.
+        let raw = unsafe { glow::Context::from_loader_function(&lookup) };
+        let gl = Gl::new(raw, compatibility, Box::new(move |name| name.to_str().map_or(std::ptr::null(), &lookup)));
         let description = format!("{} ({}, {name})", gl.caps().renderer, gl.caps().version);
         Ok(Self { egl, display, config, context, gl, description })
     }

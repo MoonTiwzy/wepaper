@@ -8,7 +8,8 @@ use crate::doc::{Dyn, FromDoc, floats};
 use crate::glsl::Combos;
 use crate::gpu::{Program, Uniform};
 use crate::read::Files;
-use crate::share::{Share, SharedTexture};
+use crate::share::{Loaded, Share, SharedTexture};
+use crate::video::SharedVideo;
 
 use super::bindings::{Bindings, Slot};
 
@@ -22,6 +23,8 @@ pub(crate) enum TextureRef {
     Buffer(usize),
     /// A copy of the scene as drawn so far.
     Background,
+    /// The current frame of a video.
+    Video(SharedVideo),
 }
 
 /// What a texture slot is asked to hold, before it is resolved.
@@ -179,7 +182,8 @@ impl Shade {
                     return input.buffers.iter().position(|b| b == name).map(TextureRef::Buffer);
                 }
                 match share.texture(files, name) {
-                    Ok(texture) => Some(TextureRef::Shared(texture)),
+                    Ok(Loaded::Picture(texture)) => Some(TextureRef::Shared(texture)),
+                    Ok(Loaded::Video(video)) => Some(TextureRef::Video(video)),
                     Err(why) => {
                         log::warn!("{why}");
                         None
