@@ -1,0 +1,336 @@
+//! Drawing a frame.
+
+use crate::gpu::{Blend, Gl, Target, Texture, TextureFormat};
+use crate::math::Mat4;
+use crate::{Engine, Fill};
+
+use super::shade::{Feed, Shade, TextureRef};
+use super::{FrameInput, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, Step};
+
+/// What is the same for every pass of a frame.
+struct Frame<'a> {
+    time: f32,
+    daytime: f32,
+    pointer: [f32; 2],
+    screen: [f32; 2],
+    view_projection: Mat4,
+    values: &'a [Vec<f32>],
+}
+
+/// What is the same for every pass of a layer.
+struct LayerState {
+    mvp: Mat4,
+    model: Mat4,
+    color: [f32; 3],
+    alpha: f32,
+    brightness: f32,
+    /// The size shaders are told the layer's buffers have: the authored one.
+    authored: [f32; 2],
+}
+
+/// The buffers a layer holds while its chain runs.
+struct Chain {
+    ping: [Option<Target>; 2],
+    current: Option<usize>,
+    named: Vec<Option<Target>>,
+}
+
+impl SceneInstance {
+    /// Draws the frame for `input` and returns the target that holds it.
+    pub fn render(&mut self, engine: &mut Engine, input: &FrameInput) -> &Target {
+        self.update_transforms();
+        self.view_projection = self.camera();
+        let frame = Frame {
+            time: input.time as f32,
+            daytime: input.daytime,
+            pointer: input.pointer,
+            screen: [self.viewport.width as f32, self.viewport.height as f32],
+            view_projection: self.view_projection,
+            values: &self.bindings.values,
+        };
+        self.target.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
+        // How many output pixels one scene unit covers: layer buffers are sized by it.
+        let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0).abs().max((frame.view_projection.0[5] * frame.screen[1] / 2.0).abs());
+        let mut background: Option<Target> = None;
+        for layer in &self.layers {
+            if !layer.shown {
+                continue;
+            }
+            if let LayerKind::Image(image) = &layer.kind {
+                draw_image(engine, &frame, layer, image, &self.target, &mut background, density);
+            }
+        }
+        if let Some(background) = background {
+            engine.pool.give(background);
+        }
+        engine.pool.end_frame();
+        &self.target
+    }
+
+    /// Recomputes every layer's place in the scene from its own values and its parents'.
+    fn update_transforms(&mut self) {
+        for index in 0..self.layers.len() {
+            let layer = &self.layers[index];
+            let local = Mat4::translation(layer.origin).mul(&Mat4::rotation(layer.angles)).mul(&Mat4::scaling(layer.scale));
+            // Parents come before their children in a scene; one that does not is ignored.
+            let parent = layer.parent.filter(|&p| p < index).map(|p| (self.layers[p].world, self.layers[p].shown));
+            let (world, shown) = match parent {
+                Some((parent_world, parent_shown)) => (parent_world.mul(&local), parent_shown && layer.visible),
+                None => (local, layer.visible),
+            };
+            let layer = &mut self.layers[index];
+            layer.world = world;
+            layer.shown = shown;
+        }
+    }
+
+    /// The projection that puts the scene on the output the way `fill` says.
+    fn camera(&self) -> Mat4 {
+        let [scene_w, scene_h] = self.scene_size;
+        let (out_w, out_h) = (self.viewport.width as f32, self.viewport.height as f32);
+        let (sx, sy) = (out_w / scene_w, out_h / scene_h);
+        // The part of the scene that is shown, around its centre.
+        let (half_w, half_h) = match self.fill {
+            Fill::Stretch => (scene_w / 2.0, scene_h / 2.0),
+            Fill::Cover => (out_w / sx.max(sy) / 2.0, out_h / sx.max(sy) / 2.0),
+            Fill::Contain => (out_w / sx.min(sy) / 2.0, out_h / sx.min(sy) / 2.0),
+        };
+        let (cx, cy) = (scene_w / 2.0, scene_h / 2.0);
+        Mat4::orthographic(cx - half_w, cx + half_w, cy - half_h, cy + half_h, -10000.0, 10000.0)
+    }
+}
+
+/// Draws one image layer: its base pass, then each visible effect's steps, the last
+/// of them straight into the scene.
+fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &ImageLayer, scene: &Target, background: &mut Option<Target>, density: f32) {
+    let state = LayerState {
+        mvp: frame.view_projection.mul(&layer.world),
+        model: layer.world,
+        color: image.color,
+        alpha: image.alpha,
+        brightness: image.brightness,
+        authored: image.size,
+    };
+    let steps: Vec<&Step> = image.effects.iter().filter(|e| e.visible).flat_map(|e| &e.steps).collect();
+    if steps.is_empty() && image.mode != ImageMode::Normal {
+        return; // A compose layer without effects changes nothing.
+    }
+
+    let needs_background =
+        image.mode != ImageMode::Normal || image.base.wants_background || steps.iter().any(|s| matches!(s, Step::Draw { shade, .. } if shade.wants_background));
+    if needs_background {
+        let copy = match background.take() {
+            Some(copy) => copy,
+            None => match engine.pool.take(scene.width(), scene.height(), TextureFormat::Rgba8) {
+                Ok(copy) => copy,
+                Err(error) => {
+                    log::warn!("layer {}: {error}", layer.name);
+                    return;
+                }
+            },
+        };
+        scene.copy_to(&copy);
+        *background = Some(copy);
+    }
+    let background_texture = background.as_ref().map(|t| &t.texture);
+
+    if steps.is_empty() {
+        scene.bind();
+        engine.gl.set_blend(image.blend);
+        apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, engine.white());
+        image.quad.draw();
+        return;
+    }
+
+    // The layer's buffers: as large as the layer reaches the output, never larger than authored.
+    let reach = density * layer.world.0[0].abs().max(layer.world.0[5].abs()).max(1e-6);
+    let scale = reach.min(1.0);
+    let size = match image.mode {
+        ImageMode::Fullscreen => (scene.width(), scene.height()),
+        _ => (((image.size[0] * scale).ceil() as u32).max(1), ((image.size[1] * scale).ceil() as u32).max(1)),
+    };
+    let mut chain = Chain { ping: [None, None], current: None, named: image.buffers.iter().map(|_| None).collect() };
+    let fullscreen = image.mode == ImageMode::Fullscreen;
+
+    // The base pass fills the first buffer.
+    let ok = (|| -> Result<(), crate::gpu::GpuError> {
+        let first = engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?;
+        first.bind();
+        engine.gl.set_blend(Blend::None);
+        match image.mode {
+            // The compose shader places itself by texture coordinate and reads the scene by position.
+            ImageMode::Compose => {
+                apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, engine.white());
+                image.quad_unit.draw();
+            }
+            ImageMode::Fullscreen => {
+                let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
+                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, engine.white());
+                engine.fullscreen.draw();
+            }
+            ImageMode::Normal => {
+                let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
+                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, engine.white());
+                image.base_quad.draw();
+            }
+        }
+        chain.ping[0] = Some(first);
+        chain.current = Some(0);
+
+        let mut landed = false;
+        for (index, step) in steps.iter().enumerate() {
+            let last = index + 1 == steps.len();
+            match step {
+                Step::Copy { source, target } => {
+                    ensure_named(engine, &mut chain, image, *target, size)?;
+                    if let (Some(from), Some(to)) = (chain.named[*source].as_ref(), chain.named[*target].as_ref()) {
+                        from.copy_to(to);
+                    }
+                }
+                Step::Draw { shade, target } => {
+                    let to_scene = last && target.is_none();
+                    let next = 1 - chain.current.unwrap_or(1);
+                    if to_scene {
+                        scene.bind();
+                        engine.gl.set_blend(image.blend);
+                    } else if let Some(slot) = target {
+                        ensure_named(engine, &mut chain, image, *slot, size)?;
+                        chain.named[*slot].as_ref().expect("just ensured").bind();
+                        engine.gl.set_blend(Blend::None);
+                    } else {
+                        if chain.ping[next].is_none() {
+                            chain.ping[next] = Some(engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?);
+                        }
+                        chain.ping[next].as_ref().expect("just ensured").bind();
+                        engine.gl.set_blend(Blend::None);
+                    }
+                    let previous = chain.current.and_then(|c| chain.ping[c].as_ref()).map(|t| &t.texture);
+                    // A named target may be one this very pass reads: GL forbids that, so it reads white instead.
+                    let reading: Vec<Option<&Texture>> =
+                        chain.named.iter().enumerate().map(|(i, t)| if Some(i) == *target { None } else { t.as_ref().map(|t| &t.texture) }).collect();
+                    if to_scene && !fullscreen {
+                        apply(&engine.gl, shade, frame, &state, previous, &reading, background_texture, engine.white());
+                        image.quad_unit.draw();
+                    } else {
+                        let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
+                        apply(&engine.gl, shade, frame, &flat, previous, &reading, background_texture, engine.white());
+                        engine.fullscreen.draw();
+                    }
+                    if to_scene {
+                        landed = true;
+                    } else if target.is_none() {
+                        chain.current = Some(next);
+                    }
+                }
+            }
+        }
+        // The chain ended in a buffer: put its picture into the scene.
+        if !landed && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref()) {
+            scene.bind();
+            engine.gl.set_blend(image.blend);
+            let mvp = if fullscreen { Mat4::IDENTITY } else { state.mvp };
+            engine.composite(&result.texture, &mvp, 1.0);
+            if fullscreen { engine.fullscreen.draw() } else { image.quad_unit.draw() }
+        }
+        Ok(())
+    })();
+    if let Err(error) = ok {
+        log::warn!("layer {}: {error}", layer.name);
+    }
+    for target in chain.ping.into_iter().flatten().chain(chain.named.into_iter().flatten()) {
+        engine.pool.give(target);
+    }
+}
+
+fn copy_state(state: &LayerState) -> LayerState {
+    LayerState { mvp: state.mvp, model: state.model, color: state.color, alpha: state.alpha, brightness: state.brightness, authored: state.authored }
+}
+
+/// Makes sure the layer's named buffer `slot` exists.
+fn ensure_named(engine: &mut Engine, chain: &mut Chain, image: &ImageLayer, slot: usize, size: (u32, u32)) -> Result<(), crate::gpu::GpuError> {
+    if chain.named[slot].is_none() {
+        let scale = image.buffers[slot].scale.max(1.0);
+        let (w, h) = (((size.0 as f32 / scale).ceil() as u32).max(1), ((size.1 as f32 / scale).ceil() as u32).max(1));
+        chain.named[slot] = Some(engine.pool.take(w, h, TextureFormat::Rgba8)?);
+    }
+    Ok(())
+}
+
+/// Binds a pass's program and textures and sets every uniform it has.
+#[allow(clippy::too_many_arguments)]
+fn apply(gl: &Gl, shade: &Shade, frame: &Frame<'_>, state: &LayerState, previous: Option<&Texture>, named: &[Option<&Texture>], background: Option<&Texture>, white: &Texture) {
+    shade.program.bind();
+    // Per texture unit: the resolution shaders are told, and the sprite frame showing.
+    let mut resolutions = [[1.0f32; 4]; 16];
+    let mut sprites: [Option<([f32; 4], [f32; 2])>; 16] = [None; 16];
+    for (uniform, unit, source) in &shade.samplers {
+        let authored = [state.authored[0], state.authored[1], state.authored[0], state.authored[1]];
+        let (texture, resolution) = match source {
+            TextureRef::Shared(shared) => {
+                if let Some(sheet) = &shared.sprites
+                    && let Some(sprite) = sheet.frames.get(sheet.frame_at(frame.time))
+                {
+                    let (w, h) = (shared.resolution[0], shared.resolution[1]);
+                    sprites[*unit as usize & 15] =
+                        Some(([sprite.width / w, sprite.skew.0 / h, sprite.skew.1 / w, sprite.height / h], [sprite.x / w, sprite.y / h]));
+                }
+                (&shared.texture, shared.resolution)
+            }
+            TextureRef::Previous => (previous.unwrap_or(white), authored),
+            TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white), authored),
+            TextureRef::Background => (background.unwrap_or(white), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+        };
+        resolutions[*unit as usize & 15] = resolution;
+        gl.bind_texture(*unit, texture.raw());
+        shade.program.set_sampler(uniform, *unit);
+    }
+    for (uniform, feed) in &shade.feeds {
+        let set = |values: &[f32]| shade.program.set(uniform, values);
+        match feed {
+            Feed::Const(values) => set(values),
+            Feed::Value(slot) => set(frame.values.get(*slot).map_or(&[][..], Vec::as_slice)),
+            Feed::Time => set(&[frame.time]),
+            Feed::Daytime => set(&[frame.daytime]),
+            Feed::PointerPosition => set(&frame.pointer),
+            Feed::ParallaxPosition => set(&[0.5, 0.5]),
+            Feed::Screen => set(&[frame.screen[0], frame.screen[1], frame.screen[0] / frame.screen[1]]),
+            Feed::TexelSize => set(&[1.0 / frame.screen[0], 1.0 / frame.screen[1]]),
+            Feed::TexelSizeHalf => set(&[0.5 / frame.screen[0], 0.5 / frame.screen[1]]),
+            Feed::Mvp => set(&state.mvp.0),
+            Feed::MvpInverse => set(&state.mvp.inverse().0),
+            Feed::Model => set(&state.model.0),
+            Feed::ViewProjection => set(&frame.view_projection.0),
+            Feed::Identity => {
+                if uniform.kind == glow::FLOAT_MAT3 {
+                    set(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+                } else {
+                    set(&Mat4::IDENTITY.0);
+                }
+            }
+            Feed::Resolution(unit) => set(&resolutions[*unit as usize & 15]),
+            Feed::SpriteRotation(unit) => set(&sprites[*unit as usize & 15].map_or([1.0, 0.0, 0.0, 1.0], |s| s.0)),
+            Feed::SpriteTranslation(unit) => set(&sprites[*unit as usize & 15].map_or([0.0, 0.0], |s| s.1)),
+            Feed::Color4 => set(&[state.color[0] * state.brightness, state.color[1] * state.brightness, state.color[2] * state.brightness, state.alpha]),
+            Feed::Color => set(&state.color),
+            Feed::Alpha => set(&[state.alpha]),
+            Feed::Brightness => set(&[state.brightness]),
+            Feed::Audio { bands, .. } => set(&vec![0.0; *bands]),
+        }
+    }
+}
+
+impl Engine {
+    /// Sets up the built-in program that draws `texture` as it is; the caller draws the mesh.
+    pub(crate) fn composite(&self, texture: &Texture, mvp: &Mat4, alpha: f32) {
+        self.blit.bind();
+        self.gl.bind_texture(0, texture.raw());
+        for uniform in &self.blit.uniforms {
+            match uniform.name.as_str() {
+                "u_Transform" => self.blit.set(uniform, &mvp.0),
+                "u_Alpha" => self.blit.set(uniform, &[alpha]),
+                "u_Texture" => self.blit.set_sampler(uniform, 0),
+                _ => {}
+            }
+        }
+    }
+}

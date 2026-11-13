@@ -8,12 +8,15 @@
 //!
 //! Translation is textual and cheap: includes are inlined ([`Source::load`]), the
 //! comments are read ([`Declared`]), and [`Source::assemble`] puts a prelude of
-//! `#define`s in front that maps the dialect onto GLSL. The driver does the rest.
+//! `#define`s in front that maps the dialect onto GLSL. The driver does the rest,
+//! and when it refuses, [`repair`] reads its message and fixes what it can.
 
 mod declared;
 mod fixups;
 mod prelude;
+mod repair;
 mod source;
 
 pub use declared::{ComboDecl, Declared, SamplerDecl, UniformDecl};
+pub use repair::repair;
 pub use source::{Combos, Source, Stage};

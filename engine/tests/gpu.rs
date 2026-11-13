@@ -87,14 +87,17 @@ fn program_binaries_are_cached_on_disk() {
     let dir = std::env::temp_dir().join(format!("wepaper-test-programs-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     gl.set_cache_dir(Some(dir.clone()));
+    assert!(Program::restore(gl, 42).is_none(), "nothing was saved yet");
     let first = Program::link(gl, VERTEX, FRAGMENT).unwrap();
+    first.save(42);
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the linked program was saved");
-    let second = Program::link(gl, VERTEX, FRAGMENT).unwrap();
+    let second = Program::restore(gl, 42).expect("the saved program comes back");
     assert_eq!(second.uniforms.len(), first.uniforms.len(), "a restored program reflects like a compiled one");
+    assert!(Program::restore(gl, 43).is_none(), "another key is another program");
     // A cache file that is garbage is ignored, not trusted.
     let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
     std::fs::write(&file, b"garbage that is no program").unwrap();
-    assert!(Program::link(gl, VERTEX, FRAGMENT).is_ok());
+    assert!(Program::restore(gl, 42).is_none());
     gl.set_cache_dir(None);
     let _ = std::fs::remove_dir_all(&dir);
 }

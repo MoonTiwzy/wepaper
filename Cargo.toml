@@ -51,6 +51,7 @@ wepaper-json.workspace = true
 lexopt = "0.3"
 libc = "0.2"
 log = "0.4"
+png = "0.17"
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }

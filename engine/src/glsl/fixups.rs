@@ -81,3 +81,47 @@ fn replace_word(text: &str, word: &str, with: &str) -> String {
     out.push_str(&text[rest..]);
     out
 }
+
+/// Moves the declarations of the texture samplers to the top.
+///
+/// Stock headers sample `g_Texture0` from functions that are included before the
+/// shader declares it, which only works in a language that hoists globals.
+pub(super) fn hoist_samplers(text: &str) -> String {
+    let mut hoisted: Vec<&str> = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
+    let mut rest = String::with_capacity(text.len());
+    for line in text.lines() {
+        let declaration = line.trim_start();
+        let name = declaration
+            .strip_prefix("uniform ")
+            .map(str::trim_start)
+            .filter(|rest| rest.starts_with("sampler"))
+            .and_then(|rest| rest.split_whitespace().nth(1))
+            .map(|name| name.trim_end_matches(';'))
+            .filter(|name| name.starts_with("g_Texture") && name["g_Texture".len()..].bytes().all(|b| b.is_ascii_digit()));
+        match name {
+            Some(name) => {
+                if !names.contains(&name) {
+                    names.push(name);
+                    hoisted.push(declaration);
+                }
+                // The line stays, as a comment, so line numbers do not shift.
+                rest.push_str("// (moved up) ");
+                rest.push_str(declaration);
+            }
+            None => rest.push_str(line),
+        }
+        rest.push('\n');
+    }
+    if hoisted.is_empty() {
+        return rest;
+    }
+    let mut out = String::with_capacity(rest.len() + 256);
+    for declaration in hoisted {
+        // Without its comment: the settings in it were read already.
+        out.push_str(declaration.split("//").next().unwrap_or(declaration).trim_end());
+        out.push('\n');
+    }
+    out.push_str(&rest);
+    out
+}

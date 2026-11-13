@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use glow::HasContext;
 
 use super::Gl;
-use crate::read::{FNV_SEED, fnv};
+use crate::read::fnv;
 
 /// Vertex attributes sit at the same location in every program, so one mesh draws
 /// with any of them.
@@ -63,63 +63,104 @@ pub struct Program {
 }
 
 impl Program {
-    /// Compiles and links, or restores the program from the cache when this exact
-    /// source was linked on this driver before.
+    /// Compiles and links a program.
     pub fn link(gl: &Gl, vertex: &str, fragment: &str) -> Result<Self, ProgramError> {
-        let cached = cache_file(gl, vertex, fragment);
         // SAFETY: the context is current; every object is checked before use and deleted on failure.
         unsafe {
             let raw = gl.raw().create_program().map_err(|log| ProgramError { stage: "link", log })?;
-            let restored = cached.as_ref().is_some_and(|file| restore(gl, raw, file));
-            if !restored {
-                let compile = |kind: u32, stage: &'static str, source: &str| -> Result<glow::Shader, ProgramError> {
-                    let shader = gl.raw().create_shader(kind).map_err(|log| ProgramError { stage, log })?;
-                    gl.raw().shader_source(shader, source);
-                    gl.raw().compile_shader(shader);
-                    if gl.raw().get_shader_compile_status(shader) {
-                        Ok(shader)
-                    } else {
-                        let log = gl.raw().get_shader_info_log(shader);
-                        gl.raw().delete_shader(shader);
-                        Err(ProgramError { stage, log })
-                    }
-                };
-                let vs = compile(glow::VERTEX_SHADER, "vertex", vertex).inspect_err(|_| gl.raw().delete_program(raw))?;
-                let fs = compile(glow::FRAGMENT_SHADER, "fragment", fragment).inspect_err(|_| {
-                    gl.raw().delete_shader(vs);
-                    gl.raw().delete_program(raw);
-                })?;
-                gl.raw().attach_shader(raw, vs);
-                gl.raw().attach_shader(raw, fs);
-                for &(name, location) in ATTRIBUTES {
-                    gl.raw().bind_attrib_location(raw, location, name);
+            let compile = |kind: u32, stage: &'static str, source: &str| -> Result<glow::Shader, ProgramError> {
+                let shader = gl.raw().create_shader(kind).map_err(|log| ProgramError { stage, log })?;
+                gl.raw().shader_source(shader, source);
+                gl.raw().compile_shader(shader);
+                if gl.raw().get_shader_compile_status(shader) {
+                    Ok(shader)
+                } else {
+                    let log = gl.raw().get_shader_info_log(shader);
+                    gl.raw().delete_shader(shader);
+                    Err(ProgramError { stage, log })
                 }
-                if cached.is_some() {
-                    gl.raw().program_binary_retrievable_hint(raw, true);
-                }
-                gl.raw().link_program(raw);
-                gl.raw().detach_shader(raw, vs);
-                gl.raw().detach_shader(raw, fs);
+            };
+            let vs = compile(glow::VERTEX_SHADER, "vertex", vertex).inspect_err(|_| gl.raw().delete_program(raw))?;
+            let fs = compile(glow::FRAGMENT_SHADER, "fragment", fragment).inspect_err(|_| {
                 gl.raw().delete_shader(vs);
-                gl.raw().delete_shader(fs);
-                if !gl.raw().get_program_link_status(raw) {
-                    let log = gl.raw().get_program_info_log(raw);
-                    gl.raw().delete_program(raw);
-                    return Err(ProgramError { stage: "link", log });
-                }
-                if let Some(file) = &cached {
-                    store(gl, raw, file);
-                }
+                gl.raw().delete_program(raw);
+            })?;
+            gl.raw().attach_shader(raw, vs);
+            gl.raw().attach_shader(raw, fs);
+            for &(name, location) in ATTRIBUTES {
+                gl.raw().bind_attrib_location(raw, location, name);
             }
-            let mut uniforms = Vec::new();
+            if gl.caps().program_binary {
+                gl.raw().program_binary_retrievable_hint(raw, true);
+            }
+            gl.raw().link_program(raw);
+            gl.raw().detach_shader(raw, vs);
+            gl.raw().detach_shader(raw, fs);
+            gl.raw().delete_shader(vs);
+            gl.raw().delete_shader(fs);
+            if !gl.raw().get_program_link_status(raw) {
+                let log = gl.raw().get_program_info_log(raw);
+                gl.raw().delete_program(raw);
+                return Err(ProgramError { stage: "link", log });
+            }
+            Ok(Self::reflect(gl, raw))
+        }
+    }
+
+    /// The program saved under `key` by an earlier run on this driver, if there is one.
+    pub fn restore(gl: &Gl, key: u64) -> Option<Self> {
+        let file = cache_file(gl, key)?;
+        let bytes = std::fs::read(file).ok()?;
+        if bytes.len() < 4 {
+            return None;
+        }
+        let format = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
+        // SAFETY: the context is current; a binary the driver does not accept only
+        // fails the link, which is checked before the program is used.
+        unsafe {
+            let raw = gl.raw().create_program().ok()?;
+            gl.raw().program_binary(raw, &glow::ProgramBinary { buffer: bytes[4..].to_vec(), format });
+            if !gl.raw().get_program_link_status(raw) {
+                gl.raw().delete_program(raw);
+                return None;
+            }
+            Some(Self::reflect(gl, raw))
+        }
+    }
+
+    /// Saves the linked program under `key` for later runs. Failing to only means
+    /// the next run compiles again.
+    pub fn save(&self, key: u64) {
+        let Some(file) = cache_file(&self.gl, key) else { return };
+        // SAFETY: the context is current and the program is linked.
+        let Some(binary) = (unsafe { self.gl.raw().get_program_binary(self.raw) }) else { return };
+        let mut bytes = binary.format.to_le_bytes().to_vec();
+        bytes.extend_from_slice(&binary.buffer);
+        if let Some(dir) = file.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let part = file.with_extension(format!("{}.part", std::process::id()));
+        if std::fs::write(&part, bytes).is_ok() {
+            let _ = std::fs::rename(&part, file);
+        }
+    }
+
+    /// Reads the uniforms of a linked program.
+    ///
+    /// # Safety
+    /// The context must be current and `raw` a linked program of it.
+    unsafe fn reflect(gl: &Gl, raw: glow::Program) -> Self {
+        let mut uniforms = Vec::new();
+        // SAFETY: per this function's contract.
+        unsafe {
             for index in 0..gl.raw().get_active_uniforms(raw) {
                 let Some(active) = gl.raw().get_active_uniform(raw, index) else { continue };
                 let Some(location) = gl.raw().get_uniform_location(raw, &active.name) else { continue };
                 let name = active.name.split('[').next().unwrap_or(&active.name).to_owned();
                 uniforms.push(Uniform { name, kind: active.utype, count: active.size, location });
             }
-            Ok(Self { gl: gl.clone(), raw, uniforms })
         }
+        Self { gl: gl.clone(), raw, uniforms }
     }
 
     /// The uniform called `name`, if the program has it.
@@ -172,46 +213,12 @@ impl Drop for Program {
     }
 }
 
-/// Where this exact program is cached for this exact driver.
-fn cache_file(gl: &Gl, vertex: &str, fragment: &str) -> Option<PathBuf> {
+/// Where the program saved under `key` lives for this exact driver.
+fn cache_file(gl: &Gl, key: u64) -> Option<PathBuf> {
     if !gl.caps().program_binary {
         return None;
     }
-    let dir = gl.cache_dir()?;
-    let mut key = fnv(FNV_SEED, vertex.as_bytes());
-    key = fnv(key, &[0]);
-    key = fnv(key, fragment.as_bytes());
-    key = fnv(key, gl.caps().renderer.as_bytes());
+    let mut key = fnv(key, gl.caps().renderer.as_bytes());
     key = fnv(key, gl.caps().version.as_bytes());
-    Some(dir.join(format!("{key:016x}.bin")))
-}
-
-/// Loads a cached binary into `program`; false when there is none or the driver refuses it.
-unsafe fn restore(gl: &Gl, program: glow::Program, file: &std::path::Path) -> bool {
-    let Ok(bytes) = std::fs::read(file) else { return false };
-    if bytes.len() < 4 {
-        return false;
-    }
-    let format = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
-    // SAFETY: the caller has the context current and `program` alive; a binary the
-    // driver does not accept only fails the link, which is checked.
-    unsafe {
-        gl.raw().program_binary(program, &glow::ProgramBinary { buffer: bytes[4..].to_vec(), format });
-        gl.raw().get_program_link_status(program)
-    }
-}
-
-/// Saves `program`'s binary; a failure only means the next run compiles again.
-unsafe fn store(gl: &Gl, program: glow::Program, file: &std::path::Path) {
-    // SAFETY: the caller has the context current and `program` linked.
-    let Some(binary) = (unsafe { gl.raw().get_program_binary(program) }) else { return };
-    let mut bytes = binary.format.to_le_bytes().to_vec();
-    bytes.extend_from_slice(&binary.buffer);
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let part = file.with_extension(format!("{}.part", std::process::id()));
-    if std::fs::write(&part, bytes).is_ok() {
-        let _ = std::fs::rename(&part, file);
-    }
+    Some(gl.cache_dir()?.join(format!("{key:016x}.bin")))
 }

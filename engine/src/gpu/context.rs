@@ -31,6 +31,8 @@ pub struct Caps {
     pub program_binary: bool,
     /// The largest texture side.
     pub max_texture_size: u32,
+    /// Shaders without a `#version` compile with HLSL's implicit conversions allowed.
+    pub lenient_shaders: bool,
 }
 
 /// What video memory is counted under.
@@ -95,13 +97,17 @@ struct Shared {
 pub struct Gl(Rc<Shared>);
 
 impl Gl {
-    pub(super) fn new(raw: glow::Context) -> Self {
+    pub(super) fn new(raw: glow::Context, compatibility: bool) -> Self {
         // SAFETY: the context `raw` was loaded from is current (the caller made it so).
         let caps = unsafe {
             raw.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
             raw.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
             let extensions = raw.supported_extensions();
+            let vendor = raw.get_parameter_string(glow::VENDOR);
             Caps {
+                // NVIDIA's compiler, given no #version in a compatibility context, takes
+                // HLSL's implicit conversions with a warning instead of an error.
+                lenient_shaders: compatibility && vendor.contains("NVIDIA"),
                 renderer: raw.get_parameter_string(glow::RENDERER),
                 version: raw.get_parameter_string(glow::VERSION),
                 s3tc: extensions.contains("GL_EXT_texture_compression_s3tc"),

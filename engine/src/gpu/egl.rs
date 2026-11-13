@@ -87,13 +87,16 @@ impl Context {
             .choose_first_config(display, &config_attributes)
             .map_err(|e| fail("eglChooseConfig", e))?
             .ok_or_else(|| GpuError("no matching EGL config".to_owned()))?;
-        #[rustfmt::skip]
-        let context_attributes = [
-            egl::CONTEXT_MAJOR_VERSION, 3, egl::CONTEXT_MINOR_VERSION, 3,
-            egl::CONTEXT_OPENGL_PROFILE_MASK, egl::CONTEXT_OPENGL_CORE_PROFILE_BIT,
-            egl::NONE,
-        ];
-        let context = egl.create_context(display, config, None, &context_attributes).map_err(|e| fail("eglCreateContext", e))?;
+        // A compatibility context draws exactly like a core one and, on drivers that
+        // have it, also compiles shaders leniently. Core is the fallback.
+        let attributes = |profile: egl::Int| [egl::CONTEXT_MAJOR_VERSION, 3, egl::CONTEXT_MINOR_VERSION, 3, egl::CONTEXT_OPENGL_PROFILE_MASK, profile, egl::NONE];
+        let (context, compatibility) = match egl.create_context(display, config, None, &attributes(egl::CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT)) {
+            Ok(context) => (context, true),
+            Err(_) => {
+                let context = egl.create_context(display, config, None, &attributes(egl::CONTEXT_OPENGL_CORE_PROFILE_BIT)).map_err(|e| fail("eglCreateContext", e))?;
+                (context, false)
+            }
+        };
         egl.make_current(display, None, None, Some(context)).map_err(|e| fail("eglMakeCurrent without a surface", e))?;
         // SAFETY: the context made current above is the one these functions belong to.
         let raw = unsafe {
@@ -101,7 +104,7 @@ impl Context {
                 egl.get_proc_address(symbol).map_or(std::ptr::null(), |address| address as *const c_void)
             })
         };
-        let gl = Gl::new(raw);
+        let gl = Gl::new(raw, compatibility);
         let description = format!("{} ({}, {name})", gl.caps().renderer, gl.caps().version);
         Ok(Self { egl, display, config, context, gl, description })
     }

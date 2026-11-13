@@ -51,13 +51,13 @@ uniform vec2 u_Arr[4]; // {"material":"arr"}
 fn assembles_both_stages() {
     let mut combos = Combos::new();
     combos.insert("MASK".to_owned(), 1);
-    let vertex = Source::load(Stage::Vertex, "#version 110\nattribute vec3 a_Position;\nvarying vec2 v_TexCoord;\nvoid main() {}\n", &include).assemble(&combos);
+    let vertex = Source::load(Stage::Vertex, "#version 110\nattribute vec3 a_Position;\nvarying vec2 v_TexCoord;\nvoid main() {}\n", &include).assemble(&combos, false);
     assert!(vertex.starts_with("#version 330 core\n"));
     assert_eq!(vertex.matches("#version").count(), 2, "the shader's own #version is commented out: {vertex}");
     assert!(vertex.contains("// #version 110"));
     assert!(vertex.contains("#define attribute in") && vertex.contains("#define varying out"));
     assert!(vertex.contains("#define MASK 1\n"));
-    let fragment = Source::load(Stage::Fragment, "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(1.0); }\n", &include).assemble(&combos);
+    let fragment = Source::load(Stage::Fragment, "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(1.0); }\n", &include).assemble(&combos, false);
     assert!(fragment.contains("#define varying in") && fragment.contains("#define gl_FragColor wepaper_color"));
     assert!(fragment.contains("out vec4 wepaper_color;"));
     assert!(fragment.find("#define MASK 1").unwrap() < fragment.find("void main").unwrap());
@@ -83,4 +83,35 @@ fn own_mod_function_replaces_the_builtin() {
     assert!(out.contains("fmod(a, 1.0)") && out.contains("v.mod"), "{out}");
     let untouched = Source::load(Stage::Fragment, "void main() { float a = mod(3.0, 2.0); }\n", &include).text;
     assert!(untouched.contains("float a = mod(3.0, 2.0);"));
+}
+
+#[test]
+fn samplers_are_declared_before_the_headers_that_use_them() {
+    let include = |name: &str| (name == "blur.h").then(|| "vec3 blur(vec2 u) { return texSample2D(g_Texture0, u).rgb; }\n".to_owned());
+    let text = "#include \"blur.h\"\nuniform sampler2D g_Texture0; // {\"material\":\"framebuffer\"}\n#if MASK\nuniform sampler2D g_Texture1; // {\"combo\":\"MASK\"}\n#endif\nuniform sampler2D g_Texture0;\nuniform float g_Time;\nvoid main() {}\n";
+    let source = Source::load(Stage::Fragment, text, &include);
+    assert!(source.text.starts_with("uniform sampler2D g_Texture0;\nuniform sampler2D g_Texture1;\n"), "{}", source.text);
+    assert_eq!(source.text.matches("\nuniform sampler2D g_Texture0").count(), 0, "declared once, at the top");
+    assert!(source.text.find("vec3 blur").unwrap() > source.text.find("uniform sampler2D g_Texture0;").unwrap());
+    assert!(source.text.contains("uniform float g_Time;"), "other uniforms stay where they are");
+    assert_eq!(source.declared.samplers.len(), 2, "the settings in the comments were read before the move");
+}
+
+#[test]
+fn lenient_assembly_has_no_version_and_no_redefinitions() {
+    let source = Source::load(Stage::Fragment, "varying vec2 v;\nvoid main() { gl_FragColor = vec4(1.0); }\n", &include);
+    let lenient = source.assemble(&Combos::new(), true);
+    assert!(!lenient.contains("#version") && !lenient.contains("#define varying") && !lenient.contains("wepaper_color"));
+    assert!(lenient.contains("#define texSample2D texture") && lenient.contains("#line 0\nvarying vec2 v;"));
+}
+
+#[test]
+fn scalar_and_vector_arguments_get_wrappers() {
+    let source = Source::load(Stage::Fragment, "void main() { gl_FragColor = vec4(max(0, vec3(1.0)), 1.0); }\n", &include);
+    let text = source.assemble(&Combos::new(), false);
+    assert!(text.contains("vec3 wepaper_max(float a, vec3 b) { return max(vec3(a), b); }"));
+    let wrappers = text.find("vec3 wepaper_max(float a, vec3 b)").unwrap();
+    let rename = text.find("#define max wepaper_max").unwrap();
+    assert!(wrappers < rename && rename < text.find("void main").unwrap(), "the wrappers call the real max, the shader calls the wrappers");
+    assert!(!text.contains("int wepaper_pow"), "pow has no integer form");
 }
