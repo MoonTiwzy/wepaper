@@ -169,11 +169,6 @@ impl Server {
         self.sweep();
     }
 
-    /// Whether answers are waiting for a socket to take them.
-    pub fn has_unsent(&self) -> bool {
-        self.clients.iter().flatten().any(|c| !c.unsent.is_empty())
-    }
-
     fn sweep(&mut self) {
         for slot in &mut self.clients {
             // A client that left is kept until what it is owed is written, or cannot be.
@@ -258,7 +253,6 @@ mod tests {
             server.flush();
         }
         assert!(!server.has_watchers(), "the client that stopped reading is gone");
-        assert!(!server.has_unsent());
         // And a new client is served as if nothing happened.
         let mut other = UnixStream::connect(&path).unwrap();
         other.write_all(b"{\"cmd\":\"version\"}\n").unwrap();

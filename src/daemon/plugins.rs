@@ -234,10 +234,6 @@ impl Plugins {
         Self { manifests, socket, services: BTreeMap::new(), hooks: Vec::new() }
     }
 
-    pub fn get(&self, id: &str) -> Option<&Manifest> {
-        self.manifests.iter().find(|m| m.id == id)
-    }
-
     /// The renderer plugin that draws wallpapers of `kind`.
     pub fn renderer_for(&self, kind: &str) -> Option<&Manifest> {
         self.manifests.iter().find(|m| m.kind == Kind::Renderer && m.enabled && m.handles.iter().any(|h| h == kind))

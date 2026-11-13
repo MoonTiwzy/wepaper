@@ -61,7 +61,15 @@ fn decode_jpeg(data: &[u8]) -> Result<Picture, PictureError> {
     use zune_jpeg::zune_core::{colorspace::ColorSpace, options::DecoderOptions};
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, options);
-    let rgba = decoder.decode().map_err(|e| PictureError(format!("JPEG: {e}")))?;
+    let pixels = decoder.decode().map_err(|e| PictureError(format!("JPEG: {e}")))?;
     let (width, height) = decoder.dimensions().ok_or_else(|| PictureError("JPEG: no dimensions".to_owned()))?;
+    // A grey picture comes back with one byte a pixel whatever was asked for.
+    let count = width * height;
+    let rgba = match pixels.len() {
+        n if n == count * 4 => pixels,
+        n if n == count * 3 => pixels.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        n if n == count => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        _ => return Err(PictureError("JPEG: unexpected amount of pixel data".to_owned())),
+    };
     Ok(Picture { width: width as u32, height: height as u32, rgba })
 }

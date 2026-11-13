@@ -312,10 +312,22 @@ impl Engine {
         Ok(scene)
     }
 
-    /// Loads a wallpaper of any kind the engine draws: a scene or a video.
+    /// Loads a wallpaper of any kind the engine draws: a scene or a video. A preset
+    /// (property values for another wallpaper) plays that wallpaper with its values
+    /// under the user's.
     pub fn load(&mut self, wallpaper: &Path, viewport: Viewport, values: &[(String, Value)]) -> Result<Wallpaper, LoadError> {
         let (files, project) = self.open(wallpaper)?;
         match project.kind {
+            Kind::Preset => {
+                let dependency = project.dependency.as_deref().ok_or_else(|| LoadError("the preset does not say which wallpaper it is for".to_owned()))?;
+                let target = locate::wallpaper(dependency).ok_or_else(|| LoadError(format!("the preset is for wallpaper {dependency}, which is not installed")))?;
+                if self.open(&target)?.1.kind == Kind::Preset {
+                    return Err(LoadError("a preset of a preset".to_owned()));
+                }
+                let mut merged: Vec<(String, Value)> = project.preset.members().map(|(name, value)| (name.to_owned(), value.clone())).collect();
+                merged.extend(values.iter().cloned());
+                self.load(&target, viewport, &merged)
+            }
             Kind::Scene => {
                 let scene = SceneInstance::build(self, &files, project, viewport, values)?;
                 self.share.sweep();

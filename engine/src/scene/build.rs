@@ -275,11 +275,17 @@ fn build_effects(engine: &mut Engine, files: &Files, bindings: &mut Bindings, us
     let mut buffers: Vec<BufferSpec> = Vec::new();
     let mut effects = Vec::new();
     for effect_use in uses {
+        // Scenes rarely name their effects: the effect's folder does.
+        let name = if effect_use.name.is_empty() {
+            effect_use.file.rsplit('/').nth(1).unwrap_or(&effect_use.file).to_owned()
+        } else {
+            effect_use.name.clone()
+        };
         match build_effect(engine, files, bindings, effect_use, &mut buffers) {
-            Ok(steps) => effects.push(Effect { name: effect_use.name.clone(), visible: effect_use.visible.value, steps }),
+            Ok(steps) => effects.push(Effect { name, visible: effect_use.visible.value, steps }),
             Err(why) => {
                 log::warn!("effect {} is skipped: {why}", effect_use.file);
-                effects.push(Effect { name: effect_use.name.clone(), visible: false, steps: Vec::new() });
+                effects.push(Effect { name, visible: false, steps: Vec::new() });
             }
         }
     }

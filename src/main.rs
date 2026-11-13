@@ -18,17 +18,19 @@ The daemon:
   daemon [wallpaper]                           show wallpapers and listen for commands
 
 {}
-Offline tools:
-  render <wallpaper> -o FILE                   one frame of a wallpaper to a PNG, without a display
-
+{}
   wepaper <command> --help                     what a command takes
   wepaper --version
 ",
-        cli::client::USAGE
+        cli::client::USAGE,
+        cli::tools::USAGE
     )
 }
 
 fn main() {
+    // Output piped into `head` ends with the pipe, quietly, as a command line tool's should.
+    // SAFETY: restores a signal's default action before anything else runs.
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let mut args = lexopt::Parser::from_env();
     let mut verbosity = log::LevelFilter::Warn;
     let command = loop {
@@ -53,6 +55,9 @@ fn main() {
     let result = match command.as_str() {
         "daemon" => daemon::run(args),
         "render" => cli::render::run(args),
+        "inspect" => cli::tools::inspect(args),
+        "check" => cli::tools::check(args),
+        "unpack" => cli::tools::unpack(args),
         other => cli::client::run(other, args),
     };
     if let Err(message) = result {

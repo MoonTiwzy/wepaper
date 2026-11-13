@@ -58,6 +58,8 @@ struct Slot {
     last_draw: Instant,
     /// The surface lost its contents (it was resized, or just made): draw even without a new frame.
     stale: bool,
+    /// The output's wallpaper is known but not loaded yet: its size is not.
+    waiting: bool,
     /// Why the last wallpaper asked for did not show.
     error: Option<String>,
     /// The plugin process that draws this output's wallpaper, when the engine does not.
@@ -70,7 +72,7 @@ struct Slot {
 
 impl Slot {
     fn new(now: Instant) -> Self {
-        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
+        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, waiting: false, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
     }
 }
 
@@ -128,7 +130,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     unsafe {
         libc::mallopt(libc::M_ARENA_MAX, 2);
         let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = on_signal as usize;
+        action.sa_sigaction = on_signal as *const () as usize;
         // No SA_RESTART: a signal must end the wait in poll.
         libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
         libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
@@ -257,13 +259,9 @@ impl Daemon {
             self.display.cover(id, self.settings.layer, self.settings.passthrough);
             let mut slot = Slot::new(now);
             slot.shown = self.state.outputs.get(&name).cloned().unwrap_or_else(|| self.state.last.clone());
+            // Its wallpaper loads once the compositor has said how large the output is.
+            slot.waiting = slot.shown.wallpaper.is_some();
             self.slots.insert(id, slot);
-            if let Some(folder) = self.slots[&id].shown.wallpaper.clone() {
-                let properties: Vec<_> = self.slots[&id].shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-                if let Err(why) = self.load(id, &folder, &properties) {
-                    log::error!("{name}: {why}");
-                }
-            }
         }
         // Surfaces whose size or scale changed get buffers to match.
         for head in &mut self.display.heads {
@@ -273,6 +271,23 @@ impl Daemon {
             }
             if let Some(slot) = self.slots.get_mut(&head.id) {
                 slot.stale = true;
+            }
+        }
+        let waiting: Vec<(u32, String)> = self
+            .display
+            .heads
+            .iter()
+            .filter(|head| head.sheet.as_ref().is_some_and(|sheet| sheet.egl.is_some()))
+            .filter(|head| self.slots.get(&head.id).is_some_and(|slot| slot.waiting))
+            .map(|head| (head.id, head.name.clone().unwrap_or_default()))
+            .collect();
+        for (id, name) in waiting {
+            let Some(slot) = self.slots.get_mut(&id) else { continue };
+            slot.waiting = false;
+            let Some(folder) = slot.shown.wallpaper.clone() else { continue };
+            let properties: Vec<_> = slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            if let Err(why) = self.load(id, &folder, &properties) {
+                log::error!("{name}: {why}");
             }
         }
     }
@@ -287,7 +302,7 @@ impl Daemon {
     /// Loads a wallpaper for an output. On failure the output keeps what it had.
     fn load(&mut self, id: u32, folder: &std::path::Path, properties: &[(String, wepaper_json::Value)]) -> Result<(), String> {
         // Videos are stored no wider than the widest output: nobody sees more.
-        let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
+        let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).filter(|sheet| sheet.logical.0 > 0).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
         let max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
         self.engine.videos().options.max_width = max_width;
         self.engine.videos().options.hardware_decode = self.settings.video_hardware;

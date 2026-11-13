@@ -2,6 +2,7 @@
 
 pub mod client;
 pub mod render;
+pub mod tools;
 
 use std::path::PathBuf;
 
