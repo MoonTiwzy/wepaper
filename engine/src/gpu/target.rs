@@ -70,15 +70,7 @@ impl Target {
 
     /// Copies this target's picture onto `framebuffer` (`None`: the current surface) of `size`.
     pub fn blit(&self, framebuffer: Option<glow::Framebuffer>, size: (u32, u32)) {
-        let filter = if size == (self.width(), self.height()) { glow::NEAREST } else { glow::LINEAR };
-        // SAFETY: both framebuffers are alive; rectangles are within their sizes.
-        unsafe {
-            let gl = self.gl.raw();
-            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.framebuffer));
-            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, framebuffer);
-            gl.blit_framebuffer(0, 0, self.width() as i32, self.height() as i32, 0, 0, size.0 as i32, size.1 as i32, glow::COLOR_BUFFER_BIT, filter);
-        }
-        self.gl.surface_changed();
+        self.gl.copy_framebuffer(Some(self.framebuffer), (self.width(), self.height()), framebuffer, size);
     }
 
     /// Reads the picture back: RGBA, rows top to bottom as drawn with `y` up.

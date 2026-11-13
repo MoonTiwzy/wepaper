@@ -230,6 +230,20 @@ impl Gl {
         }
     }
 
+    /// Copies the picture of one framebuffer onto another (`None`: the current
+    /// surface), scaled when their sizes differ.
+    pub fn copy_framebuffer(&self, from: Option<glow::Framebuffer>, from_size: (u32, u32), to: Option<glow::Framebuffer>, to_size: (u32, u32)) {
+        let filter = if from_size == to_size { glow::NEAREST } else { glow::LINEAR };
+        // SAFETY: both framebuffers are alive (or the surface's), and the rectangles are their sizes.
+        unsafe {
+            let gl = &self.0.raw;
+            gl.bind_framebuffer(glow::READ_FRAMEBUFFER, from);
+            gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, to);
+            gl.blit_framebuffer(0, 0, from_size.0 as i32, from_size.1 as i32, 0, 0, to_size.0 as i32, to_size.1 as i32, glow::COLOR_BUFFER_BIT, filter);
+        }
+        self.surface_changed();
+    }
+
     /// Sets how draws blend.
     pub fn set_blend(&self, blend: Blend) {
         let mut state = self.0.state.borrow_mut();

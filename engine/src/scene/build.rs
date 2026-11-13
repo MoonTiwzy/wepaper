@@ -6,7 +6,7 @@ use wepaper_json::Value;
 
 use crate::doc::{Alignment, Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object, ObjectKind, Project, Scene, TextObject};
 use crate::glsl::Combos;
-use crate::gpu::{Blend, Mesh, Target, TextureFormat};
+use crate::gpu::{Blend, Mesh};
 use crate::math::Mat4;
 use crate::read::Files;
 use crate::{Engine, Fill, LoadError, Viewport};
@@ -85,7 +85,6 @@ impl SceneInstance {
             });
         }
 
-        let target = Target::new(&engine.gl, viewport.width.max(1), viewport.height.max(1), TextureFormat::Rgba8).map_err(|e| LoadError(e.to_string()))?;
         let mut instance = Self {
             layers,
             bindings,
@@ -94,7 +93,6 @@ impl SceneInstance {
             zoom: scene.general.zoom.value.max(0.01),
             viewport,
             fill: Fill::Cover,
-            target,
             view_projection: Mat4::IDENTITY,
             skipped,
             project,

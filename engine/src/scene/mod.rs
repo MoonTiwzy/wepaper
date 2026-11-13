@@ -16,7 +16,7 @@ mod tree;
 use wepaper_json::Value;
 
 use crate::doc::Project;
-use crate::gpu::{Blend, Mesh, Target};
+use crate::gpu::{Blend, Mesh};
 use crate::math::Mat4;
 use crate::{Fill, Viewport};
 
@@ -164,7 +164,6 @@ pub struct SceneInstance {
     zoom: f32,
     viewport: Viewport,
     fill: Fill,
-    target: Target,
     view_projection: Mat4,
     /// Layers that could not be built, with why: for `inspect` and logs.
     skipped: Vec<String>,
@@ -267,16 +266,6 @@ impl SceneInstance {
             }
             Change::Flag(..) | Change::Text(..) => {}
         }
-    }
-
-    /// Changes the size the scene is drawn at.
-    pub fn resize(&mut self, engine: &crate::Engine, viewport: Viewport) -> Result<(), crate::LoadError> {
-        if viewport != self.viewport {
-            self.target = Target::new(&engine.gl, viewport.width.max(1), viewport.height.max(1), crate::gpu::TextureFormat::Rgba8)
-                .map_err(|e| crate::LoadError(e.to_string()))?;
-            self.viewport = viewport;
-        }
-        Ok(())
     }
 
     /// Pauses or resumes the scene's videos and sounds. A video shared with another

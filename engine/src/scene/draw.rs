@@ -36,6 +36,19 @@ struct LayerState {
     authored: [f32; 2],
 }
 
+/// Where the frame is drawn: a framebuffer (or the current surface) and its size.
+#[derive(Clone, Copy)]
+struct Canvas {
+    framebuffer: Option<glow::Framebuffer>,
+    size: (u32, u32),
+}
+
+impl Canvas {
+    fn bind(&self, gl: &Gl) {
+        gl.bind_framebuffer(self.framebuffer, self.size);
+    }
+}
+
 /// The buffers a layer holds while its chain runs.
 struct Chain {
     ping: [Option<Target>; 2],
@@ -44,8 +57,12 @@ struct Chain {
 }
 
 impl SceneInstance {
-    /// Draws the frame for `input` and returns the target that holds it.
-    pub fn render(&mut self, engine: &mut Engine, input: &FrameInput) -> &Target {
+    /// Draws the frame for `input` into `to` (`None`: the current surface) of
+    /// `size` pixels. The scene has no buffer of its own: layers go straight
+    /// to where the frame is wanted.
+    pub fn render(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32)) {
+        self.viewport = crate::Viewport { width: size.0.max(1), height: size.1.max(1) };
+        let canvas = Canvas { framebuffer: to, size: (self.viewport.width, self.viewport.height) };
         for video in &self.videos {
             video.stream.borrow_mut().poll();
         }
@@ -79,7 +96,8 @@ impl SceneInstance {
             audio: &spectrum,
             scratch: std::cell::RefCell::new(Vec::with_capacity(64)),
         };
-        self.target.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
+        canvas.bind(&engine.gl);
+        engine.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
         // How many output pixels one scene unit covers: layer buffers are sized by it.
         let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0).abs().max((frame.view_projection.0[5] * frame.screen[1] / 2.0).abs());
         // Text that changed is drawn into its texture before anything samples it.
@@ -98,14 +116,13 @@ impl SceneInstance {
                 continue;
             }
             if let LayerKind::Image(image) = &layer.kind {
-                draw_image(engine, &frame, layer, image, &self.target, &mut background, density);
+                draw_image(engine, &frame, layer, image, canvas, &mut background, density);
             }
         }
         if let Some(background) = background {
             engine.pool.give(background);
         }
         engine.pool.end_frame();
-        &self.target
     }
 
     /// Recomputes every layer's place in the scene from its own values and its parents'.
@@ -153,7 +170,7 @@ impl SceneInstance {
 
 /// Draws one image layer: its base pass, then each visible effect's steps, the last
 /// of them straight into the scene.
-fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &ImageLayer, scene: &Target, background: &mut Option<Target>, density: f32) {
+fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &ImageLayer, scene: Canvas, background: &mut Option<Target>, density: f32) {
     // Parallax moves a layer by how far it is from the camera's centre and from
     // the pointer, scaled by its depth: near layers travel further than far ones.
     let world = match frame.parallax {
@@ -182,7 +199,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
     if needs_background {
         let copy = match background.take() {
             Some(copy) => copy,
-            None => match engine.pool.take(scene.width(), scene.height(), TextureFormat::Rgba8) {
+            None => match engine.pool.take(scene.size.0, scene.size.1, TextureFormat::Rgba8) {
                 Ok(copy) => copy,
                 Err(error) => {
                     log::warn!("layer {}: {error}", layer.name);
@@ -190,13 +207,13 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
                 }
             },
         };
-        scene.copy_to(&copy);
+        engine.gl.copy_framebuffer(scene.framebuffer, scene.size, Some(copy.framebuffer()), scene.size);
         *background = Some(copy);
     }
     let background_texture = background.as_ref().map(|t| &t.texture);
 
     if steps.is_empty() {
-        scene.bind();
+        scene.bind(&engine.gl);
         engine.gl.set_blend(image.blend);
         apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, engine.white());
         image.quad.draw();
@@ -207,7 +224,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
     let reach = density * world.0[0].abs().max(world.0[5].abs()).max(1e-6);
     let scale = reach.min(1.0);
     let size = match image.mode {
-        ImageMode::Fullscreen => (scene.width(), scene.height()),
+        ImageMode::Fullscreen => scene.size,
         _ => (((image.size[0] * scale).ceil() as u32).max(1), ((image.size[1] * scale).ceil() as u32).max(1)),
     };
     let mut chain = Chain { ping: [None, None], current: None, named: image.buffers.iter().map(|_| None).collect() };
@@ -252,7 +269,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
                     let to_scene = last && target.is_none();
                     let next = 1 - chain.current.unwrap_or(1);
                     if to_scene {
-                        scene.bind();
+                        scene.bind(&engine.gl);
                         engine.gl.set_blend(image.blend);
                     } else if let Some(slot) = target {
                         ensure_named(engine, &mut chain, image, *slot, size)?;
@@ -287,7 +304,7 @@ fn draw_image(engine: &mut Engine, frame: &Frame<'_>, layer: &Layer, image: &Ima
         }
         // The chain ended in a buffer: put its picture into the scene.
         if !landed && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref()) {
-            scene.bind();
+            scene.bind(&engine.gl);
             engine.gl.set_blend(image.blend);
             let mvp = if fullscreen { Mat4::IDENTITY } else { state.mvp };
             engine.composite(&result.texture, &mvp, 1.0);

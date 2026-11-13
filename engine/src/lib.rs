@@ -18,12 +18,14 @@
 //! brings those.
 //!
 //! ```no_run
-//! use wepaper_engine::{Engine, Options, Viewport, gpu::Context, scene::FrameInput};
+//! use wepaper_engine::gpu::{Context, Target, TextureFormat};
+//! use wepaper_engine::{Engine, Options, Viewport, scene::FrameInput};
 //!
 //! let context = Context::headless(None)?;
 //! let mut engine = Engine::new(context.gl(), Options::default())?;
-//! let mut scene = engine.load_scene("3566329932".as_ref(), Viewport { width: 1920, height: 1080 }, &[])?;
-//! let frame = scene.render(&mut engine, &FrameInput { time: 2.0, ..Default::default() });
+//! let mut wallpaper = engine.load("3566329932".as_ref(), Viewport { width: 1920, height: 1080 }, &[])?;
+//! let frame = Target::new(context.gl(), 1920, 1080, TextureFormat::Rgba8)?;
+//! wallpaper.draw(&mut engine, &FrameInput { time: 2.0, ..Default::default() }, Some(frame.framebuffer()), (1920, 1080), true);
 //! let rgba = frame.read_rgba();
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
@@ -140,7 +142,7 @@ impl Wallpaper {
     pub fn draw(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32), force: bool) -> bool {
         match self {
             Wallpaper::Scene(scene) => {
-                scene.render(engine, input).blit(to, size);
+                scene.render(engine, input, to, size);
                 true
             }
             Wallpaper::Video(video) => video.draw(engine, to, size, force),
@@ -151,14 +153,6 @@ impl Wallpaper {
     /// when its source has a new one (a video).
     pub fn animates(&self) -> bool {
         matches!(self, Wallpaper::Scene(_))
-    }
-
-    /// Changes the size the wallpaper is drawn at.
-    pub fn resize(&mut self, engine: &Engine, viewport: Viewport) -> Result<(), LoadError> {
-        match self {
-            Wallpaper::Scene(scene) => scene.resize(engine, viewport),
-            Wallpaper::Video(_) => Ok(()),
-        }
     }
 
     /// Changes how the wallpaper fills an output of another shape.

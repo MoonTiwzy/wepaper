@@ -271,14 +271,8 @@ impl Daemon {
             if !sheet.fit(&self.context) {
                 continue;
             }
-            let (width, height) = sheet.pixels();
             if let Some(slot) = self.slots.get_mut(&head.id) {
                 slot.stale = true;
-                if let Some(wallpaper) = &mut slot.wallpaper
-                    && let Err(error) = wallpaper.resize(&self.engine, Viewport { width, height })
-                {
-                    log::error!("{error}");
-                }
             }
         }
     }
@@ -353,6 +347,7 @@ impl Daemon {
                 self.engine.trim();
                 // SAFETY: returns memory the loader freed to the system; no pointers are invalidated.
                 unsafe { libc::malloc_trim(0) };
+                log::info!("{name}: playing \"{}\" ({})", project.title, folder.display());
                 self.plugins.announce(&plugins::Happening {
                     event: "shown",
                     output: name,
