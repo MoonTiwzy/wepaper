@@ -130,6 +130,11 @@ impl Context {
         let surface = surface.map(|s| s.surface);
         self.egl.make_current(self.display, surface, surface, Some(self.context)).map_err(|e| fail("eglMakeCurrent", e))?;
         self.gl.surface_changed();
+        if surface.is_some() {
+            // A context first made current without a surface draws its default
+            // framebuffer to nowhere until told otherwise.
+            self.gl.draw_to_back_buffer();
+        }
         Ok(())
     }
 

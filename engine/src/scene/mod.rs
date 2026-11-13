@@ -10,6 +10,7 @@ mod bindings;
 mod build;
 mod draw;
 mod shade;
+mod tree;
 
 use wepaper_json::Value;
 

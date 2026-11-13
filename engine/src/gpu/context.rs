@@ -176,6 +176,16 @@ impl Gl {
         state.viewport = (0, 0);
     }
 
+    /// Points drawing to the default framebuffer at the surface's back buffer.
+    pub(super) fn draw_to_back_buffer(&self) {
+        // SAFETY: plain state changes on the current context, with a surface bound.
+        unsafe {
+            self.0.raw.bind_framebuffer(glow::FRAMEBUFFER, None);
+            self.0.raw.draw_buffer(glow::BACK);
+            self.0.raw.read_buffer(glow::BACK);
+        }
+    }
+
     /// Forgets everything cached: foreign code used the context.
     pub fn invalidate(&self) {
         *self.0.state.borrow_mut() = State::default();

@@ -186,6 +186,22 @@ impl Wallpaper {
             scene.set_property(name, value);
         }
     }
+
+    /// A snapshot of everything about the playing wallpaper that can be read by path.
+    pub fn tree(&self) -> Value {
+        match self {
+            Wallpaper::Scene(scene) => scene.tree(),
+            Wallpaper::Video(_) => wepaper_json::obj! {},
+        }
+    }
+
+    /// Changes the value at `path`, relative to the wallpaper.
+    pub fn edit(&mut self, path: &[&str], value: &Value) -> Result<(), String> {
+        match self {
+            Wallpaper::Scene(scene) => scene.edit(path, value),
+            Wallpaper::Video(_) => Err("a video wallpaper has nothing to set".to_owned()),
+        }
+    }
 }
 
 /// What an engine is set up with.

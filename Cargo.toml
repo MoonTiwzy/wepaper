@@ -48,6 +48,7 @@ script = ["wepaper-engine/script"]
 wepaper-engine.workspace = true
 wepaper-ipc.workspace = true
 wepaper-json.workspace = true
+glow = "0.16"
 lexopt = "0.3"
 libc = "0.2"
 log = "0.4"

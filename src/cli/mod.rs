@@ -1,11 +1,17 @@
 //! The command line: the daemon's client and the offline tools.
 
+pub mod client;
 pub mod render;
 
 use std::path::PathBuf;
 
 /// What a failed command says before the process exits with status 1.
 pub type Failure = String;
+
+/// The value of the option that was just read, as text.
+pub fn value(args: &mut lexopt::Parser) -> Result<String, Failure> {
+    args.value().map(|value| value.to_string_lossy().into_owned()).map_err(|e| e.to_string())
+}
 
 /// A `WIDTHxHEIGHT` argument.
 pub fn parse_size(text: &str) -> Result<(u32, u32), Failure> {

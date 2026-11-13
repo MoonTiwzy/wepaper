@@ -1,0 +1,354 @@
+//! `wepaper daemon`: the wallpapers on the desktop.
+//!
+//! One thread, one loop: it waits on the compositor, the control socket and the
+//! video decoders' wake-up at once, and each time round it handles what came in and
+//! draws the outputs that are due a frame.
+
+mod control;
+mod server;
+mod settings;
+mod wayland;
+
+use std::collections::HashMap;
+use std::os::fd::AsRawFd;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+
+use wayland_client::{Connection, EventQueue};
+use wepaper_engine::scene::FrameInput;
+use wepaper_engine::{Engine, Options, Viewport, Wallpaper, gpu};
+
+use crate::cli::{Failure, value};
+use server::Server;
+use settings::{Settings, Shown, State, xdg_dir};
+use wayland::Display;
+
+pub const USAGE: &str = "\
+wepaper daemon [wallpaper] [options]
+
+Shows wallpapers as the desktop background and listens for commands.
+Without a wallpaper it shows what it showed last.
+
+  [wallpaper]          a folder or a workshop id to show on every output
+      --socket PATH    the control socket (default $XDG_RUNTIME_DIR/wepaper.sock)
+      --config FILE    the config file (default $XDG_CONFIG_HOME/wepaper/config.json)
+      --state FILE     where what is shown is remembered (default $XDG_STATE_HOME/wepaper/state.json)
+      --assets DIR     Wallpaper Engine's assets folder (default: found in Steam)
+      --set KEY=VALUE  a setting for this run, e.g. --set fps=30 (repeatable)
+";
+
+/// Set by SIGINT and SIGTERM.
+static STOP: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_signal(_: libc::c_int) {
+    STOP.store(true, Ordering::Relaxed);
+}
+
+/// What plays on one output.
+struct Slot {
+    wallpaper: Option<Wallpaper>,
+    shown: Shown,
+    paused: bool,
+    /// The wallpaper's own time: it stands still while paused.
+    clock: f64,
+    last_tick: Instant,
+    last_draw: Instant,
+    /// The surface lost its contents (it was resized, or just made): draw even without a new frame.
+    stale: bool,
+    /// Why the last wallpaper asked for did not show.
+    error: Option<String>,
+    /// Frames drawn in the current second, and the count of the last full one.
+    frames: (Instant, u32, u32),
+}
+
+impl Slot {
+    fn new(now: Instant) -> Self {
+        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, stale: true, error: None, frames: (now, 0, 0) }
+    }
+}
+
+struct Daemon {
+    connection: Connection,
+    display: Display,
+    context: gpu::Context,
+    engine: Engine,
+    server: Server,
+    /// Config file, then socket changes, then command line.
+    settings: Settings,
+    from_flags: Vec<(String, wepaper_json::Value)>,
+    config_file: PathBuf,
+    state: State,
+    state_file: PathBuf,
+    /// By output id.
+    slots: HashMap<u32, Slot>,
+    quit: bool,
+}
+
+pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
+    use lexopt::prelude::*;
+    let (mut wallpaper, mut socket, mut assets) = (None::<String>, None::<PathBuf>, None::<PathBuf>);
+    let mut config_file = xdg_dir("XDG_CONFIG_HOME", ".config").join("config.json");
+    let mut state_file = xdg_dir("XDG_STATE_HOME", ".local/state").join("state.json");
+    let mut from_flags = Vec::new();
+    while let Some(arg) = args.next().map_err(|e| e.to_string())? {
+        match arg {
+            Long("socket") => socket = Some(value(&mut args)?.into()),
+            Long("config") => config_file = value(&mut args)?.into(),
+            Long("state") => state_file = value(&mut args)?.into(),
+            Long("assets") => assets = Some(value(&mut args)?.into()),
+            Long("set") => from_flags.push(crate::cli::parse_property(&value(&mut args)?)?),
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                return Ok(());
+            }
+            Value(name) if wallpaper.is_none() => wallpaper = Some(name.to_string_lossy().into_owned()),
+            other => return Err(other.unexpected().to_string()),
+        }
+    }
+
+    // Few arenas: the loader's threads would otherwise each keep their own heap for good.
+    // SAFETY: plain libc calls with valid arguments, before any other thread exists.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_signal as usize;
+        // No SA_RESTART: a signal must end the wait in poll.
+        libc::sigaction(libc::SIGINT, &action, std::ptr::null_mut());
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+    }
+
+    let server = Server::bind(&socket.unwrap_or_else(wepaper_ipc::default_socket))?;
+    let (connection, mut queue, display) = Display::connect()?;
+    // SAFETY: the display pointer is the connection's, which the daemon keeps for as long as the context.
+    let context = unsafe { gpu::Context::wayland(connection.backend().display_ptr().cast()) }.map_err(|e| e.to_string())?;
+    log::info!("drawing with {}", context.description);
+    let state = State::load(&state_file);
+    let mut settings = Settings::default();
+    control::read_config(&mut settings, &config_file);
+    settings.apply(&wepaper_json::Value::Object(state.overrides.clone()), "saved settings");
+    for (key, value) in &from_flags {
+        settings.set(key, value)?;
+    }
+    let options = Options { assets, cache_dir: Some(crate::cli::cache_dir()), max_texture_side: settings.texture_max_side };
+    let engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
+
+    let mut daemon = Daemon { connection, display, context, engine, server, settings, from_flags, config_file, state, state_file, slots: HashMap::new(), quit: false };
+    daemon.apply_sound();
+    if let Some(wallpaper) = wallpaper {
+        // Shown once the outputs are known; until then it is what "last" is.
+        let folder = wepaper_engine::locate::wallpaper(&wallpaper).ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
+        daemon.state.last = Shown { wallpaper: Some(folder), ..Shown::default() };
+        daemon.state.outputs.clear();
+    }
+    let result = daemon.run(&mut queue);
+    // Wallpapers and surfaces go while the context is still there to free them with.
+    daemon.slots.clear();
+    daemon.display.heads.clear();
+    result
+}
+
+impl Daemon {
+    fn run(&mut self, queue: &mut EventQueue<Display>) -> Result<(), Failure> {
+        while !self.quit && !STOP.load(Ordering::Relaxed) {
+            queue.dispatch_pending(&mut self.display).map_err(|e| format!("the compositor went away: {e}"))?;
+            self.follow_outputs();
+            for incoming in self.server.receive() {
+                let response = match incoming.request {
+                    Ok(request) => self.handle(request, incoming.client),
+                    Err(why) => wepaper_ipc::error(why),
+                };
+                self.server.answer(incoming.client, &response);
+            }
+            let wake = self.draw_due();
+            self.server.flush();
+            let _ = self.connection.flush();
+
+            // Wait for the compositor, a client, a new video frame, or the next frame's time.
+            let Some(guard) = queue.prepare_read() else { continue };
+            let waker = self.engine.videos().waker().map(|w| w.fd());
+            let mut fds: Vec<libc::pollfd> = std::iter::once(guard.connection_fd().as_raw_fd())
+                .chain(self.server.fds())
+                .chain(waker)
+                .map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 })
+                .collect();
+            let timeout = wake.map_or(1000, |at| at.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32);
+            // SAFETY: `fds` is a live array of `fds.len()` pollfd structures.
+            let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
+            if ready > 0 && fds[0].revents != 0 {
+                guard.read().map_err(|e| format!("the compositor went away: {e}"))?;
+            } else {
+                drop(guard);
+            }
+            if let Some(waker) = self.engine.videos().waker() {
+                waker.drain();
+            }
+        }
+        Ok(())
+    }
+
+    /// Gives new outputs a surface and what they showed last, and lets go of unplugged ones.
+    fn follow_outputs(&mut self) {
+        let now = Instant::now();
+        let gone: Vec<u32> = self.display.heads.iter().filter(|head| head.removed || head.sheet.as_ref().is_some_and(|sheet| sheet.closed)).map(|head| head.id).collect();
+        for id in gone {
+            self.slots.remove(&id);
+            self.display.heads.retain(|head| head.id != id);
+            self.engine.trim();
+        }
+        let fresh: Vec<(u32, String)> =
+            self.display.heads.iter().filter(|head| head.announced && head.sheet.is_none()).filter_map(|head| Some((head.id, head.name.clone()?))).collect();
+        for (id, name) in fresh {
+            self.display.cover(id, self.settings.layer, self.settings.passthrough);
+            let mut slot = Slot::new(now);
+            slot.shown = self.state.outputs.get(&name).cloned().unwrap_or_else(|| self.state.last.clone());
+            self.slots.insert(id, slot);
+            if let Some(folder) = self.slots[&id].shown.wallpaper.clone() {
+                let properties: Vec<_> = self.slots[&id].shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                if let Err(why) = self.load(id, &folder, &properties) {
+                    log::error!("{name}: {why}");
+                }
+            }
+        }
+        // Surfaces whose size or scale changed get buffers to match.
+        for head in &mut self.display.heads {
+            let Some(sheet) = head.sheet.as_mut().filter(|sheet| sheet.resized) else { continue };
+            if !sheet.fit(&self.context) {
+                continue;
+            }
+            let (width, height) = sheet.pixels();
+            if let Some(slot) = self.slots.get_mut(&head.id) {
+                slot.stale = true;
+                if let Some(wallpaper) = &mut slot.wallpaper
+                    && let Err(error) = wallpaper.resize(&self.engine, Viewport { width, height })
+                {
+                    log::error!("{error}");
+                }
+            }
+        }
+    }
+
+    /// The size the output's surface is drawn at; a guess until the compositor has said.
+    fn viewport(&self, id: u32) -> Viewport {
+        let size = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.sheet.as_ref()).filter(|sheet| sheet.logical.0 > 0).map(|sheet| sheet.pixels());
+        let (width, height) = size.unwrap_or((1920, 1080));
+        Viewport { width, height }
+    }
+
+    /// Loads a wallpaper for an output. On failure the output keeps what it had.
+    fn load(&mut self, id: u32, folder: &std::path::Path, properties: &[(String, wepaper_json::Value)]) -> Result<(), String> {
+        // Videos are stored no wider than the widest output: nobody sees more.
+        let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
+        self.engine.videos().options.max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
+        self.engine.videos().options.hardware_decode = self.settings.video_hardware;
+        let viewport = self.viewport(id);
+        let loaded = self.engine.load(folder, viewport, properties);
+        let Some(slot) = self.slots.get_mut(&id) else { return Err("the output is gone".to_owned()) };
+        match loaded {
+            Ok(mut wallpaper) => {
+                wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
+                wallpaper.set_paused(slot.paused);
+                slot.wallpaper = Some(wallpaper);
+                slot.clock = 0.0;
+                slot.stale = true;
+                slot.error = None;
+                // What the old wallpaper held alone is freed now, not at the next load.
+                self.engine.trim();
+                // SAFETY: returns memory the loader freed to the system; no pointers are invalidated.
+                unsafe { libc::malloc_trim(0) };
+                Ok(())
+            }
+            Err(error) => {
+                slot.error = Some(error.to_string());
+                Err(error.to_string())
+            }
+        }
+    }
+
+    /// Draws every output that is due a frame. Returns when to wake up for the next one, if a timer is what it waits for.
+    fn draw_due(&mut self) -> Option<Instant> {
+        let now = Instant::now();
+        // A frame cap leaves a millisecond of slack so that a display at the same rate is not halved.
+        let interval = (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)).saturating_sub(Duration::from_millis(1)));
+        let mut wake: Option<Instant> = None;
+        let ids: Vec<u32> = self.display.heads.iter().map(|head| head.id).collect();
+        for id in ids {
+            let Some(head) = self.display.heads.iter().find(|head| head.id == id) else { continue };
+            let Some(sheet) = head.sheet.as_ref().filter(|sheet| sheet.egl.is_some() && !sheet.resized) else { continue };
+            let Some(slot) = self.slots.get_mut(&id) else { continue };
+            let Some(wallpaper) = slot.wallpaper.as_mut() else { continue };
+            if slot.paused && !slot.stale {
+                continue;
+            }
+            if sheet.frame_pending && !slot.stale {
+                continue;
+            }
+            if let Some(interval) = interval
+                && !slot.stale
+            {
+                let due = slot.last_draw + interval;
+                if now < due {
+                    wake = Some(wake.map_or(due, |at| at.min(due)));
+                    continue;
+                }
+            }
+            if !slot.paused {
+                // A long gap (a suspended laptop, a stalled compositor) does not fast-forward the scene.
+                slot.clock += now.duration_since(slot.last_tick).as_secs_f64().min(0.25);
+            }
+            slot.last_tick = now;
+            let egl = sheet.egl.as_ref().expect("checked above");
+            if self.context.make_current(Some(egl)).is_err() {
+                continue;
+            }
+            self.context.disable_vsync();
+            let input = FrameInput { time: slot.clock, pointer: head.pointer, daytime: control::daytime() };
+            let size = sheet.pixels();
+            if !wallpaper.draw(&mut self.engine, &input, None, size, slot.stale) {
+                continue; // A video without a new frame: what is on screen stands.
+            }
+            if log::log_enabled!(log::Level::Trace) {
+                use glow::HasContext;
+                let gl = self.engine.gl().raw();
+                let mut pixel = [0u8; 4];
+                // SAFETY: reads one pixel of the bound default framebuffer into a four-byte buffer.
+                unsafe {
+                    gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+                    gl.read_pixels((size.0 / 2) as i32, (size.1 / 2) as i32, 1, 1, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut pixel)));
+                    log::trace!("frame on output {id}: centre pixel {pixel:?}, GL error {:#x}", gl.get_error());
+                }
+            }
+            slot.stale = false;
+            slot.last_draw = now;
+            if now.duration_since(slot.frames.0) >= Duration::from_secs(1) {
+                slot.frames = (now, 0, slot.frames.1);
+            }
+            slot.frames.1 += 1;
+            // The request for the next frame rides on the commit the swap makes.
+            self.display.request_frame(id);
+            if let Some(egl) = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.sheet.as_ref()).and_then(|sheet| sheet.egl.as_ref())
+                && let Err(error) = self.context.present(egl)
+            {
+                log::warn!("{error}");
+            }
+        }
+        wake
+    }
+
+    /// Applies the sound settings to everything that plays.
+    fn apply_sound(&mut self) {
+        let (audio, volume) = (!self.settings.mute && self.settings.volume > 0.0, self.settings.volume);
+        self.engine.videos().set_sound(audio, volume);
+    }
+
+    /// Remembers what the outputs show, for the next run.
+    fn save_state(&mut self) {
+        for head in &self.display.heads {
+            if let (Some(name), Some(slot)) = (&head.name, self.slots.get(&head.id)) {
+                self.state.outputs.insert(name.clone(), slot.shown.clone());
+            }
+        }
+        self.state.save(&self.state_file);
+    }
+}
+
