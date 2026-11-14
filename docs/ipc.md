@@ -39,6 +39,7 @@ name may be `*`, which means every output.
 | `.../wallpaper/scene/bloom` | whether the scene blooms (only a scene made with bloom can) | yes |
 | `.../wallpaper/scene/parallax`, `parallax_amount`, `parallax_delay`, `parallax_mouse` | the camera following the pointer | yes |
 | `.../wallpaper/scene/shake`, `shake_amplitude`, `shake_roughness`, `shake_speed` | the camera shaking | yes |
+| `.../wallpaper/scene/ambient`, `skylight` | the light lit surfaces get from above and from below | yes |
 | `.../wallpaper/layers/<id>/visible`, `origin`, `scale`, `angles`, `parallax_depth` | a layer's place in the scene | yes |
 | `.../wallpaper/layers/<id>/alpha`, `color`, `brightness` | an image or text layer's look | yes |
 | `.../wallpaper/layers/<id>/text` | a text layer's text | yes |

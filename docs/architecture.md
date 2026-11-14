@@ -22,12 +22,15 @@ The engine's modules follow the path a wallpaper takes from disk to screen:
 
 ```
 read/   bytes on disk become data          archives, layered files, textures, LZ4, pictures, puppets
+                                           and 3D models
 doc/    JSON documents become typed values project, scene, material, effect, model
 glsl/   the shader dialect becomes GLSL    includes, combos, annotations, repairs
 gpu/    OpenGL                             the context, cached state, textures, programs, the buffer pool
 share   the cache                          textures, programs, shader sources, fonts, videos
-scene/  a scene becomes layers and passes  building, bindings, the tree, drawing; text, particle
-                                           and puppet layers; the scene as the host of its scripts
+scene/  a scene becomes layers and passes  building, bindings, the tree, drawing; text, particle,
+                                           puppet and model layers; the camera of a 3D scene, its
+                                           lights, the high dynamic range pipeline; the scene as
+                                           the host of its scripts
 particles/  particle systems               documents, the simulation, the vertices that draw them
 script/     SceneScript                    a QuickJS runtime, the prelude, the host it runs against
 video/  libmpv                             streams shared per file, cheaper copies, the video wallpaper
@@ -70,6 +73,20 @@ from, how it blends. Drawing a frame walks the layers.
   draws into the frame with the layer's transform. The buffers go back to the pool before the
   next layer starts.
 - Compose and fullscreen layers read a copy of the frame so far.
+- A model is a pass a mesh, each drawn straight into the frame with the depth and culling
+  its material asks for.
+
+A flat scene draws straight into the surface. A 3D scene draws into a buffer of its own
+with a depth buffer (the surface has none), and is copied out at the end. A scene with
+`hdr` draws into a buffer of half floats, its layers' effect buffers are half floats too,
+and its bloom adds its glow on the way out, where the frame is clamped to what the output
+holds. Each costs only the scene that has it.
+
+**3D.** The camera is the scene's camera object when it has one, the document's
+`eye` and `center` otherwise; flat layers in such a scene are quads in the same world.
+Wallpaper Engine's lit shaders call a lighting function the editor writes for each
+scene; `glsl/lighting.rs` writes it once, for as many lights as the scene says with a
+combo, and a pass that is not lit, or a scene without lights, compiles without it.
 
 **bindings.** Whatever can change a value is a binding from a source to a slot: a user
 property, a keyframe animation, a script. Setting a property writes into the running scene;

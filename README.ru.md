@@ -39,11 +39,12 @@ wepaper запускается за доли секунды, ест мало п�
 | | |
 |---|---|
 | **Сцены** | слои-картинки с материалами и режимами смешивания, цепочки эффектов, compose- и fullscreen-слои, текст, частицы, puppet warp, спрайт-листы, видео-текстуры, звук, параллакс и тряска камеры, bloom, покадровые анимации, шейдеры с реакцией на звук, SceneScript, пользовательские свойства |
+| **3D-сцены** | перспективная камера и объекты-камеры, 3D-модели с материалами, скелетами и анимациями, свет, отражения, HDR-конвейер со своим bloom |
 | **Видео** | любое видео, которое играет libmpv: cover / contain / stretch, звук, кадр рисуется только когда у видео появился новый |
 | **Веб** | страницы с JavaScript API Wallpaper Engine, через встроенный [плагин `web`](plugins/web) |
 | **Пресеты** | пресет играет свои обои со своими значениями |
 
-Чего пока нет (3D-модели, свет, HDR-конвейер) и как проверялась каждая возможность, написано в
+Чего пока нет (тени, туман, пути камеры и кое-что ещё) и как проверялась каждая возможность, написано в
 [docs/compatibility.md](docs/compatibility.md). Про твою библиотеку расскажет `wepaper check`:
 
 ```console
@@ -105,7 +106,7 @@ outputs/<имя>/       size, scale, paused, fill, fps
 outputs/<имя>/wallpaper/
     path, kind, title
     properties/<имя>                         пользовательские свойства
-    scene/                                   zoom, clear, bloom, parallax..., shake...
+    scene/                                   zoom, clear, bloom, parallax..., shake..., ambient, skylight
     layers/<id>/                             visible, origin, scale, angles, alpha, color, text, volume
     layers/<id>/constants/<имя>              константы шейдера слоя
     layers/<id>/effects/<n>/visible
