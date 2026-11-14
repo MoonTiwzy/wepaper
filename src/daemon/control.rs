@@ -201,7 +201,14 @@ impl Daemon {
             Request::Set { path, value } => self.set(&split_path(&path), &value).map(|()| Value::Null),
             Request::Reset { path } => self.reset(&split_path(&path)).map(|()| Value::Null),
             Request::Show { wallpaper, output, properties } => {
-                self.show(&wallpaper, output.as_deref(), properties).map(|()| Value::Null)
+                // Said in the log too: whoever asked may not pass the refusal on, and
+                // a log with nothing between two wallpapers explains nothing.
+                log::info!("asked to show {wallpaper} on {}", output.as_deref().unwrap_or("every output"));
+                let shown = self.show(&wallpaper, output.as_deref(), properties);
+                if let Err(why) = &shown {
+                    log::warn!("{wallpaper} is not shown: {why}");
+                }
+                shown.map(|()| Value::Null)
             }
             Request::Hide { output } => self.targets(output.as_deref()).map(|ids| {
                 for id in ids {

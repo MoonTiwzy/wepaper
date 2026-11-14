@@ -12,6 +12,8 @@
 
 - The licence is MIT.
 
+- The log says every wallpaper the daemon was asked to show and why one was not shown.
+
 ## 0.2.0
 
 - 3D scenes. A scene with a perspective camera is seen through it, or through its camera
