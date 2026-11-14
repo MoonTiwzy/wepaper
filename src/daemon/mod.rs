@@ -5,6 +5,7 @@
 //! draws the outputs that are due a frame.
 
 mod control;
+mod look;
 mod plugins;
 mod server;
 mod settings;
@@ -131,6 +132,8 @@ struct Daemon {
     sounding: Vec<sound::Playing>,
     /// The compiled shader plugins, by plugin id, in the order they run.
     shaders: Vec<(String, wepaper_engine::post::PostPass)>,
+    /// The pass that gives an output its look, when the look is not plain.
+    look_pass: Option<wepaper_engine::post::PostPass>,
     /// What ends the daemon when its loop cannot.
     watch: watch::Watch,
     quit: bool,
@@ -218,6 +221,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         }
     }
     let now = Instant::now();
+    let context_gl = &context.gl().clone();
     let mut daemon = Daemon {
         connection,
         display,
@@ -238,6 +242,9 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         plugins: plugins::Plugins::new(found, socket),
         sounding: Vec::new(),
         shaders,
+        look_pass: wepaper_engine::post::PostPass::compile(context_gl, look::SHADER)
+            .inspect_err(|why| log::warn!("looks: {why}"))
+            .ok(),
         watch: watch::Watch::start(&STOP),
         quit: false,
     };
@@ -473,6 +480,7 @@ impl Daemon {
                             }
                         }
                         wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
+                        wallpaper.set_rate(slot.shown.look.rate);
                         wallpaper.set_paused(slot.paused);
                         slot.wallpaper = Some(wallpaper);
                         slot.renderer = None;
@@ -587,7 +595,8 @@ impl Daemon {
             }
             if !slot.paused {
                 // A long gap (a suspended laptop, a stalled compositor) does not fast-forward the scene.
-                slot.clock += now.duration_since(slot.last_tick).as_secs_f64().min(0.25);
+                slot.clock += now.duration_since(slot.last_tick).as_secs_f64().min(0.25)
+                    * f64::from(slot.shown.look.rate);
             }
             slot.last_tick = now;
             let egl = sheet.egl.as_ref().expect("checked above");
@@ -602,7 +611,13 @@ impl Daemon {
                 daytime: control::daytime(),
             };
             let size = sheet.pixels();
-            let shaded = self.shaders.iter().any(|(_, pass)| pass.enabled);
+            let look = slot.shown.look;
+            if let Some(pass) = &mut self.look_pass {
+                pass.enabled = !look.plain_picture();
+                look.apply(pass);
+            }
+            let shaded = self.shaders.iter().any(|(_, pass)| pass.enabled)
+                || self.look_pass.as_ref().is_some_and(|pass| pass.enabled);
             if shaded {
                 // The frame goes into a buffer first, then through the output shaders onto the surface.
                 if slot.staging.as_ref().is_none_or(|t| (t.width(), t.height()) != size) {
@@ -624,8 +639,9 @@ impl Daemon {
                         slot.stale,
                     );
                     if drew {
+                        // The look first: output shaders work on what the output shows.
                         let passes: Vec<&wepaper_engine::post::PostPass> =
-                            self.shaders.iter().map(|(_, pass)| pass).collect();
+                            self.look_pass.iter().chain(self.shaders.iter().map(|(_, pass)| pass)).collect();
                         self.engine.post(&passes, staging, None, size, slot.clock as f32);
                     }
                     drew
@@ -723,6 +739,7 @@ impl Daemon {
         let heard = sound::heard(&self.sounding);
         for (id, slot) in &mut self.slots {
             let on = audio && heard.contains(id);
+            let volume = volume * slot.shown.look.volume;
             if let Some(wallpaper) = &mut slot.wallpaper {
                 wallpaper.set_sound(on, volume);
             }

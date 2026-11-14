@@ -29,6 +29,10 @@ name may be `*`, which means every output.
 | `outputs/<name>/scale` | the output's scale | |
 | `outputs/<name>/paused` | whether the output is frozen on its current frame | yes |
 | `outputs/<name>/fill` | this output's own fill mode, `null` for the setting | yes |
+| `outputs/<name>/look/rate` | how fast the wallpaper plays: 1 as made, 0 stands still | yes |
+| `outputs/<name>/look/volume` | the wallpaper's share of the volume, 0 to 1 (a scene's and a page's sounds) | yes |
+| `outputs/<name>/look/flip`, `zoom`, `shift_x`, `shift_y` | the picture mirrored, enlarged about its middle, moved by parts of the output | yes |
+| `outputs/<name>/look/brightness`, `contrast`, `saturation`, `hue` | its colours: 1 is as it is, the hue turns in degrees; `null` puts any of a look's values back | yes |
 | `outputs/<name>/fps` | frames drawn in the last full second | |
 | `outputs/<name>/error` | why the last wallpaper asked for did not show, or `null` | |
 | `outputs/<name>/wallpaper` | `null`, or the playing wallpaper: | |

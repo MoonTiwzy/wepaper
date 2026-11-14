@@ -38,6 +38,10 @@
   missing: what is assigned to a variable of another kind, what a function is given that
   it does not take, a comparison that is counted with, a value one stage writes longer
   than the other reads.
+- An output has a look: `outputs/<name>/look/` holds the speed the wallpaper plays at
+  (`rate`), its share of the volume, and what is done to the finished picture: `flip`,
+  `zoom`, `shift_x` and `shift_y`, `brightness`, `contrast`, `saturation`, `hue`. An output
+  whose look is plain pays nothing for it.
 - `wepaper get memory/heap` says what the allocator has in use and what it holds free.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in

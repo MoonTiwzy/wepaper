@@ -95,6 +95,7 @@ impl Daemon {
                     "scale" => scale,
                     "paused" => slot.paused,
                     "fill" => slot.shown.fill.map(Fill::name),
+                    "look" => slot.shown.look.to_value(),
                     // The count of the last full second; nothing drawn for two means none.
                     "fps" => if slot.last_draw.elapsed().as_secs() >= 2 { 0 } else { slot.frames.2 },
                     "error" => slot.error.clone(),
@@ -302,8 +303,12 @@ impl Daemon {
         let remembered = Remembered::load(&self.memory_dir, &folder);
         let named = properties.is_some();
         let properties = properties.map_or(remembered.properties, |named| named.into_iter().collect());
-        let shown =
-            Shown { wallpaper: Some(folder.clone()), properties, edits: remembered.edits, fill: None };
+        let shown = Shown {
+            wallpaper: Some(folder.clone()),
+            properties,
+            edits: remembered.edits,
+            ..Shown::default()
+        };
         // An output that cannot show it keeps what it had; the others are not undone
         // for it, and what they show now is what is remembered.
         let mut failure = None;
@@ -313,7 +318,7 @@ impl Daemon {
                 Ok(()) => {
                     any = true;
                     if let Some(slot) = self.slots.get_mut(&id) {
-                        slot.shown = Shown { fill: slot.shown.fill, ..shown.clone() };
+                        slot.shown = Shown { fill: slot.shown.fill, look: slot.shown.look, ..shown.clone() };
                     }
                 }
                 Err(why) => failure = failure.or(Some(why)),
@@ -367,6 +372,19 @@ impl Daemon {
             ["outputs", name, "paused"] => {
                 let paused = typed_flag(value).ok_or("paused takes true or false")?;
                 self.pause(Some(name), paused).map(|_| ())
+            }
+            ["outputs", name, "look", key] => {
+                for id in self.targets(Some(name))? {
+                    let Some(slot) = self.slots.get_mut(&id) else { continue };
+                    slot.shown.look.set(key, value)?;
+                    slot.stale = true;
+                    if let Some(wallpaper) = &mut slot.wallpaper {
+                        wallpaper.set_rate(slot.shown.look.rate);
+                    }
+                }
+                self.apply_sound();
+                self.save_state();
+                Ok(())
             }
             ["outputs", name, "fill"] => {
                 let fill = match value {

@@ -165,6 +165,8 @@ pub struct Shown {
     pub edits: BTreeMap<String, Value>,
     /// This output's own fill, when it has one.
     pub fill: Option<Fill>,
+    /// How this output shows what it shows: speed, loudness, the picture.
+    pub look: super::look::Look,
 }
 
 /// What is remembered about a wallpaper while it is not shown: the values it gets
@@ -255,6 +257,7 @@ fn shown_to_value(shown: &Shown) -> Value {
         "properties" => map_to_value(&shown.properties),
         "edits" => map_to_value(&shown.edits),
         "fill" => shown.fill.map(Fill::name),
+        "look" => shown.look.to_value(),
     }
 }
 
@@ -264,6 +267,7 @@ fn shown_from_value(value: &Value) -> Shown {
         properties: map_from_value(value.get("properties")),
         edits: map_from_value(value.get("edits")),
         fill: value.get("fill").as_str().and_then(Fill::from_name),
+        look: super::look::Look::from_value(value.get("look")),
     }
 }
 
@@ -397,6 +401,7 @@ mod tests {
             properties: [("speed".to_owned(), Value::from(2))].into(),
             edits: [("layers/12/alpha".to_owned(), Value::from(0.5))].into(),
             fill: Some(Fill::Contain),
+            look: super::super::look::Look { rate: 0.5, flip: true, ..Default::default() },
         };
         state.outputs.insert("DP-1".to_owned(), shown.clone());
         state.last = shown;

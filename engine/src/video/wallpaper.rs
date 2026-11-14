@@ -74,6 +74,12 @@ impl VideoInstance {
         self.fill = fill;
     }
 
+    /// Sets how fast the video plays: 1 as it was made. Shown on several outputs it
+    /// is one video, at the speed set last.
+    pub fn set_rate(&mut self, rate: f32) {
+        self.hold.stream.borrow().set_speed(rate);
+    }
+
     /// Pauses or resumes. A video shown on several outputs stops only when all pause it.
     pub fn set_paused(&mut self, paused: bool) {
         self.hold.set_paused(paused);

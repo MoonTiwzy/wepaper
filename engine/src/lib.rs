@@ -169,6 +169,14 @@ impl Wallpaper {
         }
     }
 
+    /// Sets how fast what plays on its own clock plays: a video. A scene plays at the
+    /// speed of the time it is drawn for.
+    pub fn set_rate(&mut self, rate: f32) {
+        if let Wallpaper::Video(video) = self {
+            video.set_rate(rate);
+        }
+    }
+
     /// Pauses or resumes what plays on its own clock (videos, sound).
     pub fn set_paused(&mut self, paused: bool) {
         match self {
