@@ -19,6 +19,13 @@ allowed. There need not be one: every setting has a default.
 | `video_max_width` | `0` | Video frames are kept no wider than this, and wider videos get a re-encoded copy. `0` means the widest output. |
 | `texture_max_side` | `0` | Textures larger than this on a side are loaded from a smaller level. `0` is no limit. A way to trade sharpness for video memory on a small GPU. |
 
+Besides the settings the file can describe [devices](devices.md): outputs that are not
+screens, whose frames go to a program.
+
+```jsonc
+{ "devices": { "panel": { "size": [480, 480], "fps": 30, "exec": "send-frames" } } }
+```
+
 ## What wins
 
 When the daemon starts, and again on `wepaper reload`, a setting is the first of these that
@@ -43,7 +50,7 @@ loaded: a change shows with the next `show`.
 |---|---|
 | `$XDG_CONFIG_HOME/wepaper/config.json` | the settings; yours, never written by wepaper |
 | `$XDG_CONFIG_HOME/wepaper/plugins/` | your plugins |
-| `$XDG_STATE_HOME/wepaper/state.json` | what each output shows, with its property values, and settings changed over the socket |
+| `$XDG_STATE_HOME/wepaper/state.json` | what each output shows, with its property values, and settings and devices changed over the socket |
 | `$XDG_CACHE_HOME/wepaper/programs/` | linked shader programs, so a warm start compiles nothing |
 | `$XDG_CACHE_HOME/wepaper/video/` | videos unpacked from scenes, and cheaper copies of oversized ones |
 | `$XDG_RUNTIME_DIR/wepaper.sock` | the control socket |

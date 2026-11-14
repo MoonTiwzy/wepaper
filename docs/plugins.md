@@ -97,7 +97,20 @@ program makes its own layer surface. It is started as
        [--passthrough] [--property <name>=<json>]...
 ```
 
-and is told what changes on its standard input, one JSON object per line:
+For an output that is a [device](devices.md) there is no surface to make. The program is
+started with
+
+```
+<exec> --dir <wallpaper folder> --file <start file> --frames <WIDTH>x<HEIGHT> --frames-fd 3
+       --fps <N> --volume <0..100> [--muted] [--property <name>=<json>]...
+```
+
+and draws the wallpaper at that size where nobody sees it, writing each frame to the
+descriptor as raw RGB (three bytes a pixel, rows from the top), at most `--fps` of them a
+second and none while paused. The descriptor is the input of the device's program; a
+plugin that cannot write to it any more exits.
+
+Either way it is told what changes on its standard input, one JSON object per line:
 
 ```
 {"cmd":"properties","values":{"<name>": <json>, ...}}

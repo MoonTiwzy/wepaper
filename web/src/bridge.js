@@ -567,6 +567,66 @@
         }
     }
 
+    // WebKit's fetch does not read local files; XMLHttpRequest does. A wallpaper is
+    // local files, so a fetch of one is answered through XMLHttpRequest, with the type
+    // a server would have said: a WebAssembly module is only compiled from a response
+    // that says it is one (a Unity build asks for its module this way and nothing else).
+    const types = {
+        wasm: 'application/wasm', js: 'text/javascript', mjs: 'text/javascript', json: 'application/json',
+        html: 'text/html', css: 'text/css', txt: 'text/plain', xml: 'application/xml',
+        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp',
+        svg: 'image/svg+xml', mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', mp4: 'video/mp4',
+        webm: 'video/webm',
+    };
+    const nativeFetch = window.fetch ? window.fetch.bind(window) : null;
+    function localFetch(url) {
+        return new Promise(function (resolve, reject) {
+            const request = new XMLHttpRequest();
+            request.open('GET', url, true);
+            request.responseType = 'arraybuffer';
+            request.onload = function () {
+                // A local file has no status: 0 with a body is a file that was read.
+                const read = request.response && (request.status === 0 || (request.status >= 200 && request.status < 300));
+                if (!read) {
+                    reject(new TypeError('Failed to fetch ' + url));
+                    return;
+                }
+                const extension = (url.split(/[?#]/)[0].match(/\.([A-Za-z0-9]+)$/) || [])[1] || '';
+                const response = new Response(request.response, {
+                    status: 200,
+                    statusText: 'OK',
+                    headers: {
+                        'Content-Type': types[extension.toLowerCase()] || 'application/octet-stream',
+                        'Content-Length': String(request.response.byteLength),
+                    },
+                });
+                try {
+                    Object.defineProperty(response, 'url', { value: url });
+                } catch (_) {
+                    // The response keeps an empty address: nothing a wallpaper reads.
+                }
+                resolve(response);
+            };
+            request.onerror = function () {
+                reject(new TypeError('Failed to fetch ' + url));
+            };
+            request.send();
+        });
+    }
+    window.fetch = function (input, init) {
+        let url = '';
+        try {
+            url = new URL(typeof input === 'string' ? input : input.url, document.baseURI).href;
+        } catch (_) {
+            // Not an address: the browser's own fetch says so.
+        }
+        const method = (init && init.method) || (input && typeof input === 'object' && input.method) || 'GET';
+        if (url.indexOf('file:') === 0 && String(method).toUpperCase() === 'GET') {
+            return localFetch(url);
+        }
+        return nativeFetch ? nativeFetch(input, init) : Promise.reject(new TypeError('fetch is not available'));
+    };
+
     Object.defineProperty(window, 'wepaperBridge', { value: Object.freeze({ receive: receive }) });
     // The plugin answers with the state as it is now: a command that arrived while
     // this document was still on its way had nowhere to go.

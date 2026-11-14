@@ -176,6 +176,9 @@ impl SceneInstance {
             Some(view) => view.view_projection,
             None => self.camera(input.time as f32),
         };
+        if self.frame != crate::Frame::default() {
+            self.view_projection = self.frame.matrix().mul(&self.view_projection);
+        }
         // A copy: the frame borrows it while the engine is being drawn with.
         let spectrum = engine.listener.spectrum().clone();
         let frame = Frame {

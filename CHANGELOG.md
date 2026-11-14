@@ -1,6 +1,27 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+- Web wallpapers can `fetch` their own files. WebKit's `fetch` does not read local files, and
+  a wallpaper built with Unity asks for its WebAssembly module in no other way: it showed
+  nothing ("both async and sync fetching of the wasm failed"). The page's `fetch` of a
+  local file is now answered through `XMLHttpRequest`, with the content type a server
+  would give.
+
+- An output's `look/zoom` and shifts frame the wallpaper itself instead of its finished
+  frame: what the fill cropped away comes into view when the picture is moved, a zoom
+  stays sharp, and a zoom below 1 shows more of the wallpaper. Before, they moved and
+  enlarged the cropped frame and left black where it ended. Their ranges are wider (zoom
+  0.05 to 20, shifts 20 outputs either way), for a small output looking at a part of a
+  large wallpaper.
+
+- Devices: outputs that are not screens. A device is a size, a rate and a program; its
+  wallpaper is drawn at that size off the screen and each frame is written to the program's
+  standard input as raw RGB. It is an output like a monitor (`show --on`, `fill`, `look`,
+  `pause`, remembered), described in the config file or under `devices/` in the control
+  tree. For panels on coolers and keyboards, light strips, streams: [docs/devices.md](docs/devices.md).
+  Web wallpapers play on a device too: the web plugin draws the page at the device's size
+  without a window anybody sees and writes the frames to the device's program.
 
 - A wallpaper shows the user's own picture or video where it lets one be put in
   (`usertextures` of a material, a `scenetexture` property), and a preset's files are

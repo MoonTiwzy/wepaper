@@ -254,6 +254,8 @@ pub struct SceneInstance {
     zoom: f32,
     viewport: Viewport,
     fill: Fill,
+    /// The part of the scene the output shows, on top of the fill.
+    frame: crate::Frame,
     view_projection: Mat4,
     /// Layers that could not be built, with why: for `inspect` and logs.
     skipped: Vec<String>,
@@ -502,5 +504,10 @@ impl SceneInstance {
     /// Changes how the scene fills an output of another shape.
     pub fn set_fill(&mut self, fill: Fill) {
         self.fill = fill;
+    }
+
+    /// Changes which part of the scene the output shows.
+    pub fn set_frame(&mut self, frame: crate::Frame) {
+        self.frame = frame;
     }
 }

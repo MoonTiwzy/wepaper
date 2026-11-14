@@ -22,7 +22,11 @@ usage: wepaper-web --dir <wallpaper folder> --output <output name> [options]
   --muted                  start silent
   --property <name=json>   a user property's value; may be repeated
   --passthrough            the page gets no pointer input
+  --frames <WxH>           for a device: no surface anybody sees; the page is drawn at
+                           this size and its frames are written as raw RGB
+  --frames-fd <n>          the descriptor the frames are written to (default: 3)
 
+With --frames, --output is optional: any output will do to hold the unseen window.
 Commands are read from stdin and events written to stdout, one JSON object per line.";
 
 /// What the command line asked for.
@@ -32,8 +36,11 @@ pub struct Args {
     pub dir: PathBuf,
     /// The page to open, relative to the folder.
     pub file: String,
-    /// The connector name of the output to cover.
+    /// The connector name of the output to cover; with `frames`, of the output
+    /// that holds the unseen window (empty: any).
     pub output: String,
+    /// For a device: the size of the frames and where they are written.
+    pub frames: Option<crate::frames::Frames>,
     /// The layer the surface sits on.
     pub layer: Layer,
     /// The layer surface's namespace.
@@ -73,6 +80,8 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation
     let mut muted = false;
     let mut overrides = Vec::new();
     let mut passthrough = false;
+    let mut frames = None;
+    let mut frames_fd = 3;
 
     let mut parser = lexopt::Parser::from_args(arguments);
     while let Some(argument) = parser.next().map_err(|error| error.to_string())? {
@@ -107,14 +116,35 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation
                 overrides.push(properties::parse_override(&text(&mut parser, "--property")?)?)
             }
             Long("passthrough") => passthrough = true,
+            Long("frames") => {
+                let value = text(&mut parser, "--frames")?;
+                frames = Some(
+                    crate::frames::parse_size(&value)
+                        .ok_or_else(|| format!("--frames wants WIDTHxHEIGHT, not \"{value}\""))?,
+                );
+            }
+            Long("frames-fd") => {
+                let value = text(&mut parser, "--frames-fd")?;
+                frames_fd = value
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|fd| *fd > 2)
+                    .ok_or_else(|| format!("--frames-fd wants a descriptor above 2, not \"{value}\""))?;
+            }
             Long("help") | Short('h') => return Ok(Invocation::Help),
             other => return Err(other.unexpected().to_string()),
         }
     }
 
     let dir = dir.ok_or("--dir is required")?;
-    let output = output.ok_or("--output is required")?;
-    if file.is_empty() || output.is_empty() {
+    let frames = frames.map(|size| crate::frames::Frames { size, fd: frames_fd });
+    // A device's page needs no output of its own.
+    let output = match (output, frames) {
+        (Some(output), _) => output,
+        (None, Some(_)) => String::new(),
+        (None, None) => return Err("--output is required".to_owned()),
+    };
+    if file.is_empty() || (output.is_empty() && frames.is_none()) {
         return Err("--file and --output cannot be empty".to_owned());
     }
     Ok(Invocation::Run(Args {
@@ -128,6 +158,7 @@ pub fn parse(arguments: impl IntoIterator<Item = OsString>) -> Result<Invocation
         muted,
         properties: overrides,
         passthrough,
+        frames,
     }))
 }
 
@@ -168,6 +199,7 @@ mod tests {
                 muted: false,
                 properties: Vec::new(),
                 passthrough: false,
+                frames: None,
             }
         );
     }

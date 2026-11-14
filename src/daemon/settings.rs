@@ -146,7 +146,8 @@ impl Settings {
 
     /// Applies every setting in a JSON object; a bad one is reported and left as it was.
     pub fn apply(&mut self, values: &Value, from: &str) {
-        for (key, value) in values.members() {
+        // `devices` in the config file is not a setting: the daemon reads it itself.
+        for (key, value) in values.members().filter(|(key, _)| *key != "devices") {
             if let Err(why) = self.set(key, value) {
                 log::warn!("{from}: {why}");
             }
@@ -245,6 +246,9 @@ fn map_from_value(value: &Value) -> BTreeMap<String, Value> {
 pub struct State {
     /// Settings changed over the socket: they win over the config file until `reload`.
     pub overrides: Map,
+    /// Devices set over the socket, by name: a description, or `null` for one of the
+    /// config file's that was taken away.
+    pub devices: Map,
     /// What each output showed, by output name.
     pub outputs: BTreeMap<String, Shown>,
     /// What was shown last on any output: what an output seen for the first time gets.
@@ -281,6 +285,7 @@ impl State {
         };
         Self {
             overrides: doc.get("settings").as_object().cloned().unwrap_or_default(),
+            devices: doc.get("devices").as_object().cloned().unwrap_or_default(),
             outputs: doc
                 .get("outputs")
                 .members()
@@ -294,6 +299,7 @@ impl State {
     pub fn save(&self, path: &Path) {
         let doc = obj! {
             "settings" => Value::Object(self.overrides.clone()),
+            "devices" => Value::Object(self.devices.clone()),
             "outputs" => Value::Object(self.outputs.iter().map(|(name, shown)| (name.clone(), shown_to_value(shown))).collect()),
             "last" => shown_to_value(&self.last),
         };
@@ -396,6 +402,8 @@ mod tests {
         let path = dir.join("state.json");
         let mut state = State::default();
         state.overrides.insert("fps", Value::from(30));
+        state.devices.insert("panel", wepaper_json::parse(r#"{"size": [480, 480], "exec": "cat"}"#).unwrap());
+        state.devices.insert("gone", Value::Null);
         let shown = Shown {
             wallpaper: Some("/walls/a b".into()),
             properties: [("speed".to_owned(), Value::from(2))].into(),

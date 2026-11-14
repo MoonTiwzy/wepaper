@@ -10,9 +10,11 @@
 //! - [`bridge`]: Wallpaper Engine's JavaScript API inside the page, and the messages to it.
 //! - [`page`]: the web view.
 //! - [`surface`]: the layer-shell window.
+//! - [`frames`]: the page for a device: no surface anybody sees, its frames written out.
 
 mod args;
 mod bridge;
+mod frames;
 mod log;
 mod page;
 mod properties;
@@ -93,7 +95,12 @@ fn run(args: Args) -> Result<u8, Fatal> {
     let location = Location::find(&args.dir, &args.file).map_err(Fatal::new)?;
     let display = surface::connect().map_err(Fatal::new)?;
 
-    let monitor = wait_for_monitor(&display, &args.output).ok_or_else(|| Fatal {
+    let monitor = match (&args.frames, args.output.is_empty()) {
+        // A device's page: any output holds the window nobody sees.
+        (Some(_), true) => wait_for_any_monitor(&display),
+        _ => wait_for_monitor(&display, &args.output),
+    };
+    let monitor = monitor.ok_or_else(|| Fatal {
         message: format!(
             "no output named {}; there are: {}",
             args.output,
@@ -126,18 +133,32 @@ fn run(args: Args) -> Result<u8, Fatal> {
         ready: Cell::new(false),
         audio_wanted: Cell::new(false),
         crashes: Cell::new(0),
+        frames_paused: Rc::new(Cell::new(false)),
     });
     session.page.set_muted(args.muted);
 
-    let window = surface::create(
-        &SurfaceOptions {
-            monitor: &monitor,
-            layer: args.layer,
-            namespace: &args.namespace,
-            passthrough: args.passthrough,
-        },
-        session.page.widget(),
-    );
+    let window = match args.frames {
+        Some(frames) => frames::hidden_window(&monitor, frames.size, session.page.widget()),
+        None => surface::create(
+            &SurfaceOptions {
+                monitor: &monitor,
+                layer: args.layer,
+                namespace: &args.namespace,
+                passthrough: args.passthrough,
+            },
+            session.page.widget(),
+        ),
+    };
+    // A device's frames: taken from the page for as long as the session lasts.
+    let _capture = args.frames.map(|frames| {
+        let weak = Rc::downgrade(&session);
+        let paused = session.frames_paused.clone();
+        frames::Capture::start(session.page.widget(), frames, args.fps.unwrap_or(30), paused, move || {
+            if let Some(session) = weak.upgrade() {
+                session.stop_with(Fatal::new("the device's program stopped taking frames"));
+            }
+        })
+    });
 
     let weak = Rc::downgrade(&session);
     session.page.on_event(move |event| {
@@ -182,6 +203,21 @@ fn wait_for_monitor(display: &gdk::Display, name: &str) -> Option<gdk::Monitor> 
     let context = glib::MainContext::default();
     for _ in 0..40 {
         if let Some(monitor) = surface::monitor_named(display, name) {
+            return Some(monitor);
+        }
+        while context.iteration(false) {}
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    None
+}
+
+/// Any output, for a window nobody sees; one that is not there yet gets a moment.
+fn wait_for_any_monitor(display: &gdk::Display) -> Option<gdk::Monitor> {
+    let context = glib::MainContext::default();
+    for _ in 0..40 {
+        if let Some(name) = surface::connectors(display).first()
+            && let Some(monitor) = surface::monitor_named(display, name)
+        {
             return Some(monitor);
         }
         while context.iteration(false) {}
@@ -254,6 +290,8 @@ struct Session {
     /// Whether the page listens to the audio spectrum.
     audio_wanted: Cell<bool>,
     crashes: Cell<u32>,
+    /// For a device: no frames are taken while the wallpaper is paused.
+    frames_paused: Rc<Cell<bool>>,
 }
 
 impl Session {
@@ -303,6 +341,7 @@ impl Session {
     }
 
     fn set_paused(&self, paused: bool) {
+        self.frames_paused.set(paused);
         self.state.borrow_mut().paused = paused;
         self.page.run(&bridge::paused(paused));
     }

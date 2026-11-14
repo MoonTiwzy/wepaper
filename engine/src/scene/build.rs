@@ -237,6 +237,7 @@ impl SceneInstance {
             zoom: scene.general.zoom.value.max(0.01),
             viewport,
             fill: Fill::Cover,
+            frame: crate::Frame::default(),
             view_projection: Mat4::IDENTITY,
             skipped,
             project,

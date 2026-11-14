@@ -5,6 +5,7 @@
 //! draws the outputs that are due a frame.
 
 mod control;
+mod device;
 mod look;
 mod plugins;
 mod server;
@@ -41,6 +42,9 @@ Without a wallpaper it shows what it showed last.
       --assets DIR     Wallpaper Engine's assets folder (default: found in Steam)
       --set KEY=VALUE  a setting for this run, e.g. --set fps=30 (repeatable)
       --plugins DIR    one more folder to look for plugins in (repeatable)
+
+Devices (outputs that are not screens) are described in the config file and under
+`devices/` in the control tree: see docs/devices.md.
 ";
 
 /// Set by SIGINT and SIGTERM.
@@ -118,8 +122,19 @@ struct Daemon {
     state_file: PathBuf,
     /// Where what is remembered about each wallpaper is kept.
     memory_dir: PathBuf,
-    /// By output id.
+    /// By output id: a monitor's, or a device's.
     slots: HashMap<u32, Slot>,
+    /// The outputs that are not screens.
+    devices: Vec<device::Device>,
+    /// The devices of the config file, as it describes them.
+    device_config: wepaper_json::Value,
+    /// The devices there are, on or off: the config file's and those set over the socket.
+    device_specs: std::collections::BTreeMap<String, device::Spec>,
+    /// The devices changed: `devices` is to be made to match.
+    devices_dirty: bool,
+    next_device: u32,
+    /// The control socket, for the programs devices start.
+    socket: PathBuf,
     /// When the outputs were last looked at for drawing.
     last_round: Instant,
     last_upkeep: Instant,
@@ -189,7 +204,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     log::info!("drawing with {}", context.description);
     let state = State::load(&state_file);
     let mut settings = Settings::default();
-    control::read_config(&mut settings, &config_file);
+    let device_config = control::read_config(&mut settings, &config_file);
     settings.apply(&wepaper_json::Value::Object(state.overrides.clone()), "saved settings");
     for (key, value) in &from_flags {
         settings.set(key, value)?;
@@ -235,6 +250,12 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         memory_dir: state_file.parent().unwrap_or(std::path::Path::new(".")).join("wallpapers"),
         state_file,
         slots: HashMap::new(),
+        devices: Vec::new(),
+        device_config,
+        device_specs: std::collections::BTreeMap::new(),
+        devices_dirty: true,
+        next_device: device::FIRST_ID,
+        socket: socket.clone(),
         last_round: now,
         last_upkeep: now,
         release_at: None,
@@ -265,6 +286,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     // and so does everything else that holds what the context made: fields are
     // dropped in the order they are declared, and the context is declared first.
     daemon.slots.clear();
+    daemon.devices.clear();
     daemon.display.heads.clear();
     let Daemon { engine, shaders, context, .. } = daemon;
     drop(shaders);
@@ -281,6 +303,7 @@ impl Daemon {
                 .dispatch_pending(&mut self.display)
                 .map_err(|e| format!("the compositor went away: {e}"))?;
             self.follow_outputs();
+            self.follow_devices();
             for incoming in self.server.receive() {
                 let response = match incoming.request {
                     Ok(request) => self.handle(request, incoming.client),
@@ -377,8 +400,115 @@ impl Daemon {
         }
     }
 
-    /// The size the output's surface is drawn at; a guess until the compositor has said.
+    /// Makes the devices that are outputs match the devices there are: new ones get
+    /// what they showed last, changed ones are sized or started anew, those that went
+    /// or were turned off stop.
+    fn follow_devices(&mut self) {
+        if self.devices_dirty {
+            self.devices_dirty = false;
+            self.device_specs = device::specs(&self.device_config, &self.state.devices);
+            let now = Instant::now();
+            let gone: Vec<u32> = self
+                .devices
+                .iter()
+                .filter(|device| !self.device_specs.get(&device.name).is_some_and(|spec| spec.enabled))
+                .map(|device| device.id)
+                .collect();
+            for id in gone {
+                if let Some(device) = self.devices.iter().find(|device| device.id == id) {
+                    log::info!("{}: the device is no output any more", device.name);
+                }
+                self.devices.retain(|device| device.id != id);
+                self.slots.remove(&id);
+                self.release();
+            }
+            let wanted: Vec<(String, device::Spec)> = self
+                .device_specs
+                .iter()
+                .filter(|(_, spec)| spec.enabled)
+                .map(|(name, spec)| (name.clone(), spec.clone()))
+                .collect();
+            for (name, spec) in wanted {
+                if self.display.heads.iter().any(|head| head.name.as_deref() == Some(name.as_str())) {
+                    log::warn!("device {name}: a monitor has that name; the device is not made an output");
+                    continue;
+                }
+                match self.devices.iter_mut().find(|device| device.name == name) {
+                    Some(device) if device.spec == spec => {}
+                    Some(device) => {
+                        let resized = device.spec.size != spec.size;
+                        if resized || device.spec.exec != spec.exec {
+                            // Its program was started for the old size, or is another now.
+                            device.stop();
+                        }
+                        device.spec = spec;
+                        if let Some(slot) = self.slots.get_mut(&device.id) {
+                            slot.stale = true;
+                            // A plugin draws for the size and into the program it was
+                            // started with: it is started again.
+                            if slot.renderer.is_some() {
+                                slot.renderer = None;
+                                slot.waiting = slot.shown.wallpaper.is_some();
+                            }
+                            if resized {
+                                // The wallpaper was loaded for the old size.
+                                device.frame = None;
+                                slot.staging = None;
+                                slot.waiting = slot.shown.wallpaper.is_some();
+                            }
+                        }
+                    }
+                    None => {
+                        let id = self.next_device;
+                        self.next_device += 1;
+                        log::info!(
+                            "{name}: a device of {}x{} at {} frames a second",
+                            spec.size.0,
+                            spec.size.1,
+                            spec.fps
+                        );
+                        let mut slot = Slot::new(now);
+                        slot.shown =
+                            self.state.outputs.get(&name).cloned().unwrap_or_else(|| self.state.last.clone());
+                        slot.waiting = slot.shown.wallpaper.is_some();
+                        self.slots.insert(id, slot);
+                        self.devices.push(device::Device::new(id, name, spec));
+                    }
+                }
+            }
+        }
+        let waiting: Vec<(u32, String)> = self
+            .devices
+            .iter()
+            .filter(|device| self.slots.get(&device.id).is_some_and(|slot| slot.waiting))
+            .map(|device| (device.id, device.name.clone()))
+            .collect();
+        for (id, name) in waiting {
+            let Some(slot) = self.slots.get_mut(&id) else { continue };
+            slot.waiting = false;
+            let shown = slot.shown.clone();
+            if let Err(why) = self.load(id, &shown) {
+                log::error!("{name}: {why}");
+            }
+        }
+    }
+
+    /// The name of an output: a monitor's connector, or a device's.
+    fn name_of(&self, id: u32) -> Option<String> {
+        self.display
+            .heads
+            .iter()
+            .find(|head| head.id == id)
+            .and_then(|head| head.name.clone())
+            .or_else(|| self.devices.iter().find(|device| device.id == id).map(|device| device.name.clone()))
+    }
+
+    /// The size an output is drawn at: a device's own, a surface's; a guess until
+    /// the compositor has said.
     fn viewport(&self, id: u32) -> Viewport {
+        if let Some(device) = self.devices.iter().find(|device| device.id == id) {
+            return Viewport { width: device.spec.size.0, height: device.spec.size.1 };
+        }
         let size = self
             .display
             .heads
@@ -425,46 +555,64 @@ impl Daemon {
         let viewport = self.viewport(id);
         let (_, project) = self.engine.open(folder).map_err(|e| e.to_string())?;
         let kind = project.kind.name();
-        let name = self
-            .display
-            .heads
-            .iter()
-            .find(|head| head.id == id)
-            .and_then(|head| head.name.clone())
-            .unwrap_or_default();
+        let name = self.name_of(id).unwrap_or_default();
 
         // A kind the engine does not draw goes to the plugin that does.
         let loaded = if let Some(manifest) = self.plugins.renderer_for(kind).cloned() {
-            let mut arguments: Vec<String> = [
-                "--dir",
-                &folder.to_string_lossy(),
-                "--file",
-                &project.file,
-                "--output",
-                &name,
-                "--layer",
-                self.settings.layer.name(),
-                "--namespace",
-                wayland::NAMESPACE,
-            ]
-            .map(str::to_owned)
-            .into();
-            arguments.extend([
-                "--fps".to_owned(),
-                self.settings.fps.to_string(),
-                "--volume".to_owned(),
-                format!("{:.0}", self.settings.volume),
-            ]);
+            let mut arguments: Vec<String> =
+                ["--dir", &folder.to_string_lossy(), "--file", &project.file].map(str::to_owned).into();
+            // A device has no surface: the plugin draws for it unseen, at the device's
+            // size and rate, and writes the frames to the device's program itself.
+            let frames = match self.devices.iter_mut().find(|device| device.id == id) {
+                Some(device) => {
+                    // The plugin that drew here before goes first: while it holds the
+                    // pipe, the program it fed does not see its input end.
+                    if let Some(slot) = self.slots.get_mut(&id) {
+                        slot.renderer = None;
+                    }
+                    let pipe = device.pipe(&self.socket).inspect_err(|why| {
+                        if let Some(slot) = self.slots.get_mut(&id) {
+                            slot.error = Some(why.clone());
+                        }
+                    })?;
+                    arguments.extend([
+                        "--frames".to_owned(),
+                        format!("{}x{}", device.spec.size.0, device.spec.size.1),
+                        "--frames-fd".to_owned(),
+                        plugins::FRAMES_FD.to_string(),
+                        "--fps".to_owned(),
+                        device.spec.fps.to_string(),
+                    ]);
+                    Some(pipe)
+                }
+                None => {
+                    arguments.extend(
+                        [
+                            "--output",
+                            &name,
+                            "--layer",
+                            self.settings.layer.name(),
+                            "--namespace",
+                            wayland::NAMESPACE,
+                            "--fps",
+                            &self.settings.fps.to_string(),
+                        ]
+                        .map(str::to_owned),
+                    );
+                    if self.settings.passthrough {
+                        arguments.push("--passthrough".to_owned());
+                    }
+                    None
+                }
+            };
+            arguments.extend(["--volume".to_owned(), format!("{:.0}", self.settings.volume)]);
             // Silent until the sound is settled: of the outputs that show this
             // wallpaper, one is heard.
             arguments.push("--muted".to_owned());
-            if self.settings.passthrough {
-                arguments.push("--passthrough".to_owned());
-            }
             for (property, value) in properties {
                 arguments.extend(["--property".to_owned(), format!("{property}={}", value.to_json())]);
             }
-            self.plugins.render(&manifest, &arguments).map(Err)
+            self.plugins.render(&manifest, &arguments, frames).map(Err)
         } else {
             self.engine.load(folder, viewport, properties).map(Ok).map_err(|e| e.to_string())
         };
@@ -486,9 +634,15 @@ impl Daemon {
                         }
                         wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
                         wallpaper.set_rate(slot.shown.look.rate);
+                        wallpaper.set_frame(slot.shown.look.frame());
                         wallpaper.set_paused(slot.paused);
                         slot.wallpaper = Some(wallpaper);
                         slot.renderer = None;
+                        // A device a plugin drew for: its program ends with the plugin,
+                        // and the engine's frames start one anew.
+                        if let Some(device) = self.devices.iter_mut().find(|device| device.id == id) {
+                            device.unpipe();
+                        }
                     }
                     Err(mut renderer) => {
                         if slot.paused {
@@ -552,6 +706,9 @@ impl Daemon {
             self.last_upkeep = now;
             self.optimising = self.engine.videos().optimise();
             self.plugins.upkeep();
+            for device in &mut self.devices {
+                device.upkeep();
+            }
             if self.release_at.is_some_and(|at| now >= at) {
                 self.release();
                 self.release_at = None;
@@ -714,6 +871,95 @@ impl Daemon {
                 log::warn!("{error}");
             }
         }
+        self.draw_devices(now, wake)
+    }
+
+    /// Draws every device that is due a frame and hands the frame to its program.
+    /// A device has no display to ask for frames: its own rate is its clock.
+    fn draw_devices(&mut self, now: Instant, mut wake: Option<Instant>) -> Option<Instant> {
+        for index in 0..self.devices.len() {
+            let device = &mut self.devices[index];
+            let (id, size) = (device.id, device.spec.size);
+            let Some(slot) = self.slots.get_mut(&id) else { continue };
+            let Some(wallpaper) = slot.wallpaper.as_mut() else { continue };
+            if slot.paused && !slot.stale {
+                continue;
+            }
+            if !slot.stale && now + Duration::from_millis(1) < slot.due {
+                wake = Some(wake.map_or(slot.due, |at| at.min(slot.due)));
+                continue;
+            }
+            let interval = Duration::from_secs_f64(1.0 / f64::from(device.spec.fps.max(1)));
+            slot.due = (slot.due + interval).max(now);
+            if !slot.paused {
+                wake = Some(wake.map_or(slot.due, |at| at.min(slot.due)));
+                slot.clock += now.duration_since(slot.last_tick).as_secs_f64().min(0.25)
+                    * f64::from(slot.shown.look.rate);
+            }
+            slot.last_tick = now;
+            if self.context.make_current(None).is_err() {
+                continue;
+            }
+            let input = FrameInput {
+                time: slot.clock,
+                pointer: [0.5, 0.5],
+                pointer_down: false,
+                daytime: control::daytime(),
+            };
+            let look = slot.shown.look;
+            if let Some(pass) = &mut self.look_pass {
+                pass.enabled = !look.plain_picture();
+                look.apply(pass);
+            }
+            let shaded = self.shaders.iter().any(|(_, pass)| pass.enabled)
+                || self.look_pass.as_ref().is_some_and(|pass| pass.enabled);
+            if shaded {
+                if slot.staging.as_ref().is_none_or(|t| (t.width(), t.height()) != size) {
+                    slot.staging =
+                        gpu::Target::new(self.engine.gl(), size.0, size.1, gpu::TextureFormat::Rgba8)
+                            .inspect_err(|e| log::warn!("{e}"))
+                            .ok();
+                }
+            } else {
+                slot.staging = None;
+            }
+            let Some(frame) = device.target(self.engine.gl()) else { continue };
+            let drew = match &slot.staging {
+                Some(staging) => {
+                    let drew = wallpaper.draw(
+                        &mut self.engine,
+                        &input,
+                        Some(staging.framebuffer()),
+                        size,
+                        slot.stale,
+                    );
+                    if drew {
+                        let passes: Vec<&wepaper_engine::post::PostPass> =
+                            self.look_pass.iter().chain(self.shaders.iter().map(|(_, pass)| pass)).collect();
+                        self.engine.post(
+                            &passes,
+                            staging,
+                            Some(frame.framebuffer()),
+                            size,
+                            slot.clock as f32,
+                        );
+                    }
+                    drew
+                }
+                None => wallpaper.draw(&mut self.engine, &input, Some(frame.framebuffer()), size, slot.stale),
+            };
+            if !drew {
+                continue; // A video without a new frame: the device keeps the one it has.
+            }
+            slot.stale = false;
+            slot.last_draw = now;
+            if now.duration_since(slot.frames.0) >= Duration::from_secs(1) {
+                slot.frames = (now, 0, slot.frames.1);
+            }
+            slot.frames.1 += 1;
+            let rgb = device::rgb_of(&frame.read_rgba());
+            device.send(rgb, &self.socket);
+        }
         wake
     }
 
@@ -734,6 +980,16 @@ impl Daemon {
                     loads: slot.loads,
                 })
             })
+            // After the monitors: a wallpaper that is on a monitor too is heard there.
+            .chain(self.devices.iter().filter_map(|device| {
+                let slot = self.slots.get(&device.id)?;
+                Some(sound::Playing {
+                    id: device.id,
+                    wallpaper: slot.shown.wallpaper.clone().filter(|_| slot.wallpaper.is_some()),
+                    paused: slot.paused,
+                    loads: slot.loads,
+                })
+            }))
             .collect();
         if now != self.sounding {
             self.sounding = now;
@@ -779,6 +1035,11 @@ impl Daemon {
         for head in &self.display.heads {
             if let (Some(name), Some(slot)) = (&head.name, self.slots.get(&head.id)) {
                 self.state.outputs.insert(name.clone(), slot.shown.clone());
+            }
+        }
+        for device in &self.devices {
+            if let Some(slot) = self.slots.get(&device.id) {
+                self.state.outputs.insert(device.name.clone(), slot.shown.clone());
             }
         }
         self.state.save(&self.state_file);

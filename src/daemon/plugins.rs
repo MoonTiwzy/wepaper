@@ -265,6 +265,9 @@ impl Drop for Renderer {
     }
 }
 
+/// The descriptor a renderer plugin finds a device's frames pipe at.
+pub const FRAMES_FD: i32 = 3;
+
 /// The plugins and what of them runs.
 pub struct Plugins {
     pub manifests: Vec<Manifest>,
@@ -372,18 +375,43 @@ impl Plugins {
         self.services.get(id).is_some_and(|running| running.child.is_some())
     }
 
-    /// Starts a renderer plugin's process for one output.
-    pub fn render(&self, manifest: &Manifest, arguments: &[String]) -> Result<Renderer, String> {
+    /// Starts a renderer plugin's process for one output. `frames`, for an output
+    /// that is a device, becomes the process's descriptor 3: where it writes its
+    /// frames instead of drawing on a surface.
+    pub fn render(
+        &self,
+        manifest: &Manifest,
+        arguments: &[String],
+        frames: Option<std::os::fd::OwnedFd>,
+    ) -> Result<Renderer, String> {
         let mut words = manifest.exec.split_whitespace().skip(1).map(str::to_owned).collect::<Vec<_>>();
         words.extend_from_slice(arguments);
-        let child = Command::new(manifest.program())
+        let mut command = Command::new(manifest.program());
+        command
             .args(words)
             .current_dir(&manifest.dir)
             .env("WEPAPER_SOCKET", &self.socket)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::null());
+        if let Some(frames) = &frames {
+            use std::os::unix::process::CommandExt;
+            let from = frames.as_raw_fd();
+            // SAFETY: `dup2` is async-signal-safe, and `from` stays open until the
+            // spawn below has returned.
+            unsafe {
+                command.pre_exec(move || {
+                    if libc::dup2(from, FRAMES_FD) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        let child = command
             .spawn()
             .map_err(|e| format!("{} could not be started: {e}", manifest.program().display()))?;
+        // Ours is closed now: the device's program sees its input end when the plugin goes.
+        drop(frames);
         if let Some(pipe) = &child.stdin {
             // SAFETY: sets a flag on a descriptor this process owns.
             unsafe {

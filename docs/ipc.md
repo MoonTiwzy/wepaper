@@ -31,7 +31,8 @@ name may be `*`, which means every output.
 | `outputs/<name>/fill` | this output's own fill mode, `null` for the setting | yes |
 | `outputs/<name>/look/rate` | how fast the wallpaper plays: 1 as made, 0 stands still | yes |
 | `outputs/<name>/look/volume` | the wallpaper's share of the volume, 0 to 1 (a scene's and a page's sounds) | yes |
-| `outputs/<name>/look/flip`, `zoom`, `shift_x`, `shift_y` | the picture mirrored, enlarged about its middle, moved by parts of the output | yes |
+| `outputs/<name>/look/flip` | the picture mirrored | yes |
+| `outputs/<name>/look/zoom`, `shift_x`, `shift_y` | which part of the wallpaper the output shows, on top of its fill: enlarged about the output's middle (1 as the fill has it, below 1 smaller, 0.05 to 20), moved right and up by widths and heights of the output (-20 to 20). The wallpaper itself is framed: what the fill cropped comes into view | yes |
 | `outputs/<name>/look/brightness`, `contrast`, `saturation`, `hue` | its colours: 1 is as it is, the hue turns in degrees; `null` puts any of a look's values back | yes |
 | `outputs/<name>/fps` | frames drawn in the last full second | |
 | `outputs/<name>/error` | why the last wallpaper asked for did not show, or `null` | |
@@ -52,6 +53,10 @@ name may be `*`, which means every output.
 | `.../wallpaper/layers/<id>/effects/<n>/visible` | whether an effect runs | yes |
 | `.../wallpaper/layers/<id>/effects/<n>/constants/<name>` | a constant of the effect's shaders: its strength, speed, colours, ... | yes |
 | `.../wallpaper/skipped` | what of the wallpaper could not be loaded, one line each | |
+| `outputs/<name>/device` | whether the output is a [device](devices.md), not a screen | |
+| `devices/<name>` | a device: `size`, `fps`, `exec`, `enabled`; `null` takes it away | yes |
+| `devices/<name>/size`, `fps`, `exec`, `enabled` | one field of it | yes |
+| `devices/<name>/running`, `sent`, `error` | whether its program is up, the frames it was handed, why it is not running | |
 | `plugins/<id>/enabled` | whether a plugin is on | yes |
 | `plugins/<id>/params/<name>` | a shader plugin's parameter | yes |
 | `memory/textures`, `buffers`, `video` | bytes of video memory, by what they hold | |

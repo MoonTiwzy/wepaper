@@ -21,12 +21,19 @@ pub(super) fn daytime() -> f32 {
     }
 }
 
-/// Reads the config file into `settings`. No file is no settings; a broken one is said so.
-pub(super) fn read_config(settings: &mut Settings, file: &Path) {
-    let Ok(text) = std::fs::read_to_string(file) else { return };
+/// Reads the config file into `settings` and returns the devices it describes. No
+/// file is no settings and no devices; a broken one is said so.
+pub(super) fn read_config(settings: &mut Settings, file: &Path) -> Value {
+    let Ok(text) = std::fs::read_to_string(file) else { return Value::Null };
     match wepaper_json::parse(&text) {
-        Ok(doc) => settings.apply(&doc, &file.display().to_string()),
-        Err(error) => log::error!("{}: {error}; the defaults are used", file.display()),
+        Ok(doc) => {
+            settings.apply(&doc, &file.display().to_string());
+            doc.get("devices").clone()
+        }
+        Err(error) => {
+            log::error!("{}: {error}; the defaults are used", file.display());
+            Value::Null
+        }
     }
 }
 
@@ -54,6 +61,49 @@ fn heap() -> Value {
     Value::Null
 }
 
+/// An output's node of the tree: what it is and what it shows.
+fn output_node(slot: &super::Slot, size: (u32, u32), scale: f64, device: bool) -> Value {
+    let wallpaper = match (&slot.wallpaper, &slot.shown.wallpaper) {
+        (Some(wallpaper), Some(folder)) => {
+            let project = wallpaper.project();
+            let mut node = Map::new();
+            node.insert("path", Value::from(folder.to_string_lossy().into_owned()));
+            node.insert("kind", Value::from(project.kind.name()));
+            node.insert("title", Value::from(&project.title));
+            node.insert("state", Value::from("playing"));
+            for (key, value) in wallpaper.tree().members() {
+                node.insert(key, value.clone());
+            }
+            Value::Object(node)
+        }
+        (None, Some(folder)) if slot.renderer.is_some() => {
+            let plugin = slot.renderer.as_ref().map(|r| r.plugin.clone()).unwrap_or_default();
+            obj! {
+                "path" => folder.to_string_lossy().into_owned(),
+                "kind" => plugin.clone(),
+                "title" => &slot.title,
+                "state" => "playing",
+                "plugin" => plugin,
+                "properties" => Value::Object(slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+            }
+        }
+        _ => Value::Null,
+    };
+    obj! {
+        "size" => vec![Value::from(size.0), Value::from(size.1)],
+        "scale" => scale,
+        // Not a screen: its frames go to a program (`devices/<name>`).
+        "device" => device,
+        "paused" => slot.paused,
+        "fill" => slot.shown.fill.map(Fill::name),
+        "look" => slot.shown.look.to_value(),
+        // The count of the last full second; nothing drawn for two means none.
+        "fps" => if slot.last_draw.elapsed().as_secs() >= 2 { 0 } else { slot.frames.2 },
+        "error" => slot.error.clone(),
+        "wallpaper" => wallpaper,
+    }
+}
+
 impl Daemon {
     /// Everything the daemon knows, as one tree.
     fn tree(&mut self) -> Value {
@@ -62,46 +112,22 @@ impl Daemon {
             let (Some(name), Some(slot)) = (&head.name, self.slots.get(&head.id)) else { continue };
             let size = head.sheet.as_ref().map(|sheet| sheet.pixels()).unwrap_or((0, 0));
             let scale = head.sheet.as_ref().map_or(1.0, |sheet| f64::from(sheet.scale_120) / 120.0);
-            let wallpaper = match (&slot.wallpaper, &slot.shown.wallpaper) {
-                (Some(wallpaper), Some(folder)) => {
-                    let project = wallpaper.project();
-                    let mut node = Map::new();
-                    node.insert("path", Value::from(folder.to_string_lossy().into_owned()));
-                    node.insert("kind", Value::from(project.kind.name()));
-                    node.insert("title", Value::from(&project.title));
-                    node.insert("state", Value::from("playing"));
-                    for (key, value) in wallpaper.tree().members() {
-                        node.insert(key, value.clone());
-                    }
-                    Value::Object(node)
-                }
-                (None, Some(folder)) if slot.renderer.is_some() => {
-                    let plugin = slot.renderer.as_ref().map(|r| r.plugin.clone()).unwrap_or_default();
-                    obj! {
-                        "path" => folder.to_string_lossy().into_owned(),
-                        "kind" => plugin.clone(),
-                        "title" => &slot.title,
-                        "state" => "playing",
-                        "plugin" => plugin,
-                        "properties" => Value::Object(slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
-                    }
-                }
-                _ => Value::Null,
-            };
-            outputs.insert(
-                name.clone(),
-                obj! {
-                    "size" => vec![Value::from(size.0), Value::from(size.1)],
-                    "scale" => scale,
-                    "paused" => slot.paused,
-                    "fill" => slot.shown.fill.map(Fill::name),
-                    "look" => slot.shown.look.to_value(),
-                    // The count of the last full second; nothing drawn for two means none.
-                    "fps" => if slot.last_draw.elapsed().as_secs() >= 2 { 0 } else { slot.frames.2 },
-                    "error" => slot.error.clone(),
-                    "wallpaper" => wallpaper,
-                },
-            );
+            outputs.insert(name.clone(), output_node(slot, size, scale, false));
+        }
+        let mut devices = Map::new();
+        for (name, spec) in &self.device_specs {
+            let mut node = spec.to_value();
+            let running = self.devices.iter().find(|device| device.name == *name);
+            if let Value::Object(map) = &mut node {
+                map.insert("running", Value::from(running.is_some_and(|device| device.running())));
+                map.insert("sent", Value::from(running.map_or(0, |device| device.sent)));
+                map.insert("error", Value::from(running.and_then(|device| device.error.clone())));
+            }
+            devices.insert(name.clone(), node);
+        }
+        for device in &self.devices {
+            let Some(slot) = self.slots.get(&device.id) else { continue };
+            outputs.insert(device.name.clone(), output_node(slot, device.spec.size, 1.0, true));
         }
         let memory = self.engine.gl().memory();
         let mut plugins = Map::new();
@@ -136,6 +162,7 @@ impl Daemon {
         obj! {
             "config" => self.settings.to_value(),
             "plugins" => Value::Object(plugins),
+            "devices" => Value::Object(devices),
             "outputs" => Value::Object(outputs),
             "memory" => obj! {
                 "textures" => memory.textures,
@@ -151,21 +178,23 @@ impl Daemon {
     }
 
     /// The ids of the outputs a name stands for: one output, or all for `None` and `*`.
+    /// Devices are outputs like the monitors.
     fn targets(&self, output: Option<&str>) -> Result<Vec<u32>, String> {
-        let known = || {
-            self.display.heads.iter().filter_map(|head| head.name.as_deref()).collect::<Vec<_>>().join(", ")
-        };
+        let outputs: Vec<(u32, &str)> = self
+            .display
+            .heads
+            .iter()
+            .filter_map(|head| Some((head.id, head.name.as_deref()?)))
+            .chain(self.devices.iter().map(|device| (device.id, device.name.as_str())))
+            .collect();
         match output.filter(|name| *name != "*") {
-            None => Ok(self
-                .display
-                .heads
-                .iter()
-                .filter(|head| head.name.is_some() && self.slots.contains_key(&head.id))
-                .map(|head| head.id)
-                .collect()),
-            Some(name) => match self.display.heads.iter().find(|head| head.name.as_deref() == Some(name)) {
-                Some(head) => Ok(vec![head.id]),
-                None => Err(format!("there is no output \"{name}\" (outputs: {})", known())),
+            None => Ok(outputs.iter().map(|(id, _)| *id).filter(|id| self.slots.contains_key(id)).collect()),
+            Some(name) => match outputs.iter().find(|(_, known)| *known == name) {
+                Some((id, _)) => Ok(vec![*id]),
+                None => Err(format!(
+                    "there is no output \"{name}\" (outputs: {})",
+                    outputs.iter().map(|(_, known)| *known).collect::<Vec<_>>().join(", ")
+                )),
             },
         }
     }
@@ -220,11 +249,16 @@ impl Daemon {
                     slot.stale = true;
                     // The surface would keep its last frame: a new one has nothing on
                     // it, and what is under the wallpaper shows.
-                    let name = self.display.heads.iter_mut().find(|head| head.id == id).and_then(|head| {
-                        head.sheet = None;
-                        head.name.clone()
-                    });
-                    self.display.cover(id, self.settings.layer, self.settings.passthrough);
+                    let name = self.name_of(id);
+                    if let Some(device) = self.devices.iter_mut().find(|device| device.id == id) {
+                        // Nothing to send: the program's input closes, and it ends.
+                        device.stop();
+                    } else {
+                        if let Some(head) = self.display.heads.iter_mut().find(|head| head.id == id) {
+                            head.sheet = None;
+                        }
+                        self.display.cover(id, self.settings.layer, self.settings.passthrough);
+                    }
                     self.plugins.announce(&Happening {
                         event: "hidden",
                         output: name.unwrap_or_default(),
@@ -247,6 +281,7 @@ impl Daemon {
             }
             Request::Reload => {
                 self.state.overrides = Map::new();
+                self.state.devices = Map::new();
                 self.recompute_settings();
                 self.save_state();
                 Ok(Value::Null)
@@ -273,13 +308,7 @@ impl Daemon {
                     renderer.send(&obj! { "cmd" => if paused { "pause" } else { "resume" } });
                 }
             }
-            let output = self
-                .display
-                .heads
-                .iter()
-                .find(|head| head.id == id)
-                .and_then(|head| head.name.clone())
-                .unwrap_or_default();
+            let output = self.name_of(id).unwrap_or_default();
             self.plugins.announce(&Happening {
                 event: if paused { "paused" } else { "resumed" },
                 output,
@@ -387,6 +416,7 @@ impl Daemon {
                     slot.stale = true;
                     if let Some(wallpaper) = &mut slot.wallpaper {
                         wallpaper.set_rate(slot.shown.look.rate);
+                        wallpaper.set_frame(slot.shown.look.frame());
                     }
                 }
                 self.apply_sound();
@@ -413,6 +443,44 @@ impl Daemon {
                     }
                 }
                 self.save_state();
+                Ok(())
+            }
+            ["devices", name] => {
+                super::device::name_ok(name)?;
+                if !value.is_null()
+                    && self.display.heads.iter().any(|head| head.name.as_deref() == Some(*name))
+                {
+                    return Err(format!("\"{name}\" is a monitor's name: a device needs one of its own"));
+                }
+                match value {
+                    // Taken away: one of the config file's has to be said to be gone.
+                    Value::Null if self.device_config.get(name).is_null() => {
+                        self.state.devices.remove(name);
+                    }
+                    Value::Null => {
+                        self.state.devices.insert(*name, Value::Null);
+                    }
+                    described => {
+                        let spec = super::device::Spec::from_value(described)?;
+                        self.state.devices.insert(*name, spec.to_value());
+                    }
+                }
+                self.devices_dirty = true;
+                self.save_state();
+                self.notify(&format!("devices/{name}"), value.clone());
+                Ok(())
+            }
+            ["devices", name, field] => {
+                let mut spec = self
+                    .device_specs
+                    .get(*name)
+                    .cloned()
+                    .ok_or_else(|| format!("there is no device \"{name}\""))?;
+                spec.set(field, value)?;
+                self.state.devices.insert(*name, spec.to_value());
+                self.devices_dirty = true;
+                self.save_state();
+                self.notify(&format!("devices/{name}/{field}"), value.clone());
                 Ok(())
             }
             ["plugins", id, "enabled"] => {
@@ -516,6 +584,15 @@ impl Daemon {
                 self.state.overrides.remove(key);
                 self.recompute_settings();
             }
+            // Back to the devices of the config file.
+            ["devices"] => {
+                self.state.devices = Map::new();
+                self.devices_dirty = true;
+            }
+            ["devices", name] => {
+                self.state.devices.remove(name);
+                self.devices_dirty = true;
+            }
             ["outputs", name, "wallpaper", "properties", rest @ ..] if rest.len() <= 1 => {
                 let mut remembered = Vec::new();
                 for id in self.targets(Some(name))? {
@@ -567,7 +644,8 @@ impl Daemon {
     fn recompute_settings(&mut self) {
         let before = self.settings.clone();
         let mut settings = Settings::default();
-        read_config(&mut settings, &self.config_file);
+        self.device_config = read_config(&mut settings, &self.config_file);
+        self.devices_dirty = true;
         settings.apply(&Value::Object(self.state.overrides.clone()), "saved settings");
         for (key, value) in &self.from_flags {
             let _ = settings.set(key, value);
@@ -630,8 +708,9 @@ impl Daemon {
             let viewport = self.viewport(id);
             (viewport.width, viewport.height)
         };
-        let head = self.display.heads.iter().find(|head| head.id == id).ok_or("the output is gone")?;
-        let pointer = head.pointer;
+        // A device has no pointer: its wallpaper sees it in the middle.
+        let pointer =
+            self.display.heads.iter().find(|head| head.id == id).map_or([0.5, 0.5], |head| head.pointer);
         let slot = self.slots.get_mut(&id).ok_or("the output is gone")?;
         let wallpaper = slot.wallpaper.as_mut().ok_or("no wallpaper is shown there")?;
         let frame =

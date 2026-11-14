@@ -117,6 +117,37 @@ impl Fill {
     }
 }
 
+/// Which part of a wallpaper an output shows, on top of its [`Fill`]: the picture
+/// enlarged about the output's middle and moved. It is the wallpaper that is framed,
+/// not its finished frame: what the fill cropped away comes into view, at the
+/// output's own sharpness, and past the wallpaper's edge there is its background.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    /// 1 as the fill has it, 2 twice as large, 0.5 half as large.
+    pub zoom: f32,
+    /// Moved right and up, in widths and heights of the output.
+    pub shift: [f32; 2],
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self { zoom: 1.0, shift: [0.0, 0.0] }
+    }
+}
+
+impl Frame {
+    /// The framing as a transform of what a projection made: it goes in front of the
+    /// projection, flat or in perspective, and what is moved into view is not clipped.
+    pub fn matrix(&self) -> math::Mat4 {
+        let mut m = math::Mat4::IDENTITY;
+        m.0[0] = self.zoom;
+        m.0[5] = self.zoom;
+        m.0[12] = self.shift[0] * 2.0;
+        m.0[13] = self.shift[1] * 2.0;
+        m
+    }
+}
+
 /// A playing wallpaper of any kind the engine draws itself.
 pub enum Wallpaper {
     /// A scene.
@@ -166,6 +197,14 @@ impl Wallpaper {
         match self {
             Wallpaper::Scene(scene) => scene.set_fill(fill),
             Wallpaper::Video(video) => video.set_fill(fill),
+        }
+    }
+
+    /// Changes which part of the wallpaper the output shows, on top of its fill.
+    pub fn set_frame(&mut self, frame: Frame) {
+        match self {
+            Wallpaper::Scene(scene) => scene.set_frame(frame),
+            Wallpaper::Video(video) => video.set_frame(frame),
         }
     }
 
@@ -447,5 +486,35 @@ impl Engine {
     /// The most effect buffers that were in use at once.
     pub fn peak_buffers(&self) -> usize {
         self.pool.peak_lent
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_goes_in_front_of_any_projection() {
+        assert_eq!(Frame::default().matrix(), math::Mat4::IDENTITY);
+        // A flat scene 1920x1080 on a square output, covering it: the sides are cropped.
+        let cover = math::Mat4::orthographic(420.0, 1500.0, 0.0, 1080.0, -1.0, 1.0);
+        let left_edge = [0.0, 540.0, 0.0];
+        assert!(cover.transform_point(left_edge)[0] < -1.0, "cropped away");
+        // Moved right by 0.4 of the output, the scene's left edge is inside it.
+        let framed = Frame { zoom: 1.0, shift: [0.4, 0.0] }.matrix().mul(&cover);
+        let at = framed.transform_point(left_edge);
+        assert!((at[0] - (cover.transform_point(left_edge)[0] + 0.8)).abs() < 1e-5 && at[0] > -1.0);
+        // Half as large about the middle: the whole width fits.
+        let small = Frame { zoom: 0.5, shift: [0.0, 0.0] }.matrix().mul(&cover);
+        assert!(small.transform_point(left_edge)[0] > -1.0);
+        assert!((small.transform_point([960.0, 540.0, 0.0])[0]).abs() < 1e-5, "the middle stays");
+        // In perspective the move is the same on the screen at every depth.
+        let lens = math::Mat4::perspective(1.0, 1.0, 0.1, 100.0);
+        let moved = Frame { zoom: 1.0, shift: [0.25, -0.25] }.matrix().mul(&lens);
+        for depth in [-1.0, -50.0] {
+            let (before, after) =
+                (lens.transform_point([0.3, 0.2, depth]), moved.transform_point([0.3, 0.2, depth]));
+            assert!((after[0] - before[0] - 0.5).abs() < 1e-5 && (after[1] - before[1] + 0.5).abs() < 1e-5);
+        }
     }
 }

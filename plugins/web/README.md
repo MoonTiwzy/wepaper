@@ -20,6 +20,20 @@ wepaper-web --dir <wallpaper folder> [--file index.html] --output <output name, 
 `--file` is the `file` of the wallpaper's `project.json`. `--fps 0` is no cap. A `--property` value
 that is not JSON is taken as text.
 
+For a device (an output that is not a screen, `docs/devices.md`) there is no surface to show the
+page on:
+
+```
+wepaper-web --dir <wallpaper folder> [--file index.html] --frames <WIDTH>x<HEIGHT> [--frames-fd 3]
+            [--output <output name>] [--fps N] [--volume 0..100] [--muted] [--property name=json]...
+```
+
+The page lives in a window as large as the device that nobody sees (fully transparent, on the
+background layer of `--output`, or of any output without it). `--fps` times a second (30 without
+it) WebKit is asked for a picture of the page, and the picture is written to the descriptor as raw
+RGB: three bytes a pixel, rows from the top, `WIDTH * HEIGHT * 3` bytes a frame. No frames are
+written while paused. When the descriptor's reader is gone the plugin exits.
+
 ## stdin: commands from the daemon
 
 One JSON object per line.

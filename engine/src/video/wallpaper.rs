@@ -41,6 +41,7 @@ struct Quad {
     /// The output's size.
     output: (u32, u32),
     fill: Fill,
+    frame: crate::Frame,
 }
 
 /// One playing copy of a video wallpaper, for one output.
@@ -48,6 +49,8 @@ pub struct VideoInstance {
     project: Project,
     hold: VideoHold,
     fill: Fill,
+    /// The part of the video the output shows, on top of the fill.
+    frame: crate::Frame,
     /// The quad the video is drawn on, for the sizes it was last made for.
     quad: Option<Quad>,
     /// The frame this instance drew last.
@@ -56,7 +59,14 @@ pub struct VideoInstance {
 
 impl VideoInstance {
     pub(crate) fn new(project: Project, stream: SharedVideo) -> Self {
-        Self { project, hold: VideoHold::new(stream), fill: Fill::Cover, quad: None, seen: 0 }
+        Self {
+            project,
+            hold: VideoHold::new(stream),
+            fill: Fill::Cover,
+            frame: crate::Frame::default(),
+            quad: None,
+            seen: 0,
+        }
     }
 
     /// The wallpaper's `project.json`.
@@ -72,6 +82,11 @@ impl VideoInstance {
     /// Changes how the video fills an output of another shape.
     pub fn set_fill(&mut self, fill: Fill) {
         self.fill = fill;
+    }
+
+    /// Changes which part of the video the output shows.
+    pub fn set_frame(&mut self, frame: crate::Frame) {
+        self.frame = frame;
     }
 
     /// Sets how loud the video is, 0 to 100. Shown on several outputs it is one
@@ -108,11 +123,9 @@ impl VideoInstance {
             return false;
         }
         self.seen = serial;
-        if self
-            .quad
-            .as_ref()
-            .is_none_or(|quad| (quad.video, quad.output, quad.fill) != (video, size, self.fill))
-        {
+        if self.quad.as_ref().is_none_or(|quad| {
+            (quad.video, quad.output, quad.fill, quad.frame) != (video, size, self.fill, self.frame)
+        }) {
             let (vw, vh, ow, oh) = (video.0 as f32, video.1 as f32, size.0 as f32, size.1 as f32);
             let scale = match self.fill {
                 Fill::Cover => (ow / vw).max(oh / vh),
@@ -122,16 +135,21 @@ impl VideoInstance {
             // Half the video's size on the output, in clip units; what is past the edge is cropped.
             let (x, y) =
                 if self.fill == Fill::Stretch { (1.0, 1.0) } else { (vw * scale / ow, vh * scale / oh) };
+            // The frame: the quad larger or smaller about the middle, and moved.
+            let (x, y) = (x * self.frame.zoom, y * self.frame.zoom);
+            let (dx, dy) = (self.frame.shift[0] * 2.0, self.frame.shift[1] * 2.0);
             match Mesh::quad(
                 &engine.gl,
                 &[
-                    [-x, -y, 0.0, 0.0, 1.0],
-                    [x, -y, 0.0, 1.0, 1.0],
-                    [-x, y, 0.0, 0.0, 0.0],
-                    [x, y, 0.0, 1.0, 0.0],
+                    [dx - x, dy - y, 0.0, 0.0, 1.0],
+                    [dx + x, dy - y, 0.0, 1.0, 1.0],
+                    [dx - x, dy + y, 0.0, 0.0, 0.0],
+                    [dx + x, dy + y, 0.0, 1.0, 0.0],
                 ],
             ) {
-                Ok(mesh) => self.quad = Some(Quad { mesh, video, output: size, fill: self.fill }),
+                Ok(mesh) => {
+                    self.quad = Some(Quad { mesh, video, output: size, fill: self.fill, frame: self.frame })
+                }
                 Err(error) => {
                     log::warn!("video quad: {error}");
                     return false;
@@ -139,7 +157,8 @@ impl VideoInstance {
             }
         }
         engine.gl.bind_framebuffer(to, size);
-        if self.fill == Fill::Contain {
+        // Where the video may not reach: bars, or what a frame moved it away from.
+        if self.fill == Fill::Contain || self.frame != crate::Frame::default() {
             engine.clear([0.0, 0.0, 0.0, 1.0]);
         }
         engine.gl.set_blend(Blend::None);

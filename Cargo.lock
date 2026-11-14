@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "wepaper"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "glow",
  "lexopt",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "wepaper-engine"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "glow",
@@ -1275,18 +1275,18 @@ dependencies = [
 
 [[package]]
 name = "wepaper-ipc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "wepaper-json",
 ]
 
 [[package]]
 name = "wepaper-json"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "wepaper-web"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "gtk4",
  "gtk4-layer-shell",

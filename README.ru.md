@@ -162,6 +162,20 @@ $ echo '{"cmd":"get","path":"memory"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/w
 строке демона задаёт значение, с которого настройка стартует, что бы ни говорили файл и прошлые
 запуски. Подробнее: [docs/configuration.md](docs/configuration.md).
 
+## Устройства
+
+Обои можно показывать и не на мониторе: на панели водянки, экране клавиатуры, в стриме.
+Устройство это размер, частота и программа, которая получает кадры сырым RGB на стандартный
+ввод. Во всём остальном это такой же выход, как монитор:
+
+```sh
+wepaper set devices/panel '{"size": [480, 480], "fps": 30, "exec": "send-frames"}'
+wepaper show 3566329932 --on panel
+wepaper set outputs/panel/fill contain
+```
+
+Подробнее: [docs/devices.md](docs/devices.md).
+
 ## Плагины
 
 Плагин это папка с `plugin.json` в `~/.config/wepaper/plugins/` или в

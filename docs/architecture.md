@@ -148,6 +148,13 @@ thread of its own, and a second thread watches the loop from outside: a daemon t
 is gone in three seconds, and one whose round takes half a minute exits with status 70 for
 whoever started it to start it again.
 
+## Devices
+
+An output need not be a screen. A [device](devices.md) is drawn like a monitor, into a buffer
+instead of a surface, on its own clock instead of the compositor's frame callbacks; the
+frame is read back and handed to a thread that writes it to the device's program. The loop
+hands over and goes on: the one thing it must never do is wait for somebody else's program.
+
 ## Plugins
 
 The daemon stays small by leaving things out. [Plugins](plugins.md) are how they come back:

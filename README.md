@@ -184,6 +184,20 @@ wepaper set plugins/dim/params/u_Amount 0.5
 
 Writing one takes a manifest and a file: [docs/plugins.md](docs/plugins.md).
 
+## Devices
+
+A wallpaper can also go to something that is not a monitor: the panel on a cooler, a
+keyboard's display, a stream. A device is a size, a rate and a program that gets the frames
+as raw RGB on its standard input, and it is an output like any other:
+
+```sh
+wepaper set devices/panel '{"size": [480, 480], "fps": 30, "exec": "send-frames"}'
+wepaper show 3566329932 --on panel
+wepaper set outputs/panel/fill contain
+```
+
+[docs/devices.md](docs/devices.md) has the rest.
+
 ## Tools
 
 The same binary works on wallpapers without showing them, and without a compositor:
