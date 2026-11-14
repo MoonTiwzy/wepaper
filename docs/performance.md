@@ -64,10 +64,10 @@ at 1440p) and a few kilobytes of state: the textures, the programs and the video
 the ones the first output uses.
 
 <!-- outputs:start -->
-| the scene with a 4K video | video memory, MiB | memory, MB | video decoders | threads |
+| the scene with a 4K video | video memory, MiB | memory | video decoders | threads |
 |---|---|---|---|---|
-| on one 2560x1440 output | 98 | 148 | 1 | 15 |
-| on two | 130 | 160 | 1 | 15 |
+| on one 2560x1440 output | 98 | | 1 | 15 |
+| on two | 130 | 12 MB more | 1 | 15 |
 
 Unplugging the second output gives its 32 MiB back at once.
 <!-- outputs:end -->
