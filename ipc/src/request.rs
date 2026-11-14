@@ -39,8 +39,9 @@ pub enum Request {
         wallpaper: String,
         /// The output to show it on; every output when `None`.
         output: Option<String>,
-        /// User property values to show it with.
-        properties: Vec<(String, Value)>,
+        /// The user property values to show it with, over the wallpaper's own.
+        /// `None` shows it with the values it had the last time it was shown.
+        properties: Option<Vec<(String, Value)>>,
     },
     /// Takes the wallpaper off an output (or all), leaving nothing drawn.
     Hide {
@@ -99,8 +100,11 @@ impl Request {
             Request::List { path } => obj! { "cmd" => "list", "path" => path },
             Request::Reset { path } => obj! { "cmd" => "reset", "path" => path },
             Request::Show { wallpaper, output, properties } => {
-                let values = Value::Object(properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect());
-                obj! { "cmd" => "show", "wallpaper" => wallpaper, "output" => on(output), "properties" => values }
+                let mut message = obj! { "cmd" => "show", "wallpaper" => wallpaper, "output" => on(output) };
+                if let (Some(properties), Value::Object(map)) = (properties, &mut message) {
+                    map.insert("properties", Value::Object(properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect()));
+                }
+                message
             }
             Request::Hide { output } => obj! { "cmd" => "hide", "output" => on(output) },
             Request::Pause { output } => obj! { "cmd" => "pause", "output" => on(output) },
@@ -139,7 +143,7 @@ impl Request {
             "show" => Request::Show {
                 wallpaper: text("wallpaper")?,
                 output: output()?,
-                properties: message.get("properties").members().map(|(name, value)| (name.to_owned(), value.clone())).collect(),
+                properties: message.get("properties").as_object().map(|map| map.iter().map(|(name, value)| (name.to_owned(), value.clone())).collect()),
             },
             "hide" => Request::Hide { output: output()? },
             "pause" => Request::Pause { output: output()? },

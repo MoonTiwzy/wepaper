@@ -22,7 +22,7 @@ use crate::{Fill, Viewport};
 
 pub(crate) use text::system_font;
 
-use bindings::{Bindings, Change, Slot};
+use bindings::{Bindings, Change, SceneField, Slot};
 use shade::Shade;
 
 /// How an image layer gets its picture.
@@ -134,6 +134,7 @@ pub(crate) struct Bloom {
 /// The scene's camera parallax settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Parallax {
+    pub(crate) enabled: bool,
     pub(crate) amount: f32,
     /// Seconds the camera takes to catch up with the pointer.
     pub(crate) delay: f32,
@@ -143,6 +144,7 @@ pub(crate) struct Parallax {
 /// The scene's camera shake settings.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Shake {
+    pub(crate) enabled: bool,
     pub(crate) amplitude: f32,
     pub(crate) roughness: f32,
     pub(crate) speed: f32,
@@ -190,16 +192,18 @@ pub struct SceneInstance {
     /// The videos the scene's layers show, held for as long as it plays.
     videos: Vec<crate::video::VideoHold>,
     /// The camera follows the pointer, shifting layers by their depth.
-    parallax: Option<Parallax>,
+    parallax: Parallax,
     /// The pointer as the parallax sees it: eased towards where it really is.
     eased_pointer: [f32; 2],
     /// The camera shakes.
-    shake: Option<Shake>,
+    shake: Shake,
     /// The time of the last frame, for what eases over time.
     last_time: f64,
     /// A shader of the scene reads the audio spectrum.
     wants_audio: bool,
     paused: bool,
+    /// Whether sound is on, and how loud (0 to 100), as last told.
+    sound: (bool, f32),
 }
 
 impl SceneInstance {
@@ -250,7 +254,17 @@ impl SceneInstance {
             Change::Floats(slot, floats) => {
                 let three = [floats.first().copied().unwrap_or(0.0), floats.get(1).copied().unwrap_or(0.0), floats.get(2).copied().unwrap_or(0.0)];
                 match slot {
-                    Slot::Zoom => self.zoom = three[0].max(0.01),
+                    Slot::Scene(field) => match field {
+                        SceneField::Zoom => self.zoom = three[0].max(0.01),
+                        SceneField::Clear => self.clear = three,
+                        SceneField::ParallaxAmount => self.parallax.amount = three[0],
+                        SceneField::ParallaxDelay => self.parallax.delay = three[0].max(0.0),
+                        SceneField::ParallaxMouse => self.parallax.mouse_influence = three[0],
+                        SceneField::ShakeAmplitude => self.shake.amplitude = three[0],
+                        SceneField::ShakeRoughness => self.shake.roughness = three[0],
+                        SceneField::ShakeSpeed => self.shake.speed = three[0],
+                        SceneField::Bloom | SceneField::Parallax | SceneField::Shake => {}
+                    },
                     Slot::LayerOrigin(layer) => self.layers[layer].origin = three,
                     Slot::LayerScale(layer) => self.layers[layer].scale = three,
                     Slot::LayerAngles(layer) => self.layers[layer].angles = three,
@@ -268,11 +282,16 @@ impl SceneInstance {
                 }
             }
             Change::Flag(Slot::LayerVisible(layer), on) => self.layers[layer].visible = on,
-            Change::Flag(Slot::Bloom, on) => {
-                if let Some(bloom) = &mut self.bloom {
-                    bloom.enabled = on;
+            Change::Flag(Slot::Scene(field), on) => match field {
+                SceneField::Bloom => {
+                    if let Some(bloom) = &mut self.bloom {
+                        bloom.enabled = on;
+                    }
                 }
-            }
+                SceneField::Parallax => self.parallax.enabled = on,
+                SceneField::Shake => self.shake.enabled = on,
+                _ => {}
+            },
             Change::Flag(Slot::EffectVisible(layer, effect), on) => {
                 if let LayerKind::Image(image) = &mut self.layers[layer].kind
                     && let Some(effect) = image.effects.get_mut(effect)
@@ -315,6 +334,7 @@ impl SceneInstance {
     /// Switches the scene's sound layers on or off and sets their volume (0 to 100).
     /// Off, nothing is decoded: there are no players at all.
     pub fn set_sound(&mut self, on: bool, volume: f32) {
+        self.sound = (on, volume);
         for layer in &mut self.layers {
             let visible = layer.visible;
             let LayerKind::Sound(sound) = &mut layer.kind else { continue };

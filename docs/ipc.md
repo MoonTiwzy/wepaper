@@ -35,10 +35,17 @@ name may be `*`, which means every output.
 | `.../wallpaper/path`, `kind`, `title` | what it is | |
 | `.../wallpaper/properties/<name>` | a user property's value | yes |
 | `.../wallpaper/schema` | the user properties' descriptions: label, type, range, options, default, condition | |
-| `.../wallpaper/layers/<id>/visible`, `origin`, `scale`, `angles` | a layer's place in the scene | yes |
+| `.../wallpaper/scene/zoom`, `clear` | the camera's zoom and the colour behind everything | yes |
+| `.../wallpaper/scene/bloom` | whether the scene blooms (only a scene made with bloom can) | yes |
+| `.../wallpaper/scene/parallax`, `parallax_amount`, `parallax_delay`, `parallax_mouse` | the camera following the pointer | yes |
+| `.../wallpaper/scene/shake`, `shake_amplitude`, `shake_roughness`, `shake_speed` | the camera shaking | yes |
+| `.../wallpaper/layers/<id>/visible`, `origin`, `scale`, `angles`, `parallax_depth` | a layer's place in the scene | yes |
 | `.../wallpaper/layers/<id>/alpha`, `color`, `brightness` | an image or text layer's look | yes |
 | `.../wallpaper/layers/<id>/text` | a text layer's text | yes |
+| `.../wallpaper/layers/<id>/volume` | a sound layer's own volume, 0 to 1 | yes |
+| `.../wallpaper/layers/<id>/constants/<name>` | a constant of the layer's own shader | yes |
 | `.../wallpaper/layers/<id>/effects/<n>/visible` | whether an effect runs | yes |
+| `.../wallpaper/layers/<id>/effects/<n>/constants/<name>` | a constant of the effect's shaders: its strength, speed, colours, ... | yes |
 | `.../wallpaper/skipped` | what of the wallpaper could not be loaded, one line each | |
 | `plugins/<id>/enabled` | whether a plugin is on | yes |
 | `plugins/<id>/params/<name>` | a shader plugin's parameter | yes |
@@ -50,6 +57,16 @@ name may be `*`, which means every output.
 Vectors (`origin`, `color`, ...) are arrays of numbers; on `set` an array, a string of numbers
 (`"1 0.5 0"`) or one number for all components is taken.
 
+### What is remembered
+
+What you `set` under `wallpaper/` belongs to that wallpaper, not to the moment: it is kept in
+`$XDG_STATE_HOME/wepaper/wallpapers/<id>.json` (next to the state file, wherever `--state`
+puts it) and comes back whenever the wallpaper is shown again, on any output, after any
+restart. `reset` forgets: `outputs/<name>/wallpaper` everything, `.../wallpaper/properties`
+the user properties, `.../wallpaper/layers/12` or `.../wallpaper/scene/zoom` what was changed
+under that path. A `show` that names `properties` starts the wallpaper with exactly those
+values over its own; a `show` without them starts it as it was left.
+
 ## Requests
 
 | `cmd` | fields | answer |
@@ -59,8 +76,8 @@ Vectors (`origin`, `color`, ...) are arrays of numbers; on `set` an array, a str
 | `status` | | the same as `get` without a path |
 | `set` | `path`, `value` | `null` |
 | `list` | `path` | the names under the path |
-| `reset` | `path` | `null`. `config` or `config/<key>`: back to the config file; `outputs/<name>/wallpaper/properties[/<name>]`: back to the wallpaper's own values |
-| `show` | `wallpaper` (a folder or a workshop id), `output`?, `properties`? | `null` once it shows; an error, and the old wallpaper stays, when it cannot |
+| `reset` | `path` | `null`. `config` or `config/<key>`: back to the config file; `outputs/<name>/wallpaper` and anything under it: back to the wallpaper's own values |
+| `show` | `wallpaper` (a folder or a workshop id), `output`?, `properties`? (an object; absent: the values it was left with) | `null` once it shows; an error, and the old wallpaper stays, when it cannot |
 | `hide` | `output`? | `null` |
 | `pause`, `resume` | `output`? | `null` |
 | `snapshot` | `file`, `output`? | `null`; what the output shows right now is written as a PNG |

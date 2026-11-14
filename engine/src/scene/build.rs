@@ -11,7 +11,7 @@ use crate::math::Mat4;
 use crate::read::Files;
 use crate::{Engine, Fill, LoadError, Viewport};
 
-use super::bindings::{Bindings, Slot};
+use super::bindings::{Bindings, SceneField, Slot};
 use super::shade::{PassInput, Shade, TextureChoice, TextureRef};
 use super::{BufferSpec, Effect, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, SoundLayer, Step};
 
@@ -33,8 +33,18 @@ impl SceneInstance {
             skipped.push("the scene uses a perspective camera, which is drawn flat".to_owned());
         }
 
-        bindings.link(&scene.general.zoom, Slot::Zoom);
-        bindings.link(&scene.general.bloom, Slot::Bloom);
+        let general = &scene.general;
+        bindings.link(&general.zoom, Slot::Scene(SceneField::Zoom));
+        bindings.link(&general.clear_color, Slot::Scene(SceneField::Clear));
+        bindings.link(&general.bloom, Slot::Scene(SceneField::Bloom));
+        bindings.link(&general.parallax, Slot::Scene(SceneField::Parallax));
+        bindings.link(&general.parallax_amount, Slot::Scene(SceneField::ParallaxAmount));
+        bindings.link(&general.parallax_delay, Slot::Scene(SceneField::ParallaxDelay));
+        bindings.link(&general.parallax_mouse_influence, Slot::Scene(SceneField::ParallaxMouse));
+        bindings.link(&general.shake, Slot::Scene(SceneField::Shake));
+        bindings.link(&general.shake_amplitude, Slot::Scene(SceneField::ShakeAmplitude));
+        bindings.link(&general.shake_roughness, Slot::Scene(SceneField::ShakeRoughness));
+        bindings.link(&general.shake_speed, Slot::Scene(SceneField::ShakeSpeed));
         // The bloom is built when the scene can ever bloom: now, or when a property says so.
         let bloom = (scene.general.bloom.value || scene.general.bloom.user.is_some())
             .then(|| build_bloom(engine, files, &mut bindings, &scene))
@@ -104,20 +114,23 @@ impl SceneInstance {
             bloom,
             provides: std::collections::HashSet::new(),
             videos: Vec::new(),
-            parallax: scene.general.parallax.value.then(|| super::Parallax {
+            parallax: super::Parallax {
+                enabled: scene.general.parallax.value,
                 amount: scene.general.parallax_amount.value,
                 delay: scene.general.parallax_delay.value.max(0.0),
                 mouse_influence: scene.general.parallax_mouse_influence.value,
-            }),
+            },
             eased_pointer: [0.5, 0.5],
-            shake: scene.general.shake.value.then(|| super::Shake {
+            shake: super::Shake {
+                enabled: scene.general.shake.value,
                 amplitude: scene.general.shake_amplitude.value,
                 roughness: scene.general.shake_roughness.value,
                 speed: scene.general.shake_speed.value,
-            }),
+            },
             last_time: 0.0,
             wants_audio: false,
             paused: false,
+            sound: (false, 0.0),
         };
         instance.hold_videos();
         let (sound, volume) = (engine.share.videos.options.audio, engine.share.videos.options.volume);

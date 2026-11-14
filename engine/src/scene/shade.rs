@@ -79,10 +79,43 @@ pub(crate) struct Shade {
     pub(crate) program: Rc<Program>,
     pub(crate) samplers: Vec<(Uniform, u32, TextureRef)>,
     pub(crate) feeds: Vec<(Uniform, Feed)>,
+    /// The pass's constants by the name materials give them, with the feed each is.
+    pub(crate) constants: Vec<(String, usize)>,
     /// The pass reads the scene behind the layer.
     pub(crate) wants_background: bool,
     /// The pass reads the audio spectrum.
     pub(crate) wants_audio: bool,
+}
+
+impl Shade {
+    /// The current value of the constant `feed` is.
+    pub(crate) fn constant<'a>(&'a self, feed: usize, values: &'a [Vec<f32>]) -> &'a [f32] {
+        match self.feeds.get(feed) {
+            Some((_, Feed::Const(value))) => value,
+            Some((_, Feed::Value(slot))) => values.get(*slot).map_or(&[], Vec::as_slice),
+            _ => &[],
+        }
+    }
+
+    /// Sets every constant called `name`; whether there was one.
+    pub(crate) fn set_constant(&mut self, name: &str, value: &Value, values: &mut [Vec<f32>]) -> bool {
+        let mut found = false;
+        for (_, feed) in self.constants.iter().filter(|(constant, _)| constant == name) {
+            let Some((uniform, feed)) = self.feeds.get_mut(*feed) else { continue };
+            let count = components(uniform.kind) * uniform.count.max(1) as usize;
+            match feed {
+                Feed::Const(old) => *old = value_floats(value, count),
+                Feed::Value(slot) => {
+                    if let Some(old) = values.get_mut(*slot) {
+                        *old = value_floats(value, count);
+                    }
+                }
+                _ => continue,
+            }
+            found = true;
+        }
+        found
+    }
 }
 
 /// What a pass is compiled from.
@@ -245,6 +278,7 @@ impl Shade {
 
         let mut samplers = Vec::new();
         let mut feeds = Vec::new();
+        let mut constants = Vec::new();
         let mut wants_audio = false;
         for uniform in &program.uniforms {
             if matches!(uniform.kind, glow::SAMPLER_2D | glow::SAMPLER_3D | glow::SAMPLER_CUBE | glow::SAMPLER_2D_SHADOW) {
@@ -259,6 +293,9 @@ impl Shade {
                 feed
             } else {
                 let declared = pair.declared.uniforms.iter().find(|u| u.name == uniform.name);
+                if let Some(key) = declared.and_then(|d| d.material.as_deref()) {
+                    constants.push((key.to_owned(), feeds.len()));
+                }
                 let constant = declared.and_then(|d| d.material.as_deref()).and_then(|key| input.constants.iter().find(|(name, _)| name == key));
                 match (constant, declared) {
                     (Some((_, value)), _) if value.is_driven() => {
@@ -273,6 +310,6 @@ impl Shade {
             };
             feeds.push((uniform.clone(), feed));
         }
-        Ok(Self { program, samplers, feeds, wants_background, wants_audio })
+        Ok(Self { program, samplers, feeds, constants, wants_background, wants_audio })
     }
 }

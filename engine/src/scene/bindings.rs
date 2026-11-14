@@ -30,10 +30,57 @@ pub(crate) enum Slot {
     EffectVisible(usize, usize),
     /// A text layer's text.
     LayerText(usize),
-    /// How far the scene's camera is zoomed in.
+    /// One of the scene's own values: its camera, its bloom, its background.
+    Scene(SceneField),
+}
+
+/// A value of the scene itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SceneField {
     Zoom,
-    /// Whether the scene blooms.
+    Clear,
     Bloom,
+    Parallax,
+    ParallaxAmount,
+    ParallaxDelay,
+    ParallaxMouse,
+    Shake,
+    ShakeAmplitude,
+    ShakeRoughness,
+    ShakeSpeed,
+}
+
+impl SceneField {
+    /// Every field with its name in the control tree.
+    pub(crate) const ALL: [(&'static str, Self); 11] = [
+        ("zoom", Self::Zoom),
+        ("clear", Self::Clear),
+        ("bloom", Self::Bloom),
+        ("parallax", Self::Parallax),
+        ("parallax_amount", Self::ParallaxAmount),
+        ("parallax_delay", Self::ParallaxDelay),
+        ("parallax_mouse", Self::ParallaxMouse),
+        ("shake", Self::Shake),
+        ("shake_amplitude", Self::ShakeAmplitude),
+        ("shake_roughness", Self::ShakeRoughness),
+        ("shake_speed", Self::ShakeSpeed),
+    ];
+
+    /// Whether the field is a switch and not a number.
+    pub(crate) fn is_flag(self) -> bool {
+        matches!(self, Self::Bloom | Self::Parallax | Self::Shake)
+    }
+}
+
+impl Slot {
+    /// Whether the slot holds a switch and not numbers.
+    pub(crate) fn is_flag(self) -> bool {
+        match self {
+            Self::LayerVisible(_) | Self::EffectVisible(..) => true,
+            Self::Scene(field) => field.is_flag(),
+            _ => false,
+        }
+    }
 }
 
 /// A link from a user property to a slot.
@@ -122,7 +169,7 @@ impl Bindings {
                 playing.running = false;
             }
             changes.push(match playing.slot {
-                Slot::LayerVisible(_) | Slot::EffectVisible(..) | Slot::Bloom => Change::Flag(playing.slot, value.first().is_some_and(|v| *v > 0.5)),
+                slot if slot.is_flag() => Change::Flag(slot, value.first().is_some_and(|v| *v > 0.5)),
                 slot => Change::Floats(slot, value),
             });
         }
@@ -135,13 +182,11 @@ impl Bindings {
             .filter(|binding| binding.link.name == property)
             .filter_map(|binding| {
                 Some(match binding.slot {
-                    Slot::LayerVisible(_) | Slot::EffectVisible(..) | Slot::Bloom => Change::Flag(binding.slot, holds(value, binding.link.condition.as_deref())),
+                    slot if slot.is_flag() => Change::Flag(slot, holds(value, binding.link.condition.as_deref())),
                     Slot::LayerText(_) => Change::Text(binding.slot, String::from_doc(value)?),
                     Slot::Value(index) => Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len())),
-                    Slot::LayerAlpha(_) | Slot::Zoom => Change::Floats(binding.slot, value_floats(value, 1)),
-                    Slot::LayerColor(_) | Slot::LayerOrigin(_) | Slot::LayerScale(_) | Slot::LayerAngles(_) => {
-                        Change::Floats(binding.slot, value_floats(value, 3))
-                    }
+                    Slot::LayerAlpha(_) => Change::Floats(binding.slot, value_floats(value, 1)),
+                    _ => Change::Floats(binding.slot, value_floats(value, 3)),
                 })
             })
             .collect()

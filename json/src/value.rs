@@ -222,4 +222,12 @@ macro_rules! number_from {
         }
     )*};
 }
-number_from!(f64, f32, i64, i32, u64, u32, u16, u8, usize);
+number_from!(f64, i64, i32, u64, u32, u16, u8, usize);
+
+impl From<f32> for Value {
+    /// The number as it is written in single precision: `0.27`, not the nearest
+    /// double to its bits (`0.27000001072883606`).
+    fn from(number: f32) -> Self {
+        Value::Number(number.to_string().parse().unwrap_or(f64::from(number)))
+    }
+}

@@ -124,8 +124,64 @@ pub struct Shown {
     pub wallpaper: Option<PathBuf>,
     /// The user's property values for it.
     pub properties: BTreeMap<String, Value>,
+    /// What the user changed inside it, by path from the wallpaper: `layers/12/alpha`.
+    pub edits: BTreeMap<String, Value>,
     /// This output's own fill, when it has one.
     pub fill: Option<Fill>,
+}
+
+/// What is remembered about a wallpaper while it is not shown: the values it gets
+/// back the next time it is.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Remembered {
+    /// The user's property values.
+    pub properties: BTreeMap<String, Value>,
+    /// What the user changed inside it.
+    pub edits: BTreeMap<String, Value>,
+}
+
+impl Remembered {
+    /// The file that remembers the wallpaper in `folder`: named after a workshop
+    /// item's id, and after the whole path for any other folder.
+    pub fn file(dir: &Path, folder: &Path) -> PathBuf {
+        let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        let workshop = !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) && folder.parent().and_then(Path::file_name).is_some_and(|parent| parent == "431960");
+        if workshop {
+            return dir.join(format!("{name}.json"));
+        }
+        let hash = folder.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+        let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(40).collect();
+        dir.join(format!("{safe}-{hash:016x}.json"))
+    }
+
+    /// What is remembered about the wallpaper in `folder`; nothing when it was never changed.
+    pub fn load(dir: &Path, folder: &Path) -> Self {
+        let Some(doc) = std::fs::read_to_string(Self::file(dir, folder)).ok().and_then(|text| wepaper_json::parse(&text).ok()) else { return Self::default() };
+        Self { properties: map_from_value(doc.get("properties")), edits: map_from_value(doc.get("edits")) }
+    }
+
+    /// Remembers this for the wallpaper in `folder`. Nothing to remember removes the file.
+    pub fn save(&self, dir: &Path, folder: &Path) {
+        let file = Self::file(dir, folder);
+        if self.properties.is_empty() && self.edits.is_empty() {
+            let _ = std::fs::remove_file(file);
+            return;
+        }
+        let doc = obj! { "properties" => map_to_value(&self.properties), "edits" => map_to_value(&self.edits) };
+        let _ = std::fs::create_dir_all(dir);
+        let part = file.with_extension("json.part");
+        if let Err(error) = std::fs::write(&part, doc.to_json_pretty()).and_then(|()| std::fs::rename(&part, &file)) {
+            log::warn!("{}: {error}", file.display());
+        }
+    }
+}
+
+fn map_to_value(map: &BTreeMap<String, Value>) -> Value {
+    Value::Object(map.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+}
+
+fn map_from_value(value: &Value) -> BTreeMap<String, Value> {
+    value.members().map(|(k, v)| (k.to_owned(), v.clone())).collect()
 }
 
 /// What the daemon remembers between runs.
@@ -142,7 +198,8 @@ pub struct State {
 fn shown_to_value(shown: &Shown) -> Value {
     obj! {
         "wallpaper" => shown.wallpaper.as_ref().map(|p| p.to_string_lossy().into_owned()),
-        "properties" => Value::Object(shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),
+        "properties" => map_to_value(&shown.properties),
+        "edits" => map_to_value(&shown.edits),
         "fill" => shown.fill.map(Fill::name),
     }
 }
@@ -150,7 +207,8 @@ fn shown_to_value(shown: &Shown) -> Value {
 fn shown_from_value(value: &Value) -> Shown {
     Shown {
         wallpaper: value.get("wallpaper").as_str().map(PathBuf::from),
-        properties: value.get("properties").members().map(|(k, v)| (k.to_owned(), v.clone())).collect(),
+        properties: map_from_value(value.get("properties")),
+        edits: map_from_value(value.get("edits")),
         fill: value.get("fill").as_str().and_then(Fill::from_name),
     }
 }
@@ -202,6 +260,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_wallpaper_is_remembered_by_its_folder() {
+        let dir = std::env::temp_dir().join(format!("wepaper-test-remembered-{}", std::process::id()));
+        let workshop = Path::new("/steam/steamapps/workshop/content/431960/3566329932");
+        assert_eq!(Remembered::file(&dir, workshop), dir.join("3566329932.json"));
+        let (mine, other) = (Path::new("/walls/my scene"), Path::new("/other/my scene"));
+        assert_ne!(Remembered::file(&dir, mine), Remembered::file(&dir, other), "folders of one name are different wallpapers");
+        assert!(Remembered::file(&dir, mine).file_name().unwrap().to_string_lossy().starts_with("my_scene-"));
+
+        assert_eq!(Remembered::load(&dir, mine), Remembered::default());
+        let remembered = Remembered { properties: [("speed".to_owned(), Value::from(2))].into(), edits: [("scene/zoom".to_owned(), Value::from(1.5))].into() };
+        remembered.save(&dir, mine);
+        assert_eq!(Remembered::load(&dir, mine), remembered);
+        assert_eq!(Remembered::load(&dir, other), Remembered::default());
+        Remembered::default().save(&dir, mine);
+        assert!(!Remembered::file(&dir, mine).exists(), "nothing to remember leaves no file");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn config_defaults() {
         let settings = Settings::default();
         assert_eq!((settings.fps, settings.volume, settings.mute, settings.fill, settings.layer), (0, 100.0, true, Fill::Cover, Layer::Background));
@@ -234,7 +311,12 @@ mod tests {
         let path = dir.join("state.json");
         let mut state = State::default();
         state.overrides.insert("fps", Value::from(30));
-        let shown = Shown { wallpaper: Some("/walls/a b".into()), properties: [("speed".to_owned(), Value::from(2))].into(), fill: Some(Fill::Contain) };
+        let shown = Shown {
+            wallpaper: Some("/walls/a b".into()),
+            properties: [("speed".to_owned(), Value::from(2))].into(),
+            edits: [("layers/12/alpha".to_owned(), Value::from(0.5))].into(),
+            fill: Some(Fill::Contain),
+        };
         state.outputs.insert("DP-1".to_owned(), shown.clone());
         state.last = shown;
         state.save(&path);

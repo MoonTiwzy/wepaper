@@ -92,6 +92,8 @@ struct Daemon {
     config_file: PathBuf,
     state: State,
     state_file: PathBuf,
+    /// Where what is remembered about each wallpaper is kept.
+    memory_dir: PathBuf,
     /// By output id.
     slots: HashMap<u32, Slot>,
     /// When the outputs were last looked at for drawing.
@@ -184,6 +186,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         from_flags,
         config_file,
         state,
+        memory_dir: state_file.parent().unwrap_or(std::path::Path::new(".")).join("wallpapers"),
         state_file,
         slots: HashMap::new(),
         last_round: now,
@@ -288,9 +291,8 @@ impl Daemon {
         for (id, name) in waiting {
             let Some(slot) = self.slots.get_mut(&id) else { continue };
             slot.waiting = false;
-            let Some(folder) = slot.shown.wallpaper.clone() else { continue };
-            let properties: Vec<_> = slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            if let Err(why) = self.load(id, &folder, &properties) {
+            let shown = slot.shown.clone();
+            if let Err(why) = self.load(id, &shown) {
                 log::error!("{name}: {why}");
             }
         }
@@ -303,8 +305,12 @@ impl Daemon {
         Viewport { width, height }
     }
 
-    /// Loads a wallpaper for an output. On failure the output keeps what it had.
-    fn load(&mut self, id: u32, folder: &std::path::Path, properties: &[(String, wepaper_json::Value)]) -> Result<(), String> {
+    /// Loads what `shown` says for an output: the wallpaper, with its property values
+    /// and with what was changed inside it. On failure the output keeps what it had.
+    fn load(&mut self, id: u32, shown: &Shown) -> Result<(), String> {
+        let Some(folder) = shown.wallpaper.as_deref() else { return Err("there is no wallpaper to load".to_owned()) };
+        let properties: Vec<(String, wepaper_json::Value)> = shown.properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
+        let properties = properties.as_slice();
         // Videos are stored no wider than the widest output: nobody sees more.
         let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).filter(|sheet| sheet.logical.0 > 0).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
         let max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
@@ -338,12 +344,18 @@ impl Daemon {
         };
         let Some(slot) = self.slots.get_mut(&id) else { return Err("the output is gone".to_owned()) };
         match loaded {
-            Ok(shown) => {
+            Ok(made) => {
                 slot.clock = 0.0;
                 slot.stale = true;
                 slot.error = None;
-                match shown {
+                match made {
                     Ok(mut wallpaper) => {
+                        for (path, value) in &shown.edits {
+                            // A wallpaper that changed since may not have what was edited.
+                            if let Err(why) = wallpaper.edit(&wepaper_ipc::split_path(path), value) {
+                                log::warn!("{name}: {path} is not set: {why}");
+                            }
+                        }
                         wallpaper.set_fill(slot.shown.fill.unwrap_or(self.settings.fill));
                         wallpaper.set_paused(slot.paused);
                         slot.wallpaper = Some(wallpaper);

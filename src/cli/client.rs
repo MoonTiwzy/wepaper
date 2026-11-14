@@ -88,7 +88,7 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
     }
     let word = |index: usize, what: &str| words.get(index).cloned().ok_or_else(|| format!("{command}: {what}?"));
     let request = match command {
-        "show" => Request::Show { wallpaper: word(0, "which wallpaper")?, output, properties },
+        "show" => Request::Show { wallpaper: word(0, "which wallpaper")?, output, properties: (!properties.is_empty()).then_some(properties) },
         "hide" => Request::Hide { output },
         "pause" => Request::Pause { output },
         "resume" => Request::Resume { output },

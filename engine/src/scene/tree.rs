@@ -8,11 +8,41 @@ use wepaper_json::{Map, Value, obj};
 
 use crate::doc::{FromDoc, PropertyKind};
 
-use super::shade::value_floats;
-use super::{LayerKind, SceneInstance};
+use super::bindings::{Change, SceneField, Slot};
+use super::shade::{Shade, value_floats};
+use super::{Effect, LayerKind, SceneInstance, Step};
 
 fn vector(values: &[f32]) -> Value {
     Value::Array(values.iter().map(|v| Value::from(*v)).collect())
+}
+
+/// One number as a number, several as a list.
+fn number_or_vector(values: &[f32]) -> Value {
+    match values {
+        [one] => Value::from(*one),
+        many => vector(many),
+    }
+}
+
+/// The passes of an effect.
+fn passes(effect: &Effect) -> impl Iterator<Item = &Shade> {
+    effect.steps.iter().filter_map(|step| match step {
+        Step::Draw { shade, .. } => Some(shade),
+        Step::Copy { .. } => None,
+    })
+}
+
+/// The constants of some passes, by name. A name several passes share is one node.
+fn constants<'a>(shades: impl Iterator<Item = &'a Shade>, values: &[Vec<f32>]) -> Value {
+    let mut node = Map::new();
+    for shade in shades {
+        for (name, feed) in &shade.constants {
+            if node.get(name).is_none() {
+                node.insert(name.as_str(), number_or_vector(shade.constant(*feed, values)));
+            }
+        }
+    }
+    Value::Object(node)
 }
 
 impl SceneInstance {
@@ -27,6 +57,7 @@ impl SceneInstance {
             node.insert("origin", vector(&layer.origin));
             node.insert("scale", vector(&layer.scale));
             node.insert("angles", vector(&layer.angles));
+            node.insert("parallax_depth", vector(&layer.parallax_depth));
             match &layer.kind {
                 LayerKind::Image(image) => {
                     node.insert("kind", Value::from("image"));
@@ -38,8 +69,16 @@ impl SceneInstance {
                         node.insert("kind", Value::from("text"));
                         node.insert("text", Value::from(&text.text));
                     }
-                    let effects: Map =
-                        image.effects.iter().enumerate().map(|(index, effect)| (index.to_string(), obj! { "name" => &effect.name, "visible" => effect.visible })).collect();
+                    node.insert("constants", constants(std::iter::once(&image.base), &self.bindings.values));
+                    let effects: Map = image
+                        .effects
+                        .iter()
+                        .enumerate()
+                        .map(|(index, effect)| {
+                            let node = obj! { "name" => &effect.name, "visible" => effect.visible, "constants" => constants(passes(effect), &self.bindings.values) };
+                            (index.to_string(), node)
+                        })
+                        .collect();
                     node.insert("effects", Value::Object(effects));
                 }
                 LayerKind::Sound(sound) => {
@@ -85,8 +124,13 @@ impl SceneInstance {
                 Value::Object(node)
             })
             .collect();
+        let mut scene = Map::new();
+        for (name, field) in SceneField::ALL {
+            scene.insert(name, self.scene_value(field));
+        }
         obj! {
             "size" => vector(&self.scene_size),
+            "scene" => Value::Object(scene),
             "properties" => Value::Object(properties),
             "schema" => Value::Array(schema),
             "layers" => Value::Object(layers),
@@ -94,11 +138,46 @@ impl SceneInstance {
         }
     }
 
+    /// The current value of one of the scene's own fields.
+    fn scene_value(&self, field: SceneField) -> Value {
+        match field {
+            SceneField::Zoom => Value::from(self.zoom),
+            SceneField::Clear => vector(&self.clear),
+            SceneField::Bloom => Value::from(self.bloom.as_ref().is_some_and(|bloom| bloom.enabled)),
+            SceneField::Parallax => Value::from(self.parallax.enabled),
+            SceneField::ParallaxAmount => Value::from(self.parallax.amount),
+            SceneField::ParallaxDelay => Value::from(self.parallax.delay),
+            SceneField::ParallaxMouse => Value::from(self.parallax.mouse_influence),
+            SceneField::Shake => Value::from(self.shake.enabled),
+            SceneField::ShakeAmplitude => Value::from(self.shake.amplitude),
+            SceneField::ShakeRoughness => Value::from(self.shake.roughness),
+            SceneField::ShakeSpeed => Value::from(self.shake.speed),
+        }
+    }
+
     /// Changes the value at `path` (relative to the wallpaper): a user property
-    /// (`properties/<name>`), a layer's field (`layers/<id>/alpha`), or whether an
-    /// effect runs (`layers/<id>/effects/<n>/visible`).
+    /// (`properties/<name>`), one of the scene's own values (`scene/zoom`), a layer's
+    /// field (`layers/<id>/alpha`), a shader constant of a layer or of one of its
+    /// effects (`layers/<id>/effects/<n>/constants/<name>`), or whether an effect
+    /// runs (`layers/<id>/effects/<n>/visible`).
     pub fn edit(&mut self, path: &[&str], value: &Value) -> Result<(), String> {
         match path {
+            ["scene", name] => {
+                let (_, field) = SceneField::ALL.into_iter().find(|(known, _)| known == name).ok_or_else(|| format!("the scene has no value \"{name}\""))?;
+                if field.is_flag() {
+                    let on = bool::from_doc(value).ok_or("expected true or false")?;
+                    if field == SceneField::Bloom && on && self.bloom.is_none() {
+                        return Err("the scene was made without bloom".to_owned());
+                    }
+                    self.apply(Change::Flag(Slot::Scene(field), on));
+                } else {
+                    if value_floats(value, 1).is_empty() || value.is_null() {
+                        return Err("expected a number".to_owned());
+                    }
+                    self.apply(Change::Floats(Slot::Scene(field), value_floats(value, 3)));
+                }
+                Ok(())
+            }
             ["properties", name] => {
                 if !self.project.properties.iter().any(|p| p.name == *name) {
                     return Err(format!("the wallpaper has no property \"{name}\""));
@@ -120,6 +199,33 @@ impl SceneInstance {
                     ["origin"] => layer.origin = three()?,
                     ["scale"] => layer.scale = three()?,
                     ["angles"] => layer.angles = three()?,
+                    ["parallax_depth"] => {
+                        let depth = three()?;
+                        layer.parallax_depth = [depth[0], depth[1]];
+                    }
+                    ["volume"] => {
+                        let LayerKind::Sound(sound) = &mut layer.kind else { return Err(format!("layer {id} is not a sound")) };
+                        sound.volume = number()?.clamp(0.0, 1.0);
+                    }
+                    ["constants", name] => {
+                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no constants")) };
+                        if value.is_null() || !image.base.set_constant(name, value, &mut self.bindings.values) {
+                            return Err(format!("layer {id} has no constant \"{name}\""));
+                        }
+                    }
+                    ["effects", effect, "constants", name] => {
+                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no effects")) };
+                        let found = effect.parse::<usize>().ok().and_then(|n| image.effects.get_mut(n)).ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
+                        let mut any = false;
+                        for step in &mut found.steps {
+                            if let Step::Draw { shade, .. } = step {
+                                any |= !value.is_null() && shade.set_constant(name, value, &mut self.bindings.values);
+                            }
+                        }
+                        if !any {
+                            return Err(format!("effect {effect} of layer {id} has no constant \"{name}\""));
+                        }
+                    }
                     [field @ ("alpha" | "color" | "brightness")] => {
                         let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no {field}")) };
                         match *field {
@@ -140,6 +246,11 @@ impl SceneInstance {
                         effect.visible = flag()?;
                     }
                     _ => return Err(format!("layers/{id}/{} cannot be set", rest.join("/"))),
+                }
+                if rest == ["volume"] {
+                    // The player hears of its layer's new volume.
+                    let (on, volume) = self.sound;
+                    self.set_sound(on, volume);
                 }
                 Ok(())
             }

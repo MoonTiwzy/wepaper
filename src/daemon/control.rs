@@ -8,7 +8,7 @@ use wepaper_ipc::{PROTOCOL, Request, error, ok, split_path};
 use wepaper_json::{Map, Value, obj};
 
 use super::plugins::{Happening, Kind};
-use super::settings::{KEYS, Settings};
+use super::settings::{KEYS, Remembered, Settings};
 use super::{Daemon, Shown};
 
 /// The time of day, 0 (midnight) to 1, in the local time zone.
@@ -220,23 +220,49 @@ impl Daemon {
         Ok(Value::Null)
     }
 
-    fn show(&mut self, wallpaper: &str, output: Option<&str>, properties: Vec<(String, Value)>) -> Result<(), String> {
+    fn show(&mut self, wallpaper: &str, output: Option<&str>, properties: Option<Vec<(String, Value)>>) -> Result<(), String> {
         let folder = wepaper_engine::locate::wallpaper(wallpaper).ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
         let ids = self.targets(output)?;
         if ids.is_empty() {
             return Err("there are no outputs to show it on".to_owned());
         }
+        // Values named now are the values; otherwise the wallpaper comes back as it was left.
+        let remembered = Remembered::load(&self.memory_dir, &folder);
+        let named = properties.is_some();
+        let properties = properties.map_or(remembered.properties, |named| named.into_iter().collect());
+        let shown = Shown { wallpaper: Some(folder.clone()), properties, edits: remembered.edits, fill: None };
         for id in ids {
-            self.load(id, &folder, &properties)?;
+            self.load(id, &shown)?;
             if let Some(slot) = self.slots.get_mut(&id) {
-                slot.shown = Shown { wallpaper: Some(folder.clone()), properties: properties.iter().cloned().collect(), fill: slot.shown.fill };
+                slot.shown = Shown { fill: slot.shown.fill, ..shown.clone() };
             }
         }
+        if named {
+            self.remember(&shown);
+        }
         if output.is_none_or(|name| name == "*") {
-            self.state.last = Shown { wallpaper: Some(folder.clone()), properties: properties.into_iter().collect(), fill: None };
+            self.state.last = shown;
         }
         self.save_state();
         self.notify("shown", Value::from(folder.to_string_lossy().into_owned()));
+        Ok(())
+    }
+
+    /// Keeps a wallpaper's values for the next time it is shown.
+    fn remember(&self, shown: &Shown) {
+        if let Some(folder) = &shown.wallpaper {
+            Remembered { properties: shown.properties.clone(), edits: shown.edits.clone() }.save(&self.memory_dir, folder);
+        }
+    }
+
+    /// Loads again what the outputs called `name` show: for values that only a
+    /// fresh wallpaper has back.
+    fn reload_outputs(&mut self, name: &str) -> Result<(), String> {
+        for id in self.targets(Some(name))? {
+            let Some(shown) = self.slots.get(&id).map(|slot| slot.shown.clone()).filter(|shown| shown.wallpaper.is_some()) else { continue };
+            self.load(id, &shown)?;
+            self.remember(&shown);
+        }
         Ok(())
     }
 
@@ -290,6 +316,7 @@ impl Daemon {
                 Ok(())
             }
             ["outputs", name, "wallpaper", "properties", property] if self.targets(Some(name))?.iter().any(|id| self.slots.get(id).is_some_and(|slot| slot.renderer.is_some())) => {
+                let mut remembered = Vec::new();
                 for id in self.targets(Some(name))? {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     if let Some(renderer) = &mut slot.renderer {
@@ -297,7 +324,11 @@ impl Daemon {
                         values.insert(*property, value.clone());
                         renderer.send(&obj! { "cmd" => "properties", "values" => Value::Object(values) });
                         slot.shown.properties.insert((*property).to_owned(), value.clone());
+                        remembered.push(slot.shown.clone());
                     }
+                }
+                for shown in &remembered {
+                    self.remember(shown);
                 }
                 self.save_state();
                 Ok(())
@@ -305,18 +336,24 @@ impl Daemon {
             ["outputs", name, "wallpaper", rest @ ..] if !rest.is_empty() => {
                 let ids = self.targets(Some(name))?;
                 let mut changed = false;
+                let mut remembered = Vec::new();
                 for id in ids {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     let Some(wallpaper) = &mut slot.wallpaper else { continue };
                     wallpaper.edit(rest, value)?;
                     slot.stale = true;
                     changed = true;
-                    if let ["properties", property] = rest {
-                        slot.shown.properties.insert((*property).to_owned(), value.clone());
-                    }
+                    match rest {
+                        ["properties", property] => slot.shown.properties.insert((*property).to_owned(), value.clone()),
+                        _ => slot.shown.edits.insert(rest.join("/"), value.clone()),
+                    };
+                    remembered.push(slot.shown.clone());
                 }
                 if !changed {
                     return Err("no wallpaper is shown there".to_owned());
+                }
+                for shown in &remembered {
+                    self.remember(shown);
                 }
                 self.save_state();
                 Ok(())
@@ -336,6 +373,7 @@ impl Daemon {
                 self.recompute_settings();
             }
             ["outputs", name, "wallpaper", "properties", rest @ ..] if rest.len() <= 1 => {
+                let mut remembered = Vec::new();
                 for id in self.targets(Some(name))? {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     let Some(wallpaper) = &mut slot.wallpaper else { continue };
@@ -347,7 +385,23 @@ impl Daemon {
                         slot.shown.properties.remove(property);
                     }
                     slot.stale = true;
+                    remembered.push(slot.shown.clone());
                 }
+                for shown in &remembered {
+                    self.remember(shown);
+                }
+            }
+            // What was changed inside the wallpaper is undone by loading it again without.
+            ["outputs", name, "wallpaper", rest @ ..] => {
+                let under = rest.join("/");
+                for id in self.targets(Some(name))? {
+                    let Some(slot) = self.slots.get_mut(&id) else { continue };
+                    if rest.is_empty() {
+                        slot.shown.properties.clear();
+                    }
+                    slot.shown.edits.retain(|path, _| !(under.is_empty() || path == &under || path.starts_with(&format!("{under}/"))));
+                }
+                self.reload_outputs(name)?;
             }
             _ => return Err(format!("\"{}\" cannot be reset", path.join("/"))),
         }

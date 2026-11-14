@@ -15,7 +15,7 @@
 //! use wepaper_ipc::{Client, Request};
 //!
 //! let mut daemon = Client::connect(&wepaper_ipc::default_socket())?;
-//! daemon.call(&Request::Show { wallpaper: "3566329932".into(), output: None, properties: vec![] })?;
+//! daemon.call(&Request::Show { wallpaper: "3566329932".into(), output: None, properties: None })?;
 //! daemon.call(&Request::Set { path: "config/fps".into(), value: 30.into() })?;
 //! let fps = daemon.call(&Request::Get { path: "config/fps".into() })?;
 //! # Ok::<(), wepaper_ipc::Error>(())

@@ -86,7 +86,8 @@ impl SceneInstance {
         }
         self.update_transforms();
         // The parallax camera trails the pointer.
-        if let Some(parallax) = &self.parallax {
+        if self.parallax.enabled {
+            let parallax = &self.parallax;
             let ease = if parallax.delay > 0.0 { (dt / parallax.delay).min(1.0) } else { 1.0 };
             for axis in 0..2 {
                 self.eased_pointer[axis] += (input.pointer[axis] - self.eased_pointer[axis]) * ease;
@@ -104,7 +105,7 @@ impl SceneInstance {
             values: &self.bindings.values,
             eased_pointer: self.eased_pointer,
             // The pointer counts from the top left; the scene's y points up.
-            parallax: self.parallax.map(|p| {
+            parallax: Some(self.parallax).filter(|p| p.enabled).map(|p| {
                 let pointer = [(0.5 - self.eased_pointer[0]) * self.scene_size[0], (self.eased_pointer[1] - 0.5) * self.scene_size[1]];
                 ([pointer[0] * p.mouse_influence, pointer[1] * p.mouse_influence], p.amount)
             }),
@@ -204,7 +205,7 @@ impl SceneInstance {
         };
         let (half_w, half_h) = (half_w / self.zoom, half_h / self.zoom);
         let (mut cx, mut cy) = (scene_w / 2.0, scene_h / 2.0);
-        if let Some(shake) = &self.shake {
+        if let Some(shake) = Some(&self.shake).filter(|shake| shake.enabled) {
             // Two sines an axis at unrelated rates wander without repeating visibly;
             // roughness adds the faster one.
             let t = time * shake.speed;

@@ -93,3 +93,10 @@ fn deep_nesting_is_an_error_not_a_crash() {
     let text = "[".repeat(100_000);
     assert!(parse(&text).is_err());
 }
+
+#[test]
+fn single_precision_numbers_are_written_as_typed() {
+    assert_eq!(Value::from(0.27f32).to_json(), "0.27");
+    assert_eq!(Value::from(1.5f32).to_json(), "1.5");
+    assert_eq!(Value::from(f32::MAX).as_f32(), Some(f32::MAX), "and read back as the same single");
+}
