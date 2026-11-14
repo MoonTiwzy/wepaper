@@ -206,6 +206,16 @@ impl VideoStream {
                 ("demuxer-readahead-secs", "0"),
                 ("vd-lavc-threads", &threads),
                 ("load-scripts", "no"),
+                // The player's own scripts (statistics, a console, menus) are for a
+                // window somebody sits at: each is a thread and a script engine.
+                ("load-stats-overlay", "no"),
+                ("load-console", "no"),
+                ("load-osd-console", "no"),
+                ("load-auto-profiles", "no"),
+                ("load-select", "no"),
+                ("load-positioning", "no"),
+                ("load-commands", "no"),
+                ("load-context-menu", "no"),
                 ("config", "no"),
                 ("ytdl", "no"),
             ];

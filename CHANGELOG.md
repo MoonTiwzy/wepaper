@@ -7,6 +7,13 @@
   for a quarter of a second every time round. Other containers still seek at their end.
 - A frame's size is no longer asked of the player while it waits for the frame to be drawn,
   which could stall the drawing for a fifth of a second.
+- A wallpaper is heard once. Shown on several outputs, it sounds on one of them: a scene's
+  sound layers and a web page's music used to play on each, a moment apart. A video a scene
+  uses as a picture is silent, where its sound track used to play over the scene's own
+  sounds, on one output as well. A web page that starts its music before it is told the
+  volume now plays at that volume, not at full.
+- The players load none of mpv's own scripts, which were a few threads and a few megabytes
+  for every video and every sound.
 
 ## 0.1.0
 

@@ -194,7 +194,8 @@ impl Share {
                 .and_then(|()| std::fs::rename(&part, &unpacked))
                 .map_err(|e| e.to_string())?;
         }
-        self.videos.open(&unpacked).map_err(|e| e.to_string())
+        // A picture, not something to listen to.
+        self.videos.open(&unpacked, false).map_err(|e| e.to_string())
     }
 
     /// A path on disk for a file of the wallpaper: the file itself when it is one,

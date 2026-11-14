@@ -22,7 +22,9 @@ function same(actual, expected, message) {
 }
 
 // A page with the bridge injected. `init` is the state the plugin primes it with.
-function page(init = {}) {
+// `early`, when given, runs in the page after the bridge is there and before its
+// first message: what a page's own scripts do while the document still loads.
+function page(init = {}, early = null) {
     let now = 0;
     let nextTimer = 1;
     const timers = new Map();
@@ -52,6 +54,37 @@ function page(init = {}) {
         }
         pause() {
             this.paused = true;
+        }
+    }
+
+    // Web Audio, as far as the bridge looks at it: nodes that remember what they
+    // were connected to.
+    class AudioNode {
+        constructor(context) {
+            this.context = context;
+            this.to = [];
+        }
+        connect(target) {
+            this.to.push(target);
+            return target;
+        }
+        disconnect(target) {
+            this.to = this.to.filter((node) => node !== target);
+        }
+    }
+    class AudioDestinationNode extends AudioNode {}
+    class GainNode extends AudioNode {
+        constructor(context) {
+            super(context);
+            this.gain = { value: 1 };
+        }
+    }
+    class AudioContext {
+        constructor() {
+            this.destination = new AudioDestinationNode(this);
+        }
+        createGain() {
+            return new GainNode(this);
         }
     }
 
@@ -90,12 +123,18 @@ function page(init = {}) {
             getElementById: () => null,
         },
         HTMLMediaElement,
+        AudioNode,
+        AudioDestinationNode,
+        AudioContext,
     };
     window.window = window;
     vm.createContext(window);
     vm.runInContext(SOURCE, window);
 
     const send = (message) => window.wepaperBridge.receive(JSON.parse(JSON.stringify(message)));
+    if (early) {
+        early(window);
+    }
     send({ type: 'init', properties: {}, fps: 60, limit: 0, paused: false, volume: 1, ...init });
 
     return {
@@ -527,6 +566,26 @@ const tests = {
         element.play();
         assert.strictEqual(element.native, 0.3);
         assert.strictEqual(element.paused, false);
+    },
+
+    'sound a page starts before the first message is as loud as that message says'() {
+        let master;
+        let element;
+        const p = page({ volume: 0 }, (window) => {
+            const context = new window.AudioContext();
+            const own = context.createGain();
+            own.connect(context.destination);
+            // What the page's node was really connected to: the bridge's gain.
+            master = own.to[0];
+            element = new window.HTMLMediaElement();
+            element.volume = 0.8;
+        });
+        assert.ok(master && master.gain, 'the page goes through a master gain');
+        assert.strictEqual(master.gain.value, 0);
+        assert.strictEqual(element.native, 0);
+        p.send({ type: 'volume', value: 0.5 });
+        assert.strictEqual(master.gain.value, 0.5);
+        assert.strictEqual(element.native, 0.4);
     },
 
     'a volume out of range is refused the way the browser refuses it'() {

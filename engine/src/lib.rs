@@ -383,8 +383,11 @@ impl Engine {
             Kind::Video => {
                 let dir = locate::wallpaper(&wallpaper.to_string_lossy())
                     .ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
-                let stream =
-                    self.share.videos.open(&dir.join(&project.file)).map_err(|e| LoadError(e.to_string()))?;
+                let stream = self
+                    .share
+                    .videos
+                    .open(&dir.join(&project.file), true)
+                    .map_err(|e| LoadError(e.to_string()))?;
                 Ok(Wallpaper::Video(Box::new(VideoInstance::new(project, stream))))
             }
             other => Err(LoadError(format!("{} wallpapers are not drawn by the engine", other.name()))),

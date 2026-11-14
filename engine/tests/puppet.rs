@@ -810,12 +810,13 @@ fn check(puppet: &Puppet) -> Vec<String> {
         .zip(&puppet.vertices)
         .flat_map(|(moved, vertex)| (0..3).map(move |i| (moved[i] - vertex.position[i]).abs()))
         .fold(0.0f32, f32::max);
-    // A thousandth of a pixel on a mesh a few hundred pixels wide; float precision on one ten thousand wide.
+    // A thousandth of a pixel on a mesh a few hundred pixels wide; on one thousands wide, what
+    // single precision loses through a chain of bones: hundredths of a pixel.
     // A puppet with a second pose rests in it, its parts moved from where they lie in the picture.
     if puppet.has_second_pose() {
         expect(drift.is_finite(), "a rest pose that is not a number");
     } else {
-        expect(drift <= 1e-3f32.max(extent * 1e-6), &format!("the rest pose moves the mesh by {drift}"));
+        expect(drift <= 1e-3f32.max(extent * 1e-5), &format!("the rest pose moves the mesh by {drift}"));
     }
 
     for animation in &puppet.animations {

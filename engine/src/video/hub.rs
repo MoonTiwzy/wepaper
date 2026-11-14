@@ -19,6 +19,8 @@ struct Playing {
     /// The file it plays is already within the limits, or cannot be made so.
     settled: bool,
     job: Option<Job>,
+    /// Somebody who holds it wants its sound track heard.
+    heard: bool,
 }
 
 /// Hands out streams, the same one to everybody who asks for the same file.
@@ -49,9 +51,20 @@ impl VideoHub {
 
     /// The stream playing `path`, started if nobody plays it yet. When a cheaper
     /// copy for the current limits is in the cache, that is what plays.
-    pub fn open(&mut self, path: &Path) -> Result<SharedVideo, VideoError> {
+    ///
+    /// `heard` is whether the asker wants the file's sound track played when sound
+    /// is on. A video wallpaper does. A scene that uses a video as a picture does
+    /// not: Wallpaper Engine plays no sound from a scene's video layers, and scenes
+    /// bring their sound as layers of their own, often the very same music.
+    pub fn open(&mut self, path: &Path, heard: bool) -> Result<SharedVideo, VideoError> {
         let key = path.canonicalize().unwrap_or_else(|_| path.to_owned());
-        if let Some(stream) = self.streams.get(&key).and_then(|playing| playing.stream.upgrade()) {
+        if let Some(playing) = self.streams.get_mut(&key)
+            && let Some(stream) = playing.stream.upgrade()
+        {
+            if heard && !playing.heard {
+                playing.heard = true;
+                stream.borrow().set_audio(self.options.audio);
+            }
             return Ok(stream);
         }
         let copy = self
@@ -59,15 +72,18 @@ impl VideoHub {
             .as_ref()
             .map(|dir| transcode::cached_path(dir, &key, self.limits))
             .filter(|copy| copy.is_file());
+        let options = VideoOptions { audio: sounds(self.options.audio, heard), ..self.options.clone() };
         let stream = Rc::new(RefCell::new(VideoStream::open(
             &self.gl,
             copy.as_deref().unwrap_or(&key),
-            &self.options,
+            &options,
             self.waker.clone(),
         )?));
         self.streams.retain(|_, playing| playing.stream.strong_count() > 0);
-        self.streams
-            .insert(key, Playing { stream: Rc::downgrade(&stream), settled: copy.is_some(), job: None });
+        self.streams.insert(
+            key,
+            Playing { stream: Rc::downgrade(&stream), settled: copy.is_some(), job: None, heard },
+        );
         Ok(stream)
     }
 
@@ -147,10 +163,29 @@ impl VideoHub {
     pub fn set_sound(&mut self, audio: bool, volume: f32) {
         self.options.audio = audio;
         self.options.volume = volume;
-        for stream in self.streams.values().filter_map(|playing| playing.stream.upgrade()) {
+        for playing in self.streams.values() {
+            let Some(stream) = playing.stream.upgrade() else { continue };
             let stream = stream.borrow();
-            stream.set_audio(audio);
+            stream.set_audio(sounds(audio, playing.heard));
             stream.set_volume(volume);
         }
+    }
+}
+
+/// Whether a stream's sound track is decoded: sound is on, and one of those who
+/// hold the stream wants to hear it.
+fn sounds(on: bool, heard: bool) -> bool {
+    on && heard
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sounds;
+
+    #[test]
+    fn a_video_used_as_a_picture_stays_silent_when_sound_is_on() {
+        assert!(sounds(true, true));
+        assert!(!sounds(true, false));
+        assert!(!sounds(false, true));
     }
 }

@@ -8,6 +8,7 @@ mod control;
 mod plugins;
 mod server;
 mod settings;
+mod sound;
 mod wayland;
 
 use std::collections::HashMap;
@@ -70,6 +71,8 @@ struct Slot {
     error: Option<String>,
     /// The plugin process that draws this output's wallpaper, when the engine does not.
     renderer: Option<plugins::Renderer>,
+    /// How many wallpapers were loaded here so far.
+    loads: u64,
     /// Where the frame is drawn before output shaders run over it.
     staging: Option<gpu::Target>,
     /// Frames drawn in the current second, and the count of the last full one.
@@ -92,6 +95,7 @@ impl Slot {
             error: None,
             title: String::new(),
             renderer: None,
+            loads: 0,
             staging: None,
             frames: (now, 0, 0),
         }
@@ -120,6 +124,8 @@ struct Daemon {
     /// How many videos are being re-encoded right now.
     optimising: usize,
     plugins: plugins::Plugins,
+    /// What the outputs showed and which of them played when sound was last settled.
+    sounding: Vec<sound::Playing>,
     /// The compiled shader plugins, by plugin id, in the order they run.
     shaders: Vec<(String, wepaper_engine::post::PostPass)>,
     quit: bool,
@@ -218,6 +224,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         last_upkeep: now,
         optimising: 0,
         plugins: plugins::Plugins::new(found, socket),
+        sounding: Vec::new(),
         shaders,
         quit: false,
     };
@@ -258,6 +265,7 @@ impl Daemon {
                 };
                 self.server.answer(incoming.client, &response);
             }
+            self.settle_sound();
             let wake = self.draw_due();
             self.server.flush();
             let _ = self.connection.flush();
@@ -417,9 +425,9 @@ impl Daemon {
                 "--volume".to_owned(),
                 format!("{:.0}", self.settings.volume),
             ]);
-            if self.settings.mute {
-                arguments.push("--muted".to_owned());
-            }
+            // Silent until the sound is settled: of the outputs that show this
+            // wallpaper, one is heard.
+            arguments.push("--muted".to_owned());
             if self.settings.passthrough {
                 arguments.push("--passthrough".to_owned());
             }
@@ -436,6 +444,7 @@ impl Daemon {
                 slot.clock = 0.0;
                 slot.stale = true;
                 slot.error = None;
+                slot.loads += 1;
                 slot.title = project.title.clone();
                 match made {
                     Ok(mut wallpaper) => {
@@ -662,17 +671,44 @@ impl Daemon {
         wake
     }
 
-    /// Applies the sound settings to everything that plays.
+    /// Settles the sound again when what the outputs show, or which of them play,
+    /// is no longer what it was settled for.
+    fn settle_sound(&mut self) {
+        let now: Vec<sound::Playing> = self
+            .display
+            .heads
+            .iter()
+            .filter_map(|head| {
+                let slot = self.slots.get(&head.id)?;
+                let showing = slot.wallpaper.is_some() || slot.renderer.is_some();
+                Some(sound::Playing {
+                    id: head.id,
+                    wallpaper: slot.shown.wallpaper.clone().filter(|_| showing),
+                    paused: slot.paused,
+                    loads: slot.loads,
+                })
+            })
+            .collect();
+        if now != self.sounding {
+            self.sounding = now;
+            self.apply_sound();
+        }
+    }
+
+    /// Applies the sound settings to everything that plays. A wallpaper on several
+    /// outputs is heard on one of them.
     fn apply_sound(&mut self) {
         let (audio, volume) = (!self.settings.mute && self.settings.volume > 0.0, self.settings.volume);
         self.engine.videos().set_sound(audio, volume);
-        for slot in self.slots.values_mut() {
+        let heard = sound::heard(&self.sounding);
+        for (id, slot) in &mut self.slots {
+            let on = audio && heard.contains(id);
             if let Some(wallpaper) = &mut slot.wallpaper {
-                wallpaper.set_sound(audio, volume);
+                wallpaper.set_sound(on, volume);
             }
             if let Some(renderer) = &mut slot.renderer {
                 renderer.send(&wepaper_json::obj! { "cmd" => "volume", "value" => volume });
-                renderer.send(&wepaper_json::obj! { "cmd" => "mute", "value" => !audio });
+                renderer.send(&wepaper_json::obj! { "cmd" => "mute", "value" => !on });
             }
         }
     }

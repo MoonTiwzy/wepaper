@@ -36,7 +36,7 @@ from a workshop library of 113 wallpapers: 56 scenes, 51 videos and 6 web pages.
 | Particle systems: sprites, sprite trails, ropes, rope trails, children, control points | yes |
 | Puppet warp: meshes, bones, animation layers, parts cut from one picture | yes |
 | SceneScript: `update`, `init`, user properties, timers, cursor events, `shared` | yes |
-| Sound layers | yes |
+| Sound layers | yes: heard on one output when several show the scene |
 | Audio response: spectrum in shaders and in scripts | yes |
 | Presets | yes |
 | Perspective camera, 3D model objects, lights | no: drawn flat, objects left out |

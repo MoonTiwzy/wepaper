@@ -526,6 +526,9 @@
                 state.limit = message.limit;
                 state.volume = message.volume;
                 state.paused = message.paused;
+                // The page's scripts may have run already and started their sound at
+                // the volume nobody had told yet.
+                applyVolume();
                 break;
             case 'properties':
                 Object.assign(state.user, message.values);
