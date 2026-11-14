@@ -16,6 +16,7 @@ mod fixups;
 mod prelude;
 mod repair;
 mod source;
+mod typed;
 
 pub use declared::{ComboDecl, Declared, SamplerDecl, UniformDecl};
 

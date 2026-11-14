@@ -38,6 +38,17 @@
   missing: what is assigned to a variable of another kind, what a function is given that
   it does not take, a comparison that is counted with, a value one stage writes longer
   than the other reads.
+- On Mesa nearly all of the rest plays too: of the 59 effects and layers the test library
+  still left out, 6 are. A strict driver says that two values did not fit, not which kinds
+  they were, so the kinds are now worked out from what the shader declares (its variables,
+  functions, macros, and only the branches of its `#if`s that are compiled), and the
+  conversions the original makes by itself are written in: where two vectors of different
+  lengths meet, the longer is cut; `int` and `uint` are made one; a number or a vector
+  chooses where a condition is wanted, a vector a component at a time; a comparison
+  counted with is a number; what is assigned, returned or given to a function is made the
+  kind it goes to. A statement written over several lines is read whole. Where a kind is
+  not certain, nothing is changed. Audio visualizers that were a white square, blurs and
+  colour effects that were missing are there.
 - `wepaper get memory/heap` says what the allocator has in use and what it holds free.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in

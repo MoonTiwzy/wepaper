@@ -45,12 +45,26 @@ pub fn repair(source: &mut String, log: &str) -> bool {
 
     // A line may hold several mistakes, and a driver may name them all at once: the one
     // whose repair takes others with it comes first.
-    let replacement = if says(&["unmatched #endif", "#endif without #if"]) {
-        line.trim_start().starts_with("#endif").then(|| "// #endif without an #if".to_owned())
+    let structural = if says(&["unmatched #endif", "#endif without #if"]) {
+        Some(line.trim_start().starts_with("#endif").then(|| "// #endif without an #if".to_owned()))
     } else if says(&["cannot index a non-array", "cannot dereference non-array"]) {
-        scalar_index(line, body)
+        Some(scalar_index(line, body))
     } else if says(&["\"%\"", "operator '%'", "operands to %", "of operator %"]) {
-        remainder_calls(line)
+        Some(remainder_calls(line))
+    } else {
+        None
+    };
+    // Otherwise the kinds are worked out, and the conversions the original makes are
+    // written in; what that does not cover is read from the message.
+    if structural.is_none() && !line.trim_start().starts_with('#') {
+        let (start, end) = statement(body, line_start, line_end);
+        if let Some(converted) = super::typed::convert(source, body_start + start, body_start + end) {
+            source.replace_range(body_start + start..body_start + end, &converted);
+            return true;
+        }
+    }
+    let replacement = if let Some(structural) = structural {
+        structural
     } else if says(&["array index must be integer"]) {
         integer_index(line)
     } else if let Some((to, initializer)) = messages.iter().find_map(|message| assigned_kind(message)) {
@@ -69,6 +83,36 @@ pub fn repair(source: &mut String, log: &str) -> bool {
     let (start, end) = (body_start + line_start, body_start + line_end);
     source.replace_range(start..end, &replacement);
     true
+}
+
+/// The lines of the statement that line `start..end` of `body` is part of: the lines
+/// it continues and the lines that complete it, so that a statement written over
+/// several lines is read whole.
+fn statement(body: &str, mut start: usize, mut end: usize) -> (usize, usize) {
+    let code = |line: &str| line.split("//").next().unwrap_or("").trim().to_owned();
+    let open = |line: &str| {
+        let code = code(line);
+        !code.is_empty() && !code.starts_with('#') && !code.ends_with([';', '{', '}'])
+    };
+    for _ in 0..3 {
+        let Some(previous_end) = start.checked_sub(1) else { break };
+        let previous_start = body[..previous_end].rfind('\n').map_or(0, |n| n + 1);
+        if !open(&body[previous_start..previous_end]) {
+            break;
+        }
+        start = previous_start;
+    }
+    for _ in 0..8 {
+        if !open(&body[body[..end].rfind('\n').map_or(0, |n| n + 1)..end]) || end >= body.len() {
+            break;
+        }
+        let next_end = body[end + 1..].find('\n').map_or(body.len(), |n| end + 1 + n);
+        if code(&body[end + 1..next_end]).starts_with('#') {
+            break;
+        }
+        end = next_end;
+    }
+    (start, end)
 }
 
 /// Tries to repair what the driver's `log` says of the two stages together, in the
@@ -720,6 +764,174 @@ mod tests {
         assert!(repair(&mut text, "0:1(11): error: operands to arithmetic operators must be numeric\n"));
         assert!(text.contains("depth *= float(depth < limit) * 6.0 + step(a, (b));"), "{text}");
         assert!(!repair(&mut text, "0:1(11): error: operands to arithmetic operators must be numeric\n"));
+    }
+
+    /// A fragment stage as it is assembled: with the prelude, and a combo.
+    fn fragment(body: &str) -> String {
+        format!(
+            "#version 330 core\n{}{}#define INVERT 1\n#line 1\n{body}",
+            super::super::prelude::common(),
+            super::super::prelude::FRAGMENT
+        )
+    }
+
+    /// The same for the vertex stage.
+    fn vertex(body: &str) -> String {
+        format!(
+            "#version 330 core\n{}{}#line 1\n{body}",
+            super::super::prelude::common(),
+            super::super::prelude::VERTEX
+        )
+    }
+
+    #[test]
+    fn two_vectors_of_different_lengths_meet_at_the_shorter() {
+        // Mesa does not say which kinds met; the declarations do.
+        let mut text = fragment(
+            "varying vec4 v_TexCoord;\nuniform float u_vignetteIntensity;\nvoid main() {\n\
+             \tfloat cd = pow(length(abs(v_TexCoord - CAST2(0.5)) * 1.25), 3.0) * u_vignetteIntensity;\n}\n",
+        );
+        let log = "0:4(36): error: vector size mismatch for arithmetic operator\n\
+                   0:4(32): error: no matching function for call to `abs(error)'; candidates are:\n\
+                   0:4(32): error:    float abs(float)\n";
+        assert!(repair(&mut text, log));
+        assert!(
+            text.contains(
+                "\tfloat cd = pow(length(abs(vec2(v_TexCoord) - CAST2(0.5)) * 1.25), 3.0) * u_vignetteIntensity;\n"
+            ),
+            "{text}"
+        );
+        assert!(!repair(&mut text, log), "nothing left to repair");
+    }
+
+    #[test]
+    fn a_vertex_stage_output_is_read_at_the_length_it_is_used_at() {
+        let mut text = vertex(
+            "uniform vec2 g_Scale;\nuniform vec2 g_Scale_FollowCursor_Multiplier;\nvarying vec4 v_PointerUV;\n\
+             void main() {\n\
+             vec2 da = v_PointerUV * (g_Scale * g_Scale_FollowCursor_Multiplier) * 0.001; // scaled\n}\n",
+        );
+        let log = "0:5(12): error: vector size mismatch for arithmetic operator\n\
+                   0:5(12): error: operands to arithmetic operators must be numeric\n";
+        assert!(repair(&mut text, log));
+        assert!(
+            text.contains(
+                "vec2 da = vec2(v_PointerUV) * (g_Scale * g_Scale_FollowCursor_Multiplier) * 0.001; // scaled\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_compound_assignment_takes_what_its_target_holds() {
+        let mut text = fragment(
+            "uniform vec4 g_Texture0Resolution;\nuniform float g_Strength;\nvoid main() {\n\
+             \tvec2 strength = vec2(g_Strength * g_Strength * 60);\n\tstrength /= g_Texture0Resolution;\n}\n",
+        );
+        let log = "0:5(2): error: vector size mismatch for arithmetic operator\n\
+                   0:5(2): error: could not implicitly convert error to vec2\n";
+        assert!(repair(&mut text, log));
+        assert!(text.contains("\tstrength /= vec2(g_Texture0Resolution);\n"), "{text}");
+    }
+
+    #[test]
+    fn whole_numbers_with_and_without_a_sign_meet_without_one() {
+        // GLSL 3.30 has no conversion between int and uint; the original makes both uint.
+        let mut text = fragment(
+            "#define RESOLUTION 64\nuniform float frequency;\nvoid main() {\n\
+             \tuint barFreq1 = uint(wepaper_rem(frequency, RESOLUTION));\n\
+             \tuint barFreq2 = wepaper_rem((barFreq1 + 1), RESOLUTION);\n}\n",
+        );
+        let log = "0:5(31): error: could not implicitly convert operands to arithmetic operator\n\
+                   0:5(18): error: no matching function for call to `wepaper_rem(error, int)'; candidates are:\n\
+                   0:5(18): error:    float wepaper_rem(float, float)\n";
+        assert!(repair(&mut text, log));
+        assert!(text.contains("\tuint barFreq2 = wepaper_rem((barFreq1 + 1u), RESOLUTION);\n"), "{text}");
+    }
+
+    #[test]
+    fn a_number_or_a_vector_chooses_where_a_condition_is_wanted() {
+        let mut text = fragment(
+            "uniform vec4 a;\nuniform vec4 b;\nuniform vec4 c;\nvoid main() {\n\
+             \tfloat mask = 0.5;\n\tmask = INVERT ? 1 - mask : mask;\n\
+             \tfloat outside = 1.0;\n\tvec4 final = outside ? a : b;\n\
+             \tvec4 each = c ? a : 0.0;\n}\n",
+        );
+        let told = |line: usize| format!("0:{line}(9): error: condition of `?:' must be scalar boolean\n");
+        assert!(repair(&mut text, &told(6)));
+        assert!(text.contains("\tmask = bool(INVERT) ? 1 - mask : mask;\n"), "{text}");
+        assert!(repair(&mut text, &told(8)));
+        assert!(text.contains("\tvec4 final = bool(outside) ? a : b;\n"), "{text}");
+        // A vector condition chooses each component on its own.
+        assert!(repair(&mut text, &told(9)));
+        assert!(text.contains("\tvec4 each = mix(vec4(0.0), a, bvec4(c));\n"), "{text}");
+    }
+
+    #[test]
+    fn a_function_returns_the_kind_it_says() {
+        // Two functions with a `col` each, of different kinds: each line reads its own.
+        let mut text = fragment(
+            "vec3 drawSence(vec2 uv)\n{\n    vec4 col = vec4(0.,0.,0.,0.);\n    return col;\n}\n\
+             void main() {\n\tvec3 col = drawSence(vec2(0.0));\n\treturn;\n}\n",
+        );
+        let log = "0:4(2): error: `return' with wrong type vec4, in function `drawSence' returning vec3\n";
+        assert!(repair(&mut text, log));
+        assert!(text.contains("    return vec3(col);\n"), "{text}");
+    }
+
+    #[test]
+    fn what_a_function_of_the_shader_is_given_is_made_what_it_takes() {
+        let mut text = fragment(
+            "varying vec4 v_TexCoord;\nvec2 rotateVec2(vec2 v, float a) { return v; }\n\
+             void shift(inout vec2 v) { v += 1.0; }\nvoid main() {\n\
+             \tvec2 at = rotateVec2(v_TexCoord, 1);\n\tshift(v_TexCoord);\n}\n",
+        );
+        assert!(repair(
+            &mut text,
+            "0:5(12): error: no matching function for call to `rotateVec2(vec4, int)'\n"
+        ));
+        assert!(text.contains("\tvec2 at = rotateVec2(vec2(v_TexCoord), 1);\n"), "{text}");
+        // What a function writes into cannot be a conversion.
+        let before = text.clone();
+        assert!(!repair(&mut text, "0:6(2): error: no matching function for call to `shift(vec4)'\n"));
+        assert_eq!(text, before);
+    }
+
+    #[test]
+    fn a_name_of_two_kinds_is_not_guessed_at() {
+        // Declared twice with different kinds (in two branches of an #if, say), `v` is
+        // not known: the line is left to the repairs that read the message.
+        let mut text = fragment(
+            "uniform vec3 v;\nuniform vec4 v;\nuniform vec4 w;\nvoid main() {\n\tvec2 x = v + w;\n}\n",
+        );
+        let before = text.clone();
+        assert!(!repair(&mut text, "0:5(13): error: vector size mismatch for arithmetic operator\n"));
+        assert_eq!(text, before);
+    }
+
+    #[test]
+    fn a_statement_over_several_lines_keeps_its_lines() {
+        let mut text = fragment(
+            "uniform vec4 a;\nuniform vec2 b;\nvoid main() {\n\tvec2 c = a\n\t\t+ b;\n\tgl_FragColor = vec4(c, 0.0, 1.0);\n}\n",
+        );
+        assert!(repair(&mut text, "0:4(11): error: vector size mismatch for arithmetic operator\n"));
+        assert!(text.contains("\tvec2 c = vec2(a)\n\t\t+ b;\n\tgl_FragColor"), "{text}");
+    }
+
+    #[test]
+    fn comparisons_and_truth_are_what_the_original_makes_of_them() {
+        let mut text = fragment(
+            "uniform vec3 a;\nuniform vec3 b;\nuniform float t;\nvoid main() {\n\
+             \tvec3 near = (a < b) * 2.0;\n\tif (t) discard;\n\tfloat on = t > 0.5 && INVERT;\n}\n",
+        );
+        let told = |line: usize| format!("0:{line}(9): error: something about kinds\n");
+        // HLSL compares vectors a component at a time.
+        assert!(repair(&mut text, &told(5)));
+        assert!(text.contains("\tvec3 near = vec3(lessThan(a, b)) * 2.0;\n"), "{text}");
+        assert!(repair(&mut text, &told(6)));
+        assert!(text.contains("\tif (bool(t)) discard;\n"), "{text}");
+        assert!(repair(&mut text, &told(7)));
+        assert!(text.contains("\tfloat on = float(t > 0.5 && bool(INVERT));\n"), "{text}");
     }
 
     #[test]
