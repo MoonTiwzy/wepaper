@@ -12,7 +12,10 @@
 
 - The licence is MIT.
 
-- The log says every wallpaper the daemon was asked to show and why one was not shown.
+- The log says every wallpaper the daemon was asked to show and why one was not shown. Its
+  lines carry the time of day, and a wallpaper shown says how long it took to load.
+- The Nix package builds and installs the web wallpaper plugin: on NixOS web wallpapers had
+  nothing to draw them.
 
 ## 0.2.0
 

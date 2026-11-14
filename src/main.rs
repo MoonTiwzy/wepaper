@@ -52,7 +52,7 @@ fn main() {
             Err(error) => fail(&error.to_string()),
         }
     };
-    logger::init(verbosity);
+    logger::init(verbosity, command == "daemon");
     if command != "daemon" {
         // Output piped into `head` ends with the pipe, quietly, as a command line
         // tool's should. Not the daemon: a plugin that died must cost it a failed

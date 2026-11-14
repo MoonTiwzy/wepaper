@@ -397,6 +397,7 @@ impl Daemon {
         let Some(folder) = shown.wallpaper.as_deref() else {
             return Err("there is no wallpaper to load".to_owned());
         };
+        let began = Instant::now();
         let properties: Vec<(String, wepaper_json::Value)> =
             shown.properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
         let properties = properties.as_slice();
@@ -504,7 +505,12 @@ impl Daemon {
                 }
                 // What the old wallpaper held alone is freed now, not at the next load.
                 self.release();
-                log::info!("{name}: playing \"{}\" ({})", project.title, folder.display());
+                log::info!(
+                    "{name}: playing \"{}\" ({}), loaded in {} ms",
+                    project.title,
+                    folder.display(),
+                    began.elapsed().as_millis()
+                );
                 self.plugins.announce(&plugins::Happening {
                     event: "shown",
                     output: name,

@@ -3,7 +3,12 @@
   rustPlatform,
   makeWrapper,
   pkg-config,
+  wrapGAppsHook4,
   wayland,
+  gtk4,
+  gtk4-layer-shell,
+  webkitgtk_6_0,
+  glib-networking,
   libglvnd,
   mpv-unwrapped,
   ffmpeg,
@@ -25,8 +30,28 @@ rustPlatform.buildRustPackage {
   nativeBuildInputs = [
     pkg-config
     makeWrapper
+    wrapGAppsHook4
   ];
-  buildInputs = [ wayland ];
+  # The last four are the web wallpaper plugin's: a browser engine in a layer of its own.
+  buildInputs = [
+    wayland
+    gtk4
+    gtk4-layer-shell
+    webkitgtk_6_0
+    glib-networking
+  ];
+
+  # The plugin is a program of its own and not a default member of the workspace:
+  # without it web wallpapers have nothing to draw them.
+  cargoBuildFlags = [
+    "-p"
+    "wepaper"
+    "-p"
+    "wepaper-web"
+  ];
+
+  # Wrapped by hand below: the daemon needs none of what a GTK program does.
+  dontWrapGApps = true;
 
   # The tests that matter need a GPU and a Wallpaper Engine install; the rest are
   # run by CI.
@@ -57,6 +82,7 @@ rustPlatform.buildRustPackage {
           fontconfig
         ]
       }
+    wrapProgram $out/bin/wepaper-web "''${gappsWrapperArgs[@]}"
   '';
 
   meta = {
