@@ -301,8 +301,10 @@ impl Share {
         fragment: String,
         key: u64,
     ) -> Result<Program, String> {
-        /// How many repairs one shader gets before it is given up on.
-        const REPAIRS: usize = 8;
+        /// How many repairs one shader gets before it is given up on. A strict driver
+        /// names one mistake at a time, and a shader written for a lenient compiler
+        /// has one on every other line.
+        const REPAIRS: usize = 48;
         let mut error = None;
         let lenient = self.gl.caps().lenient_shaders;
         for mode in [false, true] {
@@ -318,8 +320,11 @@ impl Share {
                 match Program::link(&self.gl, &vertex, &fragment) {
                     Ok(program) => return Ok(program),
                     Err(refused) => {
-                        let source = if refused.stage == "vertex" { &mut vertex } else { &mut fragment };
-                        let repaired = refused.stage != "link" && crate::glsl::repair(source, &refused.log);
+                        let repaired = match refused.stage {
+                            "vertex" => crate::glsl::repair(&mut vertex, &refused.log),
+                            "link" => crate::glsl::repair_link(&mut fragment, &refused.log),
+                            _ => crate::glsl::repair(&mut fragment, &refused.log),
+                        };
                         if !repaired {
                             // With debug logging on, the source the driver refused is kept for a look.
                             if log::log_enabled!(log::Level::Debug) {

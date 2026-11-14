@@ -53,7 +53,13 @@ pub fn repair(source: &mut String, log: &str) -> bool {
         remainder_calls(line)
     } else if says(&["array index must be integer"]) {
         integer_index(line)
-    } else if says(&["Syntax error in #if", "#if with no expression"]) {
+    } else if let Some((to, initializer)) = messages.iter().find_map(|message| assigned_kind(message)) {
+        assigned_as(line, to, initializer)
+    } else if says(&["no matching function for call to"]) {
+        called_as(line, &messages)
+    } else if says(&["operands to arithmetic operators must be numeric"]) {
+        counted_comparisons(line)
+    } else if says(&["Syntax error in #if", "#if with no expression", "preprocessor error"]) {
         // A condition the preprocessor cannot evaluate (it names a variable) is false.
         line.trim_start().starts_with("#if").then(|| "#if 0".to_owned())
     } else {
@@ -63,6 +69,249 @@ pub fn repair(source: &mut String, log: &str) -> bool {
     let (start, end) = (body_start + line_start, body_start + line_end);
     source.replace_range(start..end, &replacement);
     true
+}
+
+/// Tries to repair what the driver's `log` says of the two stages together, in the
+/// fragment stage's `source`. Returns whether anything was changed.
+///
+/// One mistake is known: a value the vertex stage writes as a longer vector than the
+/// fragment stage reads. The original links the two; here the fragment stage takes
+/// the whole value and reads its first components wherever it names it.
+pub fn repair_link(source: &mut String, log: &str) -> bool {
+    let quoted = |text: &str| -> Option<String> {
+        let (_, rest) = text.split_once('`')?;
+        rest.split_once('\'').map(|(inside, _)| inside.to_owned())
+    };
+    let found = log.lines().find_map(|message| {
+        let (written, read) = message.split_once("but fragment shader input declared as type")?;
+        let (name, written) = written.split_once("declared as type")?;
+        Some((quoted(name)?, quoted(written)?, quoted(read)?))
+    });
+    let Some((name, written, read)) = found else { return false };
+    let (Some(wide), Some(narrow)) = (width(&written), width(&read)) else { return false };
+    if narrow >= wide || !written.starts_with("vec") {
+        return false;
+    }
+    let marker = [super::source::BODY, super::source::BODY_LENIENT]
+        .into_iter()
+        .find_map(|marker| source.find(marker).map(|at| (at, marker.len())));
+    let Some((marker_at, marker_length)) = marker else { return false };
+    let body_start = marker_at + marker_length;
+    // The declaration becomes a macro on its own line, so that every line after it
+    // keeps its number; the wider declaration goes in front of the body.
+    let mut body = String::with_capacity(source.len() - body_start);
+    let mut changed = false;
+    for line in source[body_start..].split_inclusive('\n') {
+        let words: Vec<&str> = line
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|w| !w.is_empty())
+            .collect();
+        if matches!(words[..], ["varying" | "in", kind, declared] if kind == read && declared == name) {
+            body.push_str(&format!("#define {name} {name}.{}\n", &"xyzw"[..narrow]));
+            changed = true;
+        } else {
+            body.push_str(line);
+        }
+    }
+    if changed {
+        source.truncate(body_start);
+        source.push_str(&body);
+        source.insert_str(marker_at, &format!("in {written} {name};\n"));
+    }
+    changed
+}
+
+/// How many numbers a value of the kind called `kind` holds, for scalars and vectors.
+fn width(kind: &str) -> Option<usize> {
+    match kind {
+        "float" | "int" | "uint" | "bool" => Some(1),
+        _ => {
+            let digits = kind
+                .strip_prefix("vec")
+                .or_else(|| kind.strip_prefix(['i', 'u', 'b']).and_then(|rest| rest.strip_prefix("vec")))?;
+            digits.parse().ok().filter(|width| (2..=4).contains(width))
+        }
+    }
+}
+
+/// What converting a value of the kind `given` to the kind `taken` costs, the way
+/// the original converts by itself: a vector is cut shorter, a number is spread over
+/// a vector or turned into another kind of number. `None`: it does not convert.
+fn conversion(given: &str, taken: &str) -> Option<f32> {
+    if given == taken {
+        return Some(0.0);
+    }
+    let (from, to) = (width(given)?, width(taken)?);
+    // Whole numbers and fractions tell apart by their first letter.
+    let other_numbers = if given.as_bytes()[0] == taken.as_bytes()[0] || (from > 1) == (to > 1) && from == to
+    {
+        0.25
+    } else {
+        0.0
+    };
+    match (from, to) {
+        (from, to) if from == to => Some(0.25),
+        (from, to) if from > to => Some((from - to) as f32 + other_numbers),
+        (1, _) => Some(0.5 + other_numbers),
+        _ => None,
+    }
+}
+
+/// The names the dialect has for the functions a driver names.
+const ALIASES: [(&str, &[&str]); 6] = [
+    ("mix", &["lerp"]),
+    ("fract", &["frac"]),
+    ("atan", &["atan2"]),
+    ("texture", &["texSample2D", "texture2D", "texSample3D", "textureCube"]),
+    ("textureLod", &["texSample2DLod", "texture2DLod"]),
+    ("dFdx", &["ddx"]),
+];
+
+/// The arguments of the call whose opening bracket is at `open`: where each starts
+/// and ends, and where the call's closing bracket is.
+fn arguments(line: &str, open: usize) -> Option<(Vec<(usize, usize)>, usize)> {
+    let mut depth = 0;
+    let mut parts = Vec::new();
+    let mut start = open + 1;
+    for (index, c) in line[open..].char_indices() {
+        let at = open + index;
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    if !line[start..at].trim().is_empty() || !parts.is_empty() {
+                        parts.push((start, at));
+                    }
+                    return Some((parts, at));
+                }
+            }
+            ',' if depth == 1 => {
+                parts.push((start, at));
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Converts the arguments of a call the driver found no function for to what the
+/// nearest of the functions it lists takes: `mix(four, three, t)` is
+/// `mix(vec3(four), three, t)`. The first such call on the line that is not converted yet.
+fn called_as(line: &str, messages: &[&str]) -> Option<String> {
+    let call = messages.iter().find_map(|message| {
+        let (_, rest) = message.split_once("no matching function for call to `")?;
+        rest.split_once('\'').map(|(call, _)| call)
+    })?;
+    let (name, given) = call.split_once('(')?;
+    let kinds = |list: &str| -> Vec<String> {
+        list.trim_end_matches(')')
+            .split(',')
+            .map(|kind| kind.trim().to_owned())
+            .filter(|k| !k.is_empty())
+            .collect()
+    };
+    let given = kinds(given);
+    // "error:    vec3 mix(vec3, vec3, float)": what it could have been called with.
+    let taken = messages
+        .iter()
+        .filter(|message| !message.contains("no matching function"))
+        .filter_map(|message| {
+            let (_, rest) = message.rsplit_once("error:")?;
+            let (head, list) = rest.trim().split_once('(')?;
+            (head.split_whitespace().last() == Some(name)).then(|| kinds(list))
+        })
+        .filter(|taken| taken.len() == given.len())
+        .filter_map(|taken| {
+            let cost = given
+                .iter()
+                .zip(&taken)
+                .map(|(given, taken)| conversion(given, taken))
+                .sum::<Option<f32>>()?;
+            Some((cost, taken))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, taken)| taken)?;
+
+    let plain = name.strip_prefix("wepaper_").unwrap_or(name);
+    let aliases = ALIASES.iter().find(|(known, _)| *known == plain).map_or(&[][..], |(_, aliases)| aliases);
+    let bytes = line.as_bytes();
+    for spelled in std::iter::once(plain).chain(aliases.iter().copied()) {
+        for (at, _) in line.match_indices(spelled) {
+            let whole =
+                !at.checked_sub(1).is_some_and(|i| bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_');
+            let open = at + spelled.len() + line[at + spelled.len()..].len()
+                - line[at + spelled.len()..].trim_start().len();
+            if !whole || bytes.get(open) != Some(&b'(') {
+                continue;
+            }
+            let Some((parts, _)) = arguments(line, open) else { continue };
+            if parts.len() != given.len() {
+                continue;
+            }
+            let wanted: Vec<(usize, usize, &str)> = parts
+                .iter()
+                .zip(given.iter().zip(&taken))
+                .filter(|(_, (given, taken))| given != taken)
+                .map(|(&(start, end), (_, taken))| (start, end, taken.as_str()))
+                .collect();
+            if wanted.iter().all(|&(start, end, taken)| is_call_of(line[start..end].trim(), taken)) {
+                continue;
+            }
+            let mut out = line.to_owned();
+            for &(start, end, taken) in wanted.iter().rev() {
+                let argument = line[start..end].trim();
+                if !is_call_of(argument, taken) {
+                    let lead =
+                        &line[start..end][..line[start..end].len() - line[start..end].trim_start().len()];
+                    out.replace_range(start..end, &format!("{lead}{taken}({argument})"));
+                }
+            }
+            return Some(out);
+        }
+    }
+    None
+}
+
+/// Makes a number of every comparison in brackets that the line counts with:
+/// `(depth < limit) * 6.0` is `float(depth < limit) * 6.0`.
+fn counted_comparisons(line: &str) -> Option<String> {
+    let bytes = line.as_bytes();
+    let mut out = line.to_owned();
+    let mut changed = false;
+    let opens: Vec<usize> = line.match_indices('(').map(|(at, _)| at).collect();
+    for open in opens.into_iter().rev() {
+        // What stands before the bracket: a name makes it a call, unless the name is `return`.
+        let before = line[..open].trim_end();
+        let word_start = (0..before.len())
+            .rev()
+            .take_while(|&i| bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
+            .last()
+            .unwrap_or(before.len());
+        let word = &before[word_start..];
+        if !word.is_empty() && word != "return" {
+            continue;
+        }
+        let Some((_, close)) = arguments(line, open) else { continue };
+        let inside = &line[open + 1..close];
+        let mut depth = 0;
+        let compares = inside.char_indices().any(|(index, c)| {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                _ => {}
+            }
+            depth == 0
+                && (matches!(c, '<' | '>')
+                    || ["==", "!=", "&&", "||"].iter().any(|sign| inside[index..].starts_with(sign)))
+        });
+        if compares {
+            out.insert_str(open, "float");
+            changed = true;
+        }
+    }
+    changed.then_some(out)
 }
 
 /// Where line `number` (from 1) starts in `text`.
@@ -173,6 +422,85 @@ fn integer_index(line: &str) -> Option<String> {
     changed.then_some(out)
 }
 
+/// What a message about an assignment of the wrong kind says the variable is, and
+/// whether it is being declared: "initializer of type float cannot be assigned to
+/// variable of type uint" gives `("uint", true)`.
+fn assigned_kind(message: &str) -> Option<(&str, bool)> {
+    let (what, to) = message.split_once(" cannot be assigned to variable of type ")?;
+    let to = to.split(|c: char| !c.is_ascii_alphanumeric()).next().filter(|to| !to.is_empty())?;
+    Some((to, what.contains("initializer of type")))
+}
+
+/// Where the expression that starts at `from` ends: at the `;` or `,` that is not
+/// inside brackets, or at the end of the line.
+fn expression_end(line: &str, from: usize) -> usize {
+    let mut depth = 0;
+    for (index, c) in line[from..].char_indices() {
+        match c {
+            '(' | '[' => depth += 1,
+            ')' | ']' if depth > 0 => depth -= 1,
+            ')' | ';' | ',' if depth == 0 => return from + index,
+            _ => {}
+        }
+    }
+    line.len()
+}
+
+/// Whether `text` is one call of `name` and nothing else: `vec3(...)`.
+fn is_call_of(text: &str, name: &str) -> bool {
+    let Some(rest) = text.strip_prefix(name).map(str::trim_start).filter(|rest| rest.starts_with('(')) else {
+        return false;
+    };
+    let mut depth = 0;
+    rest.char_indices().find_map(|(index, c)| {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        (depth == 0).then_some(index)
+    }) == Some(rest.len() - 1)
+}
+
+/// Converts what a line assigns to the kind `to` of what it is assigned to, as the
+/// original does by itself: `vec3 a = b;` becomes `vec3 a = vec3(b);`. With
+/// `initializer`, in a declaration of that kind; without, in a plain assignment. The
+/// first place on the line that is not converted yet is.
+fn assigned_as(line: &str, to: &str, initializer: bool) -> Option<String> {
+    let bytes = line.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_';
+    let mut places = Vec::new();
+    for (at, _) in line.match_indices('=') {
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(at + 1).copied();
+        if after == Some(b'=') || before.is_some_and(|c| b"=!<>+-*/%&|^".contains(&c)) {
+            continue;
+        }
+        if initializer {
+            // `<kind> <name> =`: the name, then the kind, right before the sign.
+            let name_end = line[..at].trim_end().len();
+            let name_start = (0..name_end).rev().take_while(|&i| word(bytes[i])).last().unwrap_or(name_end);
+            let kind_end = line[..name_start].trim_end().len();
+            let kind_start = (0..kind_end).rev().take_while(|&i| word(bytes[i])).last().unwrap_or(kind_end);
+            if name_start == name_end || &line[kind_start..kind_end] != to {
+                continue;
+            }
+        }
+        places.push(at + 1);
+    }
+    for from in places {
+        let end = expression_end(line, from);
+        let expression = line[from..end].trim();
+        if expression.is_empty() || is_call_of(expression, to) {
+            continue;
+        }
+        let mut out = line.to_owned();
+        out.replace_range(from..end, &format!(" {to}({expression})"));
+        return Some(out);
+    }
+    None
+}
+
 fn is_operand_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '.')
 }
@@ -224,6 +552,24 @@ mod tests {
 
     fn source(body: &str) -> String {
         format!("#version 330 core\n#define X 1\n#line 1\n{body}")
+    }
+
+    #[test]
+    fn a_stage_that_takes_less_of_a_value_than_the_other_gives_takes_all_and_reads_less() {
+        // The original links a vertex stage that writes four numbers with a fragment
+        // stage that reads two of them.
+        let mut text = source(
+            "varying vec2 v_TexCoord;\nvoid main() {\n\tgl_FragColor = texture(g_Texture0, v_TexCoord);\n}\n",
+        );
+        let log = "error: vertex shader output `v_TexCoord' declared as type `vec4', but fragment shader input declared as type `vec2'\n";
+        assert!(repair_link(&mut text, log));
+        // The lines of the body keep their numbers: what the driver says next still points at them.
+        assert!(
+            text.ends_with("in vec4 v_TexCoord;\n#line 1\n#define v_TexCoord v_TexCoord.xy\nvoid main() {\n\tgl_FragColor = texture(g_Texture0, v_TexCoord);\n}\n"),
+            "{text}"
+        );
+        assert!(!repair_link(&mut text, log), "nothing left to repair");
+        assert!(!repair_link(&mut text, "error: something else\n"));
     }
 
     #[test]
@@ -291,6 +637,92 @@ mod tests {
     }
 
     #[test]
+    fn what_is_assigned_is_made_the_kind_it_is_assigned_to() {
+        // The original converts by itself: a vector to a shorter one or to its first
+        // component, a number to a vector of it, one kind of number to another.
+        let mut text = source(
+            "vec3 albedo = texSample2D(g_Texture0, v_TexCoord.xy);\n\
+             uint bar = wepaper_rem(frequency, RESOLUTION), other = 2u;\n\
+             \tfor (int i = -iterations; i <= iterations; i++){\n\
+             v_NoiseCoord = v_TexCoord;\n\
+             albedo.rgb *= x; albedo.a = mask;\n",
+        );
+        let told = |line: usize, what: &str| format!("0:{line}(9): error: {what}\n");
+        assert!(repair(
+            &mut text,
+            &told(1, "initializer of type vec4 cannot be assigned to variable of type vec3")
+        ));
+        assert!(text.contains("vec3 albedo = vec3(texSample2D(g_Texture0, v_TexCoord.xy));"), "{text}");
+        assert!(repair(
+            &mut text,
+            &told(2, "initializer of type float cannot be assigned to variable of type uint")
+        ));
+        assert!(text.contains("uint bar = uint(wepaper_rem(frequency, RESOLUTION)), other = 2u;"), "{text}");
+        assert!(repair(
+            &mut text,
+            &told(3, "initializer of type float cannot be assigned to variable of type int")
+        ));
+        assert!(text.contains("for (int i = int(-iterations); i <= iterations; i++){"), "{text}");
+        assert!(repair(
+            &mut text,
+            &told(4, "value of type vec4 cannot be assigned to variable of type vec2")
+        ));
+        assert!(text.contains("v_NoiseCoord = vec2(v_TexCoord);"), "{text}");
+        // Said again of a line that was repaired: nothing more to do there.
+        assert!(!repair(
+            &mut text,
+            &told(4, "value of type vec4 cannot be assigned to variable of type vec2")
+        ));
+        // An assignment that is not the line's first, and not a compound one.
+        assert!(repair(
+            &mut text,
+            &told(5, "value of type vec4 cannot be assigned to variable of type float")
+        ));
+        assert!(text.contains("albedo.rgb *= x; albedo.a = float(mask);"), "{text}");
+    }
+
+    #[test]
+    fn what_a_function_is_given_is_made_what_it_takes() {
+        let mut text = source(
+            "albedo.rgb = mix(albedo, newAlbedo, mask) + mix(a, b, c);\n\
+             vec2 at = rotateVec2(v_TexCoord, -u_direction + 1.57) * u_scale;\n",
+        );
+        // The driver lists what the function could have been called with.
+        let log = "0:1(14): error: no matching function for call to `mix(vec4, vec3, float)'; candidates are:\n\
+                   0:1(14): error:    float mix(float, float, float)\n\
+                   0:1(14): error:    vec2 mix(vec2, vec2, float)\n\
+                   0:1(14): error:    vec3 mix(vec3, vec3, float)\n\
+                   0:1(14): error:    vec4 mix(vec4, vec4, float)\n\
+                   0:1(14): error:    vec2 mix(vec2, vec2, vec2)\n";
+        assert!(repair(&mut text, log));
+        // The longer vector is cut to the shorter, as the original cuts it; nothing is made up.
+        assert!(text.contains("albedo.rgb = mix(vec3(albedo), newAlbedo, mask) + mix(a, b, c);"), "{text}");
+        // Said of the same line again, it is the next call's turn.
+        assert!(repair(&mut text, log));
+        assert!(text.contains("mix(vec3(albedo), newAlbedo, mask) + mix(vec3(a), b, c);"), "{text}");
+        let log = "0:2(11): error: no matching function for call to `rotateVec2(vec4, float)'; candidates are:\n\
+                   0:2(11): error:    vec2 rotateVec2(vec2, float)\n";
+        assert!(repair(&mut text, log));
+        assert!(
+            text.contains("vec2 at = rotateVec2(vec2(v_TexCoord), -u_direction + 1.57) * u_scale;"),
+            "{text}"
+        );
+        // A call nothing of what it could take fits is left alone.
+        let log = "0:2(11): error: no matching function for call to `rotateVec2(mat4, float)'; candidates are:\n\
+                   0:2(11): error:    vec2 rotateVec2(vec2, float)\n";
+        assert!(!repair(&mut text, log));
+    }
+
+    #[test]
+    fn a_comparison_counted_with_is_a_number() {
+        // True is one and false is nought where the original multiplies by them.
+        let mut text = source("depth *= (depth < limit) * 6.0 + step(a, (b));\n");
+        assert!(repair(&mut text, "0:1(11): error: operands to arithmetic operators must be numeric\n"));
+        assert!(text.contains("depth *= float(depth < limit) * 6.0 + step(a, (b));"), "{text}");
+        assert!(!repair(&mut text, "0:1(11): error: operands to arithmetic operators must be numeric\n"));
+    }
+
+    #[test]
     fn unknown_errors_and_bad_lines_change_nothing() {
         let mut text = source("void main() {}\n");
         let before = text.clone();
@@ -300,6 +732,9 @@ mod tests {
         assert_eq!(text, before);
         let mut condition = source("#if g_Texture0Resolution.y <= 640\n#endif\n");
         assert!(repair(&mut condition, "0(1) : error C0105: Syntax error in #if\n"));
+        assert!(condition.contains("#line 1\n#if 0\n#endif"));
+        let mut condition = source("#if g_Texture0Resolution.y <= 640\n#endif\n");
+        assert!(repair(&mut condition, "0:1(24): preprocessor error: syntax error, unexpected '.'\n"));
         assert!(condition.contains("#line 1\n#if 0\n#endif"));
     }
 }

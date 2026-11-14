@@ -33,6 +33,11 @@
   one float of an array (`spectrum[a][b]`), a float as an array index, a remainder of
   floats in the words of another driver. A line with several mistakes is repaired one
   after another.
+- On drivers that take shaders by the letter (Mesa: AMD, Intel) a third fewer effects are
+  left out. What the original converts by itself is converted where the driver says it is
+  missing: what is assigned to a variable of another kind, what a function is given that
+  it does not take, a comparison that is counted with, a value one stage writes longer
+  than the other reads.
 - `wepaper get memory/heap` says what the allocator has in use and what it holds free.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in
