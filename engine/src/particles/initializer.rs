@@ -7,7 +7,7 @@ use wepaper_json::Value;
 use super::noise;
 use super::particle::{ControlPoint, Particle};
 use super::rng::Rng;
-use super::value::{Vec3, add, cross, direction, dot, index, lerp, number, scale, sub, vec3};
+use super::value::{Vec3, add, cross, direction, dot, index, lerp, number, numbers, scale, sub, vec3};
 
 /// What an initializer may look at besides the particle.
 pub(crate) struct Birth<'a> {
@@ -87,6 +87,9 @@ pub(crate) enum Initializer {
     AngularVelocity(Span),
     /// `colorrandom`: one point on the line between two colours (0 to 255 in the document).
     Color { min: Vec3, max: Vec3, exponent: f32 },
+    /// `colorlist`: one of a few colours (0 to 1 in the document), each as likely.
+    /// Its `huenoise` is not applied.
+    ColorList(Vec<Vec3>),
     /// `hsvcolorrandom`: hue in turns, saturation and value 0 to 1.
     HsvColor { hue: (f32, f32), saturation: (f32, f32), value: (f32, f32) },
     /// `turbulentvelocityrandom`: a speed along a heading that wanders with time, so
@@ -125,6 +128,20 @@ impl Initializer {
                 max: scale(vec3(doc, "max", [255.0; 3]), 1.0 / 255.0),
                 exponent: number(doc, "exponent", 1.0),
             },
+            "colorlist" => {
+                let colors: Vec<Vec3> = doc
+                    .get("colors")
+                    .items()
+                    .filter_map(|color| match numbers(color) {
+                        (_, 0) => None,
+                        (values, _) => Some(values),
+                    })
+                    .collect();
+                if colors.is_empty() {
+                    return None;
+                }
+                Self::ColorList(colors)
+            }
             "hsvcolorrandom" => {
                 let (hue_min, hue_max) = (number(doc, "huemin", 0.0), number(doc, "huemax", 1.0));
                 // Older documents count hue in degrees.
@@ -179,6 +196,10 @@ impl Initializer {
             Self::AngularVelocity(span) => particle.angular_velocity = span.draw(birth.rng),
             Self::Color { min, max, exponent } => {
                 particle.color = lerp(*min, *max, birth.rng.between(0.0, 1.0, *exponent))
+            }
+            Self::ColorList(colors) => {
+                let pick = birth.rng.between(0.0, colors.len() as f32, 1.0) as usize;
+                particle.color = colors[pick.min(colors.len() - 1)];
             }
             Self::HsvColor { hue, saturation, value } => {
                 let rng = &mut *birth.rng;
@@ -256,6 +277,26 @@ mod tests {
 
     fn close(a: Vec3, b: Vec3) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-3)
+    }
+
+    #[test]
+    fn a_colour_list_gives_each_particle_one_of_its_colours() {
+        let points = [ControlPoint::default(); 8];
+        let json = r#"{"name":"colorlist","colors":["0.5 0.9 1","1 0.6 0.8","1 1 1"],"huenoise":0}"#;
+        let mut seen = [false; 3];
+        for sequence in 0..60 {
+            let color = born(json, sequence, &points).color;
+            let which = [[0.5, 0.9, 1.0], [1.0, 0.6, 0.8], [1.0; 3]]
+                .iter()
+                .position(|listed| close(color, *listed))
+                .unwrap_or_else(|| panic!("{color:?} is not one of the list"));
+            seen[which] = true;
+        }
+        assert_eq!(seen, [true; 3], "every colour comes up");
+        assert!(
+            Initializer::parse(&wepaper_json::parse(r#"{"name":"colorlist","colors":[]}"#).unwrap())
+                .is_none()
+        );
     }
 
     #[test]
