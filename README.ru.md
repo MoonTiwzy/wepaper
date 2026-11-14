@@ -7,7 +7,7 @@
 быстро и бережно к железу.
 
 [![CI](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml/badge.svg)](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml)
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-3b9cff)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3b9cff)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-2024-e6522c?logo=rust&logoColor=white)
 ![Wayland](https://img.shields.io/badge/wayland-layer--shell-ffbc00)
 
@@ -264,5 +264,5 @@ WEPAPER_TEST_WORKSHOP=~/.local/share/Steam/steamapps/workshop/content/431960 \
 
 ## Лицензия
 
-GPL-2.0-or-later. wepaper это независимый проект: он не связан с Wallpaper Engine и не содержит
+MIT. wepaper это независимый проект: он не связан с Wallpaper Engine и не содержит
 его файлов. Нужна своя копия Wallpaper Engine.

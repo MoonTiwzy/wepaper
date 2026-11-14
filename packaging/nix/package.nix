@@ -62,7 +62,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Wallpaper Engine wallpapers as the Wayland desktop background";
     homepage = "https://github.com/MoonTiwzy/wepaper";
-    license = lib.licenses.gpl2Plus;
+    license = lib.licenses.mit;
     platforms = lib.platforms.linux;
     mainProgram = "wepaper";
   };

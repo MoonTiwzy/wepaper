@@ -10,6 +10,8 @@
 - An output's share of the volume (`look/volume`) reaches a video wallpaper too. A video
   starts at that volume: one turned down to nothing was heard for a moment first.
 
+- The licence is MIT.
+
 ## 0.2.0
 
 - 3D scenes. A scene with a perspective camera is seen through it, or through its camera

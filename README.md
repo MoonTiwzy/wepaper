@@ -7,7 +7,7 @@ Scenes, videos and web wallpapers from the Steam Workshop, on every monitor,<br>
 fast and light on the machine.
 
 [![CI](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml/badge.svg)](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml)
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-3b9cff)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-3b9cff)](LICENSE)
 ![Rust](https://img.shields.io/badge/rust-2024-e6522c?logo=rust&logoColor=white)
 ![Wayland](https://img.shields.io/badge/wayland-layer--shell-ffbc00)
 
@@ -267,5 +267,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
-GPL-2.0-or-later. wepaper is an independent project: it is not affiliated with Wallpaper
+MIT. wepaper is an independent project: it is not affiliated with Wallpaper
 Engine, and ships none of its files. You need your own copy of Wallpaper Engine.
