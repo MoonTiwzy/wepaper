@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<!-- The wallpaper wepaper-web's end-to-end test shows. It says what happens to it as
+     lines in the plugin's log ("page: e2e <what>"), and paints its background in the
+     "tint" property so that a screenshot can tell a change arrived. -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: rgb(0, 0, 0); }
+    #spinner { position: fixed; left: 40px; top: 40px; width: 80px; height: 80px; background: white;
+               animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="spinner"></div>
+<script>
+    function say(what) {
+        window.webkit.messageHandlers.wepaper.postMessage(JSON.stringify({ type: 'log', message: 'e2e ' + what }));
+    }
+
+    // What the browser itself holds, read through a frame the bridge did not touch.
+    function nativeVolume(element) {
+        const frame = document.createElement('iframe');
+        document.body.appendChild(frame);
+        const descriptor = Object.getOwnPropertyDescriptor(frame.contentWindow.HTMLMediaElement.prototype, 'volume');
+        const volume = descriptor.get.call(element);
+        frame.remove();
+        return volume;
+    }
+
+    // A second of silence, so that there is a media element to pause and to turn down.
+    function silence() {
+        const rate = 8000, bytes = new Uint8Array(44 + rate);
+        const view = new DataView(bytes.buffer);
+        const text = (at, s) => { for (let i = 0; i < s.length; i += 1) bytes[at + i] = s.charCodeAt(i); };
+        text(0, 'RIFF'); view.setUint32(4, 36 + rate, true); text(8, 'WAVEfmt ');
+        view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+        view.setUint32(24, rate, true); view.setUint32(28, rate, true); view.setUint16(32, 1, true);
+        view.setUint16(34, 8, true); text(36, 'data'); view.setUint32(40, rate, true);
+        bytes.fill(128, 44);
+        return URL.createObjectURL(new Blob([bytes], { type: 'audio/wav' }));
+    }
+
+    const sound = new Audio(silence());
+    sound.loop = true;
+    sound.volume = 0.5;
+    sound.play().then(() => say('sound playing'), (error) => say('sound refused ' + error.name));
+
+    // Web Audio through the bridge's master gain: a tone turned all the way down.
+    const context = new AudioContext();
+    const tone = context.createOscillator(), quiet = context.createGain();
+    quiet.gain.value = 0;
+    tone.connect(quiet).connect(context.destination);
+    tone.start();
+    // Events, not timers: these are heard while the page is paused too.
+    context.onstatechange = () => say('webaudio ' + context.state);
+    sound.onpause = () => say('sound paused');
+
+    let frames = 0, ticks = 0, audioFrames = 0;
+    (function frame() { frames += 1; requestAnimationFrame(frame); })();
+    setInterval(() => { ticks += 1; }, 100);
+    setInterval(() => {
+        say('second frames=' + frames + ' ticks=' + ticks + ' audio=' + audioFrames +
+            ' sound=' + (sound.paused ? 'paused' : 'playing') +
+            ' volume=' + sound.volume + '/' + nativeVolume(sound).toFixed(3) +
+            ' webaudio=' + context.state);
+        frames = 0; ticks = 0; audioFrames = 0;
+    }, 1000);
+
+    fetch('data.json').then((response) => response.json())
+        .then((data) => say('fetch answer=' + data.answer), (error) => say('fetch failed ' + error));
+    const request = new XMLHttpRequest();
+    request.open('GET', 'data.json');
+    request.onload = () => say('xhr answer=' + JSON.parse(request.responseText).answer);
+    request.onerror = () => say('xhr failed');
+    request.send();
+
+    // Dialogs and popups must neither block nor show.
+    alert('nobody reads this');
+    say('popup ' + (window.open('https://example.com/') === null ? 'refused' : 'opened'));
+
+    document.addEventListener('mousemove', () => say('pointer moved'), { once: true });
+
+    // Assigned late, the way many wallpapers do it, and filled in after the assignment.
+    window.onload = function () {
+        window.wallpaperPropertyListener = {};
+        window.wallpaperPropertyListener.applyUserProperties = function (properties) {
+            say('user ' + JSON.stringify(properties));
+            if (properties.tint) {
+                const [r, g, b] = properties.tint.value.split(' ').map((part) => Math.round(parseFloat(part) * 255));
+                document.body.style.background = 'rgb(' + r + ', ' + g + ', ' + b + ')';
+            }
+            if (properties.leave && properties.leave.value) {
+                location.href = 'https://example.com/';
+            }
+        };
+        window.wallpaperPropertyListener.applyGeneralProperties = function (properties) {
+            say('general fps=' + properties.fps);
+        };
+        window.wallpaperPropertyListener.setPaused = function (paused) {
+            say('paused ' + paused);
+        };
+        setTimeout(function () {
+            window.wallpaperRegisterAudioListener(function (samples) {
+                audioFrames += 1;
+                if (audioFrames === 1) {
+                    say('audio length=' + samples.length + ' left0=' + samples[0] + ' right0=' + samples[64]);
+                }
+            });
+            window.wallpaperRegisterMediaStatusListener(function () {});
+            window.wallpaperRegisterMediaPlaybackListener(function () {});
+            say('api playing=' + window.wallpaperMediaIntegration.PLAYBACK_PLAYING);
+        }, 300);
+    };
+</script>
+</body>
+</html>

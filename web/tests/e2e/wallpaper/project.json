@@ -1,0 +1,41 @@
+{
+	"file" : "index.html",
+	"general" :
+	{
+		"properties" :
+		{
+			"tint" :
+			{
+				"order" : 0,
+				"text" : "Background",
+				"type" : "color",
+				"value" : "0 0 1"
+			},
+			"speed" :
+			{
+				"max" : 10,
+				"min" : 0,
+				"order" : 1,
+				"text" : "Speed",
+				"type" : "slider",
+				"value" : 3
+			},
+			"motto" :
+			{
+				"order" : 2,
+				"text" : "Motto",
+				"type" : "textinput",
+				"value" : "plain"
+			},
+			"leave" :
+			{
+				"order" : 3,
+				"text" : "Try to navigate away",
+				"type" : "bool",
+				"value" : false
+			},
+		}
+	},
+	"title" : "wepaper-web test page",
+	"type" : "web"
+}

@@ -1,0 +1,8 @@
+{
+    "id": "web",
+    "kind": "renderer",
+    "name": "Web wallpapers",
+    "handles": ["web"],
+    "exec": "wepaper-web",
+    "description": "Shows Wallpaper Engine's web wallpapers (a folder with an HTML page) with WebKitGTK, one process per output."
+}

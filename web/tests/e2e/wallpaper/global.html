@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<!-- The other common way to set the listener up: a global variable, declared before
+     the page has loaded, in a script of its own. -->
+<html>
+<head>
+<meta charset="utf-8">
+<script>
+    function say(what) {
+        window.webkit.messageHandlers.wepaper.postMessage(JSON.stringify({ type: 'log', message: 'e2e ' + what }));
+    }
+    var wallpaperPropertyListener = {
+        applyUserProperties: function (properties) {
+            say('global user ' + Object.keys(properties).join(','));
+        },
+        applyGeneralProperties: function (properties) {
+            say('global general fps=' + properties.fps);
+        },
+        setPaused: function (paused) {
+            say('global paused ' + paused);
+        }
+    };
+</script>
+</head>
+<body style="background: rgb(40, 40, 40)">
+<script>
+    say('global same=' + (window.wallpaperPropertyListener === wallpaperPropertyListener));
+</script>
+</body>
+</html>
