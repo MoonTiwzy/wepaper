@@ -74,6 +74,14 @@ impl Capture {
     }
 }
 
+impl Capture {
+    /// Whether the recorder went away by itself: there is no sound server to record
+    /// from, or it left.
+    pub(super) fn ended(&mut self) -> bool {
+        !matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
 impl Drop for Capture {
     fn drop(&mut self) {
         let _ = self.child.kill();

@@ -179,7 +179,7 @@ impl SceneInstance {
             }
         }
         // Particles live on, and this frame's reach the GPU, before anything is drawn.
-        let pointer = [input.pointer[0] * self.scene_size[0], (1.0 - input.pointer[1]) * self.scene_size[1]];
+        let pointer = self.pointer_in_scene(input.pointer);
         for layer in &mut self.layers {
             if let LayerKind::Particles(particles) = &mut layer.kind
                 && layer.shown
@@ -272,6 +272,20 @@ impl SceneInstance {
             engine.pool.give(target);
         }
         engine.pool.end_frame();
+    }
+
+    /// Where a point of the output (0 to 1 from the top left) is in the scene, as the
+    /// camera showed it last: a scene that is cropped or zoomed to fill an output does
+    /// not start in the output's corner.
+    pub(super) fn pointer_in_scene(&self, pointer: [f32; 2]) -> [f32; 2] {
+        // The pointer counts from the top left; the scene's y points up.
+        let clip = [pointer[0] * 2.0 - 1.0, 1.0 - pointer[1] * 2.0, 0.0];
+        if self.view_projection == Mat4::IDENTITY {
+            // Nothing was drawn yet: the scene as if it filled the output exactly.
+            return [pointer[0] * self.scene_size[0], (1.0 - pointer[1]) * self.scene_size[1]];
+        }
+        let at = self.view_projection.inverse().transform_point(clip);
+        [at[0], at[1]]
     }
 
     /// Recomputes every layer's place in the scene from its own values and its parents'.

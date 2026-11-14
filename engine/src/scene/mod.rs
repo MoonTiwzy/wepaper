@@ -417,6 +417,15 @@ impl SceneInstance {
         self.wants_audio
     }
 
+    /// Whether the scene has scripts that hear of the system's media player.
+    pub fn wants_media(&self) -> bool {
+        #[cfg(feature = "script")]
+        if self.scripts.as_ref().is_some_and(|scripts| scripts.wants_media()) {
+            return true;
+        }
+        false
+    }
+
     /// Switches the scene's sound layers on or off and sets their volume (0 to 100).
     /// Off, nothing is decoded: there are no players at all.
     pub fn set_sound(&mut self, on: bool, volume: f32) {

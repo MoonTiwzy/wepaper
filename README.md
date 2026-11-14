@@ -31,6 +31,17 @@ underneath.
 ## The numbers
 
 <!-- footprint:start -->
+| wallpaper | video memory, MiB | memory, MB | CPU, % of a core | start, ms |
+|---|---|---|---|---|
+| a picture with one effect | 84 → **65** | 125 → **31** | 2.3 → **2.5** | 300 → **89** |
+| puppets, nine effect chains | 574 → **510** | 409 → **47** | 6.2 → **4.2** | 842 → **427** |
+| 168 layers, a scripted console | 2838 → **112** | 2509 → **53** | 94.0 → **11.1** | 559 → **152** |
+| 4K scene, 65 layers, 600 scripts | 482 → **392** | 514 → **62** | 12.0 → **11.7** | 1245 → **600** |
+| scene with a 4K video, sound, particles | 124 → **98** | 381 → **151** | 42.6 → **18.1** | 433 → **174** |
+| video, 720p 30 fps | 84 → **46** | 199 → **95** | 8.8 → **8.5** | 323 → **174** |
+| video, 4K 60 fps | 127 → **74** | 274 → **141** | 61.4 → **28.5** | 344 → **152** |
+
+Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 3.5 times less memory, 1.5 times less CPU and a start 2.3 times faster; on the heaviest one, 25 times less video memory and 47 times less memory.
 <!-- footprint:end -->
 
 Measured, not estimated: how and on what is in [docs/performance.md](docs/performance.md).
@@ -75,8 +86,9 @@ install -Dm755 target/release/wepaper ~/.local/bin/wepaper
 
 At run time, and only when a wallpaper asks for it: `libmpv` (video and sound), `ffmpeg`
 (to make cheaper copies of oversized videos), `parec` from PulseAudio or PipeWire's Pulse
-tools (audio-reactive wallpapers), `fc-match` (text layers that name a system font). None of
-them is linked in; without one, the feature it serves is simply not there.
+tools (audio-reactive wallpapers), `fc-match` (text layers that name a system font),
+`playerctl` (wallpapers that show the track your player is on). None of them is linked in;
+without one, the feature it serves is simply not there.
 
 ## Quick start
 

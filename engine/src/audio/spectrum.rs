@@ -79,6 +79,8 @@ pub struct Listener {
     /// Starting failed once: do not try again every frame.
     unavailable: bool,
     spectrum: Spectrum,
+    /// The newest samples, copied out from under the recorder's lock.
+    samples: Vec<f32>,
 }
 
 impl Listener {
@@ -110,11 +112,20 @@ impl Listener {
             self.capture = Capture::start();
             self.unavailable = self.capture.is_none();
         }
+        // A recorder that went away is let go of, not left behind as a dead process.
+        if self.capture.as_mut().is_some_and(Capture::ended) {
+            log::warn!("no audio spectrum: the recorder stopped (is a sound server running?)");
+            self.capture = None;
+            self.unavailable = true;
+        }
         match &self.capture {
             Some(capture) => {
                 // The lock is held only to copy two thousand numbers.
-                let samples = capture.samples.lock().map(|samples| samples.clone()).unwrap_or_default();
-                self.spectrum.feed(&samples, dt);
+                self.samples.clear();
+                if let Ok(samples) = capture.samples.lock() {
+                    self.samples.extend_from_slice(&samples);
+                }
+                self.spectrum.feed(&self.samples, dt);
             }
             None => self.spectrum.decay(dt),
         }

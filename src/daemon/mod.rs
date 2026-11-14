@@ -491,6 +491,12 @@ impl Daemon {
                 .values()
                 .any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
         self.engine.listen(listen, now.duration_since(self.last_round).as_secs_f32().min(0.1));
+        // The same for the system's media player: followed while a script shows its track.
+        let follow = self
+            .slots
+            .values()
+            .any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_media));
+        self.engine.follow_media(follow);
         self.last_round = now;
         // Once a second is plenty for looking after the videos' cheaper copies.
         if now.duration_since(self.last_upkeep) >= Duration::from_secs(1) {

@@ -41,7 +41,8 @@ from a workshop library of 113 wallpapers: 56 scenes, 51 videos and 6 web pages.
 | Presets | yes |
 | Perspective camera, 3D model objects, lights | no: drawn flat, objects left out |
 | HDR pipeline | no: such scenes play in the normal range |
-| Media integration (the player's track in scripts) | no |
+| Media integration: the player's state, title, artist and album in scripts (MPRIS) | yes |
+| Media integration: the cover picture and its colours, the position in the track | no |
 
 What a scene has that is not shown is listed by `wepaper inspect` and under `skipped` in the
 control tree.

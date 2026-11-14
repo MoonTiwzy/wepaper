@@ -12,6 +12,7 @@ optdepends=('mpv: video wallpapers, video textures and sound'
             'ffmpeg: cheaper copies of videos larger than the monitor'
             'libpulse: audio-reactive wallpapers (parec)'
             'fontconfig: text layers that name a system font'
+            'playerctl: wallpapers that show the track the system is playing'
             'webkitgtk-6.0: web wallpapers (wepaper-web)'
             'gtk4-layer-shell: web wallpapers (wepaper-web)')
 provides=('wepaper')

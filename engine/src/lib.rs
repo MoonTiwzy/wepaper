@@ -182,6 +182,12 @@ impl Wallpaper {
         matches!(self, Wallpaper::Scene(scene) if scene.wants_audio())
     }
 
+    /// Whether the wallpaper has scripts that show what the system's media player
+    /// is on, so that somebody has to follow it.
+    pub fn wants_media(&self) -> bool {
+        matches!(self, Wallpaper::Scene(scene) if scene.wants_media())
+    }
+
     /// Switches the wallpaper's own sound on or off and sets its volume (0 to 100).
     /// A video's sound follows the engine's video settings instead.
     pub fn set_sound(&mut self, on: bool, volume: f32) {
@@ -242,6 +248,7 @@ pub struct Engine {
     pub(crate) white: Rc<share::SharedTexture>,
     pub(crate) blit: Program,
     pub(crate) listener: audio::Listener,
+    pub(crate) media: audio::Media,
     assets: Option<PathBuf>,
 }
 
@@ -271,6 +278,7 @@ impl Engine {
             white,
             share,
             listener: audio::Listener::new(),
+            media: audio::Media::default(),
             assets: options.assets.or_else(locate::assets),
         })
     }
@@ -378,6 +386,13 @@ impl Engine {
     /// whether anything shown reads it; while nothing does, nothing listens.
     pub fn listen(&mut self, wanted: bool, dt: f32) {
         self.listener.update(wanted, dt);
+    }
+
+    /// Brings what the system's media players are on up to date, once per round of
+    /// drawing. `wanted` is whether anything shown has scripts that hear of it; while
+    /// nothing does, the players are not followed.
+    pub fn follow_media(&mut self, wanted: bool) {
+        self.media.update(wanted);
     }
 
     /// Whether the system's sound is being recorded for the spectrum right now.

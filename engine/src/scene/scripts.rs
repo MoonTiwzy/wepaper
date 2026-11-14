@@ -10,9 +10,10 @@ use std::collections::HashMap;
 use wepaper_json::Value;
 
 use crate::Engine;
+use crate::audio::Playback;
 use crate::read::Files;
 use crate::script::{
-    Binding, CursorEvent, Datum, Environment, Field, Handler, Host, LayerId, Runtime, ScriptId,
+    Binding, CursorEvent, Datum, Environment, Field, Handler, Host, LayerId, MediaEvent, Runtime, ScriptId,
 };
 
 use super::bindings::{Change, PuppetField, SceneField, Scripted, Slot};
@@ -37,9 +38,18 @@ pub(crate) struct Scripts {
     pressed: Option<usize>,
     /// Whether any script handles events that need the layer under the pointer.
     watches_layers: bool,
+    /// Whether any script handles what the system's media player does.
+    hears_media: bool,
+    /// The state of the media player the scripts were last told: its serial.
+    media_told: u64,
 }
 
 impl Scripts {
+    /// Whether any script wants to hear what the system's media player is on.
+    pub(crate) fn wants_media(&self) -> bool {
+        self.hears_media
+    }
+
     /// Whether a script asked for the audio spectrum.
     pub(crate) fn wants_audio(&self) -> bool {
         self.runtime.wants_audio()
@@ -255,6 +265,8 @@ impl SceneInstance {
             over: None,
             pressed: None,
             watches_layers: false,
+            hears_media: false,
+            media_told: 0,
         };
         let environment = self.script_environment(&FrameInput::default(), 0.0, None);
         let mut failed = 0;
@@ -297,6 +309,9 @@ impl SceneInstance {
         ]
         .into_iter()
         .any(|handler| scripts.runtime.any_handles(handler));
+        scripts.hears_media = [Handler::MediaStatus, Handler::MediaPlayback, Handler::MediaProperties]
+            .into_iter()
+            .any(|handler| scripts.runtime.any_handles(handler));
         self.scripts = Some(Box::new(scripts));
     }
 
@@ -319,11 +334,7 @@ impl SceneInstance {
             time_of_day: f64::from(input.daytime),
             canvas_size: [f64::from(self.scene_size[0]), f64::from(self.scene_size[1])],
             screen_size: screen,
-            // The pointer counts from the top left; the scene's y points up.
-            cursor_scene: [
-                f64::from(input.pointer[0] * self.scene_size[0]),
-                f64::from((1.0 - input.pointer[1]) * self.scene_size[1]),
-            ],
+            cursor_scene: self.pointer_in_scene(input.pointer).map(f64::from),
             cursor_screen: [f64::from(input.pointer[0]) * screen[0], f64::from(input.pointer[1]) * screen[1]],
             cursor_down: input.pointer_down,
             spectrum,
@@ -353,10 +364,38 @@ impl SceneInstance {
         } else {
             scripts.over
         };
+        let (playing, heard) = engine.media.now();
+        let news = (scripts.hears_media && heard != scripts.media_told).then(|| playing.clone());
         {
-            let Scripts { runtime, attached, storage, over, pressed, .. } = &mut *scripts;
+            let Scripts { runtime, attached, storage, over, pressed, media_told, .. } = &mut *scripts;
             let mut host = SceneHost { scene: self, storage, files: None, environment };
             runtime.begin_frame(&mut host);
+
+            // The media player moved on: its state, then its track.
+            if let Some(playing) = news {
+                if *media_told == 0 {
+                    runtime.media(MediaEvent::Status { enabled: true }, &mut host);
+                }
+                *media_told = heard;
+                let state = match playing.playback {
+                    Playback::Stopped => 0,
+                    Playback::Playing => 1,
+                    Playback::Paused => 2,
+                };
+                runtime.media(MediaEvent::Playback { state }, &mut host);
+                runtime.media(
+                    MediaEvent::Properties {
+                        title: &playing.title,
+                        artist: &playing.artist,
+                        sub_title: "",
+                        album_title: &playing.album,
+                        album_artist: &playing.artist,
+                        genres: "",
+                        content_type: "audio",
+                    },
+                    &mut host,
+                );
+            }
 
             let target = |layer: usize| Some(LayerId(layer as u32));
             if moved {
