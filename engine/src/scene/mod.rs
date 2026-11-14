@@ -420,10 +420,10 @@ impl SceneInstance {
     /// Whether the scene has scripts that hear of the system's media player.
     pub fn wants_media(&self) -> bool {
         #[cfg(feature = "script")]
-        if self.scripts.as_ref().is_some_and(|scripts| scripts.wants_media()) {
-            return true;
-        }
-        false
+        let wanted = self.scripts.as_ref().is_some_and(|scripts| scripts.wants_media());
+        #[cfg(not(feature = "script"))]
+        let wanted = false;
+        wanted
     }
 
     /// Switches the scene's sound layers on or off and sets their volume (0 to 100).
