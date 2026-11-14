@@ -16,7 +16,8 @@
   lines carry the time of day, and a wallpaper shown says how long it took to load.
 - The Nix package builds and installs the web wallpaper plugin: on NixOS web wallpapers had
   nothing to draw them. A plugin's program is looked for beside the daemon before the PATH:
-  run from a package's own folder, the plugin was there and was not found.
+  run from a package's own folder, the plugin was there and was not found. The package brings
+  GStreamer's plugins: without them a page with sound ended the browser's process.
 
 ## 0.2.0
 

@@ -9,6 +9,7 @@
   gtk4-layer-shell,
   webkitgtk_6_0,
   glib-networking,
+  gst_all_1,
   libglvnd,
   mpv-unwrapped,
   ffmpeg,
@@ -39,6 +40,14 @@ rustPlatform.buildRustPackage {
     gtk4-layer-shell
     webkitgtk_6_0
     glib-networking
+    # What a page's sound and video go through: without these the browser engine's
+    # process ends as soon as a page plays anything. The wrapper puts them on
+    # GStreamer's plugin path.
+    gst_all_1.gstreamer
+    gst_all_1.gst-plugins-base
+    gst_all_1.gst-plugins-good
+    gst_all_1.gst-plugins-bad
+    gst_all_1.gst-libav
   ];
 
   # The plugin is a program of its own and not a default member of the workspace:
