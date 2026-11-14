@@ -10,6 +10,7 @@ mod bindings;
 mod build;
 mod draw;
 mod particles;
+mod puppet;
 mod shade;
 mod text;
 mod tree;
@@ -23,7 +24,7 @@ use crate::{Fill, Viewport};
 
 pub(crate) use text::system_font;
 
-use bindings::{Bindings, Change, SceneField, Slot};
+use bindings::{Bindings, Change, PuppetField, SceneField, Slot};
 use shade::Shade;
 
 /// How an image layer gets its picture.
@@ -82,6 +83,8 @@ pub(crate) struct ImageLayer {
     /// The pass that puts the layer's picture into the frame with a blend mode
     /// (multiply, screen, ...) instead of plain blending, when it has one.
     pub(crate) blend_pass: Option<Shade>,
+    /// The mesh and bones the picture is drawn on, when the layer is a puppet.
+    pub(crate) puppet: Option<puppet::PuppetState>,
 }
 
 /// What a layer is.
@@ -293,6 +296,15 @@ impl SceneInstance {
                             image.color = three;
                         }
                     }
+                    Slot::Puppet(layer, which, field) => {
+                        if let Some(animation) = self.animation_layer(layer, which) {
+                            match field {
+                                PuppetField::Rate => animation.rate = three[0],
+                                PuppetField::Blend => animation.blend = three[0],
+                                PuppetField::Visible => {}
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -307,6 +319,11 @@ impl SceneInstance {
                 SceneField::Shake => self.shake.enabled = on,
                 _ => {}
             },
+            Change::Flag(Slot::Puppet(layer, which, _), on) => {
+                if let Some(animation) = self.animation_layer(layer, which) {
+                    animation.visible = on;
+                }
+            }
             Change::Flag(Slot::EffectVisible(layer, effect), on) => {
                 if let LayerKind::Image(image) = &mut self.layers[layer].kind
                     && let Some(effect) = image.effects.get_mut(effect)
@@ -324,6 +341,14 @@ impl SceneInstance {
                 }
             }
             Change::Flag(..) | Change::Text(..) => {}
+        }
+    }
+
+    /// The animation layer `which` of the puppet that layer `layer` is.
+    fn animation_layer(&mut self, layer: usize, which: usize) -> Option<&mut puppet::AnimationLayer> {
+        match &mut self.layers.get_mut(layer)?.kind {
+            LayerKind::Image(image) => image.puppet.as_mut()?.layers.get_mut(which),
+            _ => None,
         }
     }
 

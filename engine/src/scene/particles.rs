@@ -165,6 +165,7 @@ fn part(
             combos: &combos,
             constants: &super::build::constants(pass),
             buffers: &[],
+            slots: &[],
         },
         bindings,
     )?;

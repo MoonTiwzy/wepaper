@@ -12,10 +12,12 @@ use crate::glsl::Combos;
 use crate::gpu::{Blend, Mesh};
 use crate::math::Mat4;
 use crate::read::Files;
+use crate::read::puppet::layers_from_scene;
 use crate::{Engine, Fill, LoadError, Viewport};
 
 use super::bindings::{Bindings, SceneField, Slot};
 use super::particles::ParticleLayer;
+use super::puppet::PuppetState;
 use super::shade::{PassInput, Shade, TextureChoice, TextureRef};
 use super::{BufferSpec, Effect, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, SoundLayer, Step};
 
@@ -263,6 +265,7 @@ fn build_bloom(
                 combos: &Combos::new(),
                 constants,
                 buffers: &["_bloom".to_owned()],
+                slots: &[],
             },
             bindings,
         )
@@ -338,6 +341,7 @@ fn build_image(
             combos: &pass.combos,
             constants: &constants(pass),
             buffers: &[],
+            slots: &[],
         },
         bindings,
     )?;
@@ -370,7 +374,27 @@ fn build_image(
 
     let (quad, quad_unit, base_quad) = quads(engine, size, image.alignment, extent)?;
     let (effects, buffers) = build_effects(engine, files, bindings, &image.effects);
-    let _ = index;
+    // A puppet: the picture goes on a mesh that bones bend.
+    let puppet = model.puppet.as_deref().and_then(|path| {
+        let made = engine.share.puppet(files, path, extent).and_then(|shared| {
+            let layers = layers_from_scene(&image.animation_layers);
+            PuppetState::new(engine, files, bindings, shared, layers, pass, index)
+        });
+        match made {
+            Ok(mut puppet) => {
+                // The mesh is measured from the picture's centre; the layer's origin may sit elsewhere.
+                puppet.offset = [
+                    -f32::from(image.alignment.horizontal) * size[0] / 2.0,
+                    -f32::from(image.alignment.vertical) * size[1] / 2.0,
+                ];
+                Some(puppet)
+            }
+            Err(why) => {
+                log::warn!("the layer is drawn flat: {why}");
+                None
+            }
+        }
+    });
 
     Ok(ImageLayer {
         mode,
@@ -392,6 +416,7 @@ fn build_image(
         base_quad,
         text: None,
         blend_pass: blend_pass(engine, files, bindings, image.blend_mode),
+        puppet,
     })
 }
 
@@ -411,6 +436,7 @@ fn blend_pass(engine: &mut Engine, files: &Files, bindings: &mut Bindings, mode:
             combos: &combos,
             constants: &[],
             buffers: &[],
+            slots: &[],
         },
         bindings,
     )
@@ -519,6 +545,7 @@ fn build_text(
             combos: &Combos::new(),
             constants: &[],
             buffers: &[],
+            slots: &[],
         },
         bindings,
     )?;
@@ -539,6 +566,7 @@ fn build_text(
         base_quad,
         text: Some(TextState { text: text.text.value.clone(), font, style, size, surface, dirty: true }),
         blend_pass: blend_pass(engine, files, bindings, text.blend_mode),
+        puppet: None,
     })
 }
 
@@ -628,6 +656,7 @@ fn build_effect(
                 combos: &combos,
                 constants: &values,
                 buffers: &names,
+                slots: &[],
             },
             bindings,
         )?;

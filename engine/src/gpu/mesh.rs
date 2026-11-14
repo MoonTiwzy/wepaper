@@ -10,6 +10,8 @@ pub struct Mesh {
     array: glow::VertexArray,
     buffer: glow::Buffer,
     indices: Option<glow::Buffer>,
+    /// The buffer of an integer attribute, when the mesh has one.
+    integers: Option<glow::Buffer>,
     count: i32,
     capacity: usize,
     layout: Vec<(u32, i32)>,
@@ -59,11 +61,33 @@ impl Mesh {
                 array,
                 buffer,
                 indices: index_buffer,
+                integers: None,
                 count,
                 capacity: vertices.len(),
                 layout: layout.to_vec(),
             })
         }
+    }
+
+    /// Adds an attribute of unsigned integers (the bones a vertex follows), four a
+    /// vertex, in a buffer of its own beside the floats.
+    pub fn with_integers(mut self, location: u32, values: &[[u32; 4]]) -> Result<Self, GpuError> {
+        // SAFETY: the context is current and the vertex array is this mesh's; the byte
+        // view covers exactly `values`, which are plain integers.
+        unsafe {
+            let raw = self.gl.raw();
+            let buffer = raw.create_buffer().map_err(GpuError)?;
+            raw.bind_vertex_array(Some(self.array));
+            raw.bind_buffer(glow::ARRAY_BUFFER, Some(buffer));
+            let bytes =
+                std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values));
+            raw.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes, glow::STATIC_DRAW);
+            raw.enable_vertex_attrib_array(location);
+            raw.vertex_attrib_pointer_i32(location, 4, glow::UNSIGNED_INT, 16, 0);
+            raw.bind_vertex_array(None);
+            self.integers = Some(buffer);
+        }
+        Ok(self)
     }
 
     /// A quad of four corners (bottom left, bottom right, top left, top right), each
@@ -129,8 +153,8 @@ impl Drop for Mesh {
             let raw = self.gl.raw();
             raw.delete_vertex_array(self.array);
             raw.delete_buffer(self.buffer);
-            if let Some(indices) = self.indices {
-                raw.delete_buffer(indices);
+            for buffer in self.indices.into_iter().chain(self.integers) {
+                raw.delete_buffer(buffer);
             }
         }
     }

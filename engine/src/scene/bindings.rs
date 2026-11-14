@@ -32,6 +32,16 @@ pub(crate) enum Slot {
     LayerText(usize),
     /// One of the scene's own values: its camera, its bloom, its background.
     Scene(SceneField),
+    /// A value of one animation layer of a puppet: the scene layer, then which of its layers.
+    Puppet(usize, usize, PuppetField),
+}
+
+/// A value of a puppet's animation layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PuppetField {
+    Rate,
+    Blend,
+    Visible,
 }
 
 /// A value of the scene itself.
@@ -76,7 +86,9 @@ impl Slot {
     /// Whether the slot holds a switch and not numbers.
     pub(crate) fn is_flag(self) -> bool {
         match self {
-            Self::LayerVisible(_) | Self::EffectVisible(..) => true,
+            Self::LayerVisible(_) | Self::EffectVisible(..) | Self::Puppet(_, _, PuppetField::Visible) => {
+                true
+            }
             Self::Scene(field) => field.is_flag(),
             _ => false,
         }
@@ -196,7 +208,9 @@ impl Bindings {
                     Slot::Value(index) => {
                         Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len()))
                     }
-                    Slot::LayerAlpha(_) => Change::Floats(binding.slot, value_floats(value, 1)),
+                    Slot::LayerAlpha(_) | Slot::Puppet(..) => {
+                        Change::Floats(binding.slot, value_floats(value, 1))
+                    }
                     _ => Change::Floats(binding.slot, value_floats(value, 3)),
                 })
             })

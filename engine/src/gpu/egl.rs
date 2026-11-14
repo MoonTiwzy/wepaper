@@ -229,9 +229,9 @@ fn headless_displays(egl: &Egl, wanted: Option<&str>) -> Vec<(egl::Display, Stri
                     continue;
                 }
                 // SAFETY: a device handle is the native display of the device platform.
-                if let Ok(display) =
-                    unsafe { egl.get_platform_display(PLATFORM_DEVICE, device, &[egl::ATTRIB_NONE]) }
-                {
+                let display =
+                    unsafe { egl.get_platform_display(PLATFORM_DEVICE, device, &[egl::ATTRIB_NONE]) };
+                if let Ok(display) = display {
                     displays.push((display, if file.is_empty() { "device".to_owned() } else { file }));
                 }
             }

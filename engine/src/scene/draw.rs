@@ -103,6 +103,16 @@ impl SceneInstance {
             }
         }
         self.update_transforms();
+        // Puppets play on: this frame's bones go into the value table shaders read.
+        let stretch = (input.time - before).max(0.0) as f32;
+        for layer in &mut self.layers {
+            if let LayerKind::Image(image) = &mut layer.kind
+                && let Some(puppet) = &mut image.puppet
+                && layer.shown
+            {
+                puppet.update(stretch, &mut self.bindings.values);
+            }
+        }
         // The parallax camera trails the pointer.
         if self.parallax.enabled {
             let parallax = &self.parallax;
@@ -151,7 +161,6 @@ impl SceneInstance {
             }
         }
         // Particles live on, and this frame's reach the GPU, before anything is drawn.
-        let stretch = (input.time - before).max(0.0) as f32;
         let pointer = [input.pointer[0] * self.scene_size[0], (1.0 - input.pointer[1]) * self.scene_size[1]];
         for layer in &mut self.layers {
             if let LayerKind::Particles(particles) = &mut layer.kind
@@ -392,23 +401,24 @@ fn draw_image(
     }
     let background_texture = background.as_ref().map(|t| &t.texture);
 
-    // A layer with a blend mode, or one others read, always ends in a buffer.
-    let keep = keep || image.blend_pass.is_some();
+    // A layer with a blend mode, or one others read, always ends in a buffer; and so
+    // does a puppet with effects: they work on the flat picture, the mesh comes after.
+    let keep = keep || image.blend_pass.is_some() || (image.puppet.is_some() && !steps.is_empty());
     if steps.is_empty() && !keep {
         scene.bind(&engine.gl);
         engine.gl.set_blend(image.blend);
-        apply(
-            &engine.gl,
-            &image.base,
-            frame,
-            &state,
-            None,
-            &[],
-            background_texture,
-            pictures,
-            engine.white(),
-        );
-        image.quad.draw();
+        // A puppet's mesh stands in for the quad, placed from the picture's centre.
+        let (shade, direct) = match &image.puppet {
+            Some(puppet) => {
+                (&puppet.direct, LayerState { mvp: state.mvp.mul(&puppet.placement()), ..copy_state(&state) })
+            }
+            None => (&image.base, copy_state(&state)),
+        };
+        apply(&engine.gl, shade, frame, &direct, None, &[], background_texture, pictures, engine.white());
+        match &image.puppet {
+            Some(puppet) => puppet.shared.texture_mesh().draw(),
+            None => image.quad.draw(),
+        }
         return;
     }
 
@@ -555,9 +565,33 @@ fn draw_image(
         // The chain ended in a buffer: put its picture into the scene.
         if !landed && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref()) {
             scene.bind(&engine.gl);
-            match &image.blend_pass {
+            match (&image.blend_pass, &image.puppet) {
+                // The mesh bends the finished picture on its way into the scene. The
+                // layer's tint and opacity are in the picture already.
+                (_, Some(puppet)) if !fullscreen => {
+                    engine.gl.set_blend(image.blend);
+                    let warped = LayerState {
+                        mvp: state.mvp.mul(&puppet.placement()),
+                        color: [1.0; 3],
+                        alpha: 1.0,
+                        brightness: 1.0,
+                        ..copy_state(&state)
+                    };
+                    apply(
+                        &engine.gl,
+                        &puppet.warp,
+                        frame,
+                        &warped,
+                        Some(&result.texture),
+                        &[],
+                        background_texture,
+                        pictures,
+                        engine.white(),
+                    );
+                    puppet.shared.mesh.draw();
+                }
                 // The blend shader reads the frame behind the layer and writes the mix.
-                Some(blend) if !fullscreen => {
+                (Some(blend), _) if !fullscreen => {
                     engine.gl.set_blend(Blend::None);
                     apply(
                         &engine.gl,

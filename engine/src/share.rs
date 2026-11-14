@@ -9,7 +9,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use crate::glsl::{Combos, Declared, Source, Stage};
-use crate::gpu::{Gl, Program, Sampling, Texture, TextureFormat};
+use crate::gpu::{Gl, Mesh, Program, Sampling, Texture, TextureFormat};
+use crate::read::puppet::Puppet;
 use crate::read::{FNV_SEED, Files, PixelFormat, Pixels, SpriteSheet, TextureFile, fnv, picture};
 use crate::video::{SharedVideo, VideoHub};
 
@@ -23,6 +24,25 @@ pub struct SharedTexture {
     pub sprites: Option<SpriteSheet>,
     /// The format's number in the shaders' `TEXnFORMAT` combos.
     pub format_code: i32,
+}
+
+/// A puppet and its mesh on the GPU, shared by every layer that is warped with it.
+pub struct SharedPuppet {
+    /// The puppet as read: its bones and animations.
+    pub puppet: Puppet,
+    /// Its mesh, in place of an image's quad: texture coordinates across the picture,
+    /// as a layer's own buffers are laid out.
+    pub mesh: Mesh,
+    /// The same mesh for drawing straight from the layer's texture, when that is
+    /// padded to a power of two and so is larger than its picture.
+    pub padded: Option<Mesh>,
+}
+
+impl SharedPuppet {
+    /// The mesh that draws the picture straight from its texture.
+    pub fn texture_mesh(&self) -> &Mesh {
+        self.padded.as_ref().unwrap_or(&self.mesh)
+    }
 }
 
 /// What a texture name leads to.
@@ -48,6 +68,7 @@ pub struct Share {
     gl: Gl,
     textures: HashMap<u64, Weak<SharedTexture>>,
     programs: HashMap<u64, Weak<Program>>,
+    puppets: HashMap<u64, Weak<SharedPuppet>>,
     shaders: HashMap<String, Option<Rc<ShaderPair>>>,
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
@@ -66,6 +87,7 @@ impl Share {
             gl: gl.clone(),
             textures: HashMap::new(),
             programs: HashMap::new(),
+            puppets: HashMap::new(),
             shaders: HashMap::new(),
             white: None,
             fonts: HashMap::new(),
@@ -115,6 +137,47 @@ impl Share {
         );
         self.textures.insert(key, Rc::downgrade(&texture));
         Ok(Loaded::Picture(texture))
+    }
+
+    /// The puppet at `path`, read and put on the GPU once however many layers use it.
+    ///
+    /// `extent` is how much of its texture the layer's picture fills: a puppet's
+    /// texture coordinates count across the picture, and a texture padded to a power
+    /// of two is larger than its picture.
+    pub fn puppet(
+        &mut self,
+        files: &Files,
+        path: &str,
+        extent: [f32; 2],
+    ) -> Result<Rc<SharedPuppet>, String> {
+        let located = files.locate(path).ok_or_else(|| format!("puppet {path} is not in the wallpaper"))?;
+        let key = fnv(fnv(located.key, &extent[0].to_le_bytes()), &extent[1].to_le_bytes());
+        if let Some(puppet) = self.puppets.get(&key).and_then(Weak::upgrade) {
+            return Ok(puppet);
+        }
+        let bytes = files.read(path).map_err(|e| e.to_string())?;
+        let puppet = Puppet::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        // The file's indices are 16 bits wide; anything larger was refused on reading.
+        let indices: Vec<u16> = puppet.indices.iter().map(|&index| index as u16).collect();
+        let bones: Vec<[u32; 4]> = puppet.vertices.iter().map(|v| v.bones).collect();
+        let mesh = |across: [f32; 2]| {
+            let vertices: Vec<f32> = puppet
+                .vertices
+                .iter()
+                .flat_map(|v| {
+                    let ([x, y, z], [u, t], [a, b, c, d]) = (v.position, v.uv, v.weights);
+                    [x, y, z, u * across[0], t * across[1], a, b, c, d]
+                })
+                .collect();
+            Mesh::new(&self.gl, &[(0, 3), (1, 2), (8, 4)], &vertices, Some(&indices), false)
+                .and_then(|mesh| mesh.with_integers(7, &bones))
+                .map_err(|e| format!("{path}: {e}"))
+        };
+        let padded = if extent == [1.0, 1.0] { None } else { Some(mesh(extent)?) };
+        let mesh = mesh([1.0, 1.0])?;
+        let puppet = Rc::new(SharedPuppet { puppet, mesh, padded });
+        self.puppets.insert(key, Rc::downgrade(&puppet));
+        Ok(puppet)
     }
 
     /// Plays the video packed in a texture: unpacked once into the cache, then
@@ -274,6 +337,7 @@ impl Share {
     pub fn sweep(&mut self) {
         self.textures.retain(|_, texture| texture.strong_count() > 0);
         self.programs.retain(|_, program| program.strong_count() > 0);
+        self.puppets.retain(|_, puppet| puppet.strong_count() > 0);
     }
 
     /// How many textures are alive.

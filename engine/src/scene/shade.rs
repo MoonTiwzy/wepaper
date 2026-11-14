@@ -134,6 +134,9 @@ pub(crate) struct PassInput<'a> {
     pub(crate) constants: &'a [(String, Dyn<Value>)],
     /// The names of the layer's buffers, by slot.
     pub(crate) buffers: &'a [String],
+    /// Uniforms fed from slots of the value table that something else fills each
+    /// frame (a puppet's bones), by name.
+    pub(crate) slots: &'a [(&'static str, usize)],
 }
 
 /// How many floats a uniform of this GL type takes per element.
@@ -325,7 +328,10 @@ impl Shade {
                 continue;
             }
             let count = components(uniform.kind) * uniform.count.max(1) as usize;
-            let feed = if let Some(feed) = builtin(&uniform.name) {
+            let base_name = uniform.name.strip_suffix("[0]").unwrap_or(&uniform.name);
+            let feed = if let Some((_, slot)) = input.slots.iter().find(|(name, _)| *name == base_name) {
+                Feed::Value(*slot)
+            } else if let Some(feed) = builtin(&uniform.name) {
                 wants_audio |= matches!(feed, Feed::Audio { .. });
                 feed
             } else {
