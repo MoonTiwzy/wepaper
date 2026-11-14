@@ -77,7 +77,13 @@ impl Source {
 }
 
 /// Copies `text` to `out`, replacing `#include` lines by the files they name.
-fn inline(text: &str, include: &dyn Fn(&str) -> Option<String>, seen: &mut HashSet<String>, out: &mut String, depth: usize) {
+fn inline(
+    text: &str,
+    include: &dyn Fn(&str) -> Option<String>,
+    seen: &mut HashSet<String>,
+    out: &mut String,
+    depth: usize,
+) {
     for line in text.lines() {
         let directive = line.trim_start();
         if let Some(rest) = directive.strip_prefix("#include") {
@@ -91,7 +97,10 @@ fn inline(text: &str, include: &dyn Fn(&str) -> Option<String>, seen: &mut HashS
                     }
                 }
             }
-        } else if directive.starts_with("#require") || directive.starts_with("#version") || directive.starts_with("precision ") {
+        } else if directive.starts_with("#require")
+            || directive.starts_with("#version")
+            || directive.starts_with("precision ")
+        {
             let _ = writeln!(out, "// {}", directive);
         } else {
             out.push_str(line);

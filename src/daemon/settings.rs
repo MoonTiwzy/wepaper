@@ -55,12 +55,34 @@ pub struct Settings {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { fps: 0, volume: 100.0, mute: true, fill: Fill::Cover, layer: Layer::Background, passthrough: false, audio_response: true, video_hardware: false, video_max_width: 0, texture_max_side: 0 }
+        Self {
+            fps: 0,
+            volume: 100.0,
+            mute: true,
+            fill: Fill::Cover,
+            layer: Layer::Background,
+            passthrough: false,
+            audio_response: true,
+            video_hardware: false,
+            video_max_width: 0,
+            texture_max_side: 0,
+        }
     }
 }
 
 /// The names of the settings, in the order they are listed.
-pub const KEYS: &[&str] = &["fps", "volume", "mute", "fill", "layer", "passthrough", "audio_response", "video_hardware", "video_max_width", "texture_max_side"];
+pub const KEYS: &[&str] = &[
+    "fps",
+    "volume",
+    "mute",
+    "fill",
+    "layer",
+    "passthrough",
+    "audio_response",
+    "video_hardware",
+    "video_max_width",
+    "texture_max_side",
+];
 
 impl Settings {
     /// The settings as the `config` node of the control tree.
@@ -82,14 +104,24 @@ impl Settings {
     /// Changes one setting. The error says what the setting takes.
     pub fn set(&mut self, key: &str, value: &Value) -> Result<(), String> {
         let number = |low: f64, high: f64| -> Result<f64, String> {
-            f32::from_doc(value).map(f64::from).filter(|n| (low..=high).contains(n)).ok_or_else(|| format!("{key} takes a number from {low} to {high}"))
+            f32::from_doc(value)
+                .map(f64::from)
+                .filter(|n| (low..=high).contains(n))
+                .ok_or_else(|| format!("{key} takes a number from {low} to {high}"))
         };
-        let flag = || bool::from_doc(value).filter(|_| !value.is_null()).ok_or_else(|| format!("{key} takes true or false"));
+        let flag = || {
+            bool::from_doc(value)
+                .filter(|_| !value.is_null())
+                .ok_or_else(|| format!("{key} takes true or false"))
+        };
         match key {
             "fps" => self.fps = number(0.0, 1000.0)? as u32,
             "volume" => self.volume = number(0.0, 100.0)? as f32,
             "mute" => self.mute = flag()?,
-            "fill" => self.fill = value.as_str().and_then(Fill::from_name).ok_or("fill takes cover, contain or stretch")?,
+            "fill" => {
+                self.fill =
+                    value.as_str().and_then(Fill::from_name).ok_or("fill takes cover, contain or stretch")?
+            }
             "layer" => {
                 self.layer = match value.as_str() {
                     Some("background") => Layer::Background,
@@ -145,18 +177,32 @@ impl Remembered {
     /// item's id, and after the whole path for any other folder.
     pub fn file(dir: &Path, folder: &Path) -> PathBuf {
         let name = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-        let workshop = !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) && folder.parent().and_then(Path::file_name).is_some_and(|parent| parent == "431960");
+        let workshop = !name.is_empty()
+            && name.bytes().all(|b| b.is_ascii_digit())
+            && folder.parent().and_then(Path::file_name).is_some_and(|parent| parent == "431960");
         if workshop {
             return dir.join(format!("{name}.json"));
         }
-        let hash = folder.to_string_lossy().bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
-        let safe: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).take(40).collect();
+        let hash = folder
+            .to_string_lossy()
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3));
+        let safe: String = name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            .take(40)
+            .collect();
         dir.join(format!("{safe}-{hash:016x}.json"))
     }
 
     /// What is remembered about the wallpaper in `folder`; nothing when it was never changed.
     pub fn load(dir: &Path, folder: &Path) -> Self {
-        let Some(doc) = std::fs::read_to_string(Self::file(dir, folder)).ok().and_then(|text| wepaper_json::parse(&text).ok()) else { return Self::default() };
+        let Some(doc) = std::fs::read_to_string(Self::file(dir, folder))
+            .ok()
+            .and_then(|text| wepaper_json::parse(&text).ok())
+        else {
+            return Self::default();
+        };
         Self { properties: map_from_value(doc.get("properties")), edits: map_from_value(doc.get("edits")) }
     }
 
@@ -167,10 +213,13 @@ impl Remembered {
             let _ = std::fs::remove_file(file);
             return;
         }
-        let doc = obj! { "properties" => map_to_value(&self.properties), "edits" => map_to_value(&self.edits) };
+        let doc =
+            obj! { "properties" => map_to_value(&self.properties), "edits" => map_to_value(&self.edits) };
         let _ = std::fs::create_dir_all(dir);
         let part = file.with_extension("json.part");
-        if let Err(error) = std::fs::write(&part, doc.to_json_pretty()).and_then(|()| std::fs::rename(&part, &file)) {
+        if let Err(error) =
+            std::fs::write(&part, doc.to_json_pretty()).and_then(|()| std::fs::rename(&part, &file))
+        {
             log::warn!("{}: {error}", file.display());
         }
     }
@@ -223,7 +272,11 @@ impl State {
         };
         Self {
             overrides: doc.get("settings").as_object().cloned().unwrap_or_default(),
-            outputs: doc.get("outputs").members().map(|(name, shown)| (name.to_owned(), shown_from_value(shown))).collect(),
+            outputs: doc
+                .get("outputs")
+                .members()
+                .map(|(name, shown)| (name.to_owned(), shown_from_value(shown)))
+                .collect(),
             last: shown_from_value(doc.get("last")),
         }
     }
@@ -265,11 +318,18 @@ mod tests {
         let workshop = Path::new("/steam/steamapps/workshop/content/431960/3566329932");
         assert_eq!(Remembered::file(&dir, workshop), dir.join("3566329932.json"));
         let (mine, other) = (Path::new("/walls/my scene"), Path::new("/other/my scene"));
-        assert_ne!(Remembered::file(&dir, mine), Remembered::file(&dir, other), "folders of one name are different wallpapers");
+        assert_ne!(
+            Remembered::file(&dir, mine),
+            Remembered::file(&dir, other),
+            "folders of one name are different wallpapers"
+        );
         assert!(Remembered::file(&dir, mine).file_name().unwrap().to_string_lossy().starts_with("my_scene-"));
 
         assert_eq!(Remembered::load(&dir, mine), Remembered::default());
-        let remembered = Remembered { properties: [("speed".to_owned(), Value::from(2))].into(), edits: [("scene/zoom".to_owned(), Value::from(1.5))].into() };
+        let remembered = Remembered {
+            properties: [("speed".to_owned(), Value::from(2))].into(),
+            edits: [("scene/zoom".to_owned(), Value::from(1.5))].into(),
+        };
         remembered.save(&dir, mine);
         assert_eq!(Remembered::load(&dir, mine), remembered);
         assert_eq!(Remembered::load(&dir, other), Remembered::default());
@@ -281,7 +341,10 @@ mod tests {
     #[test]
     fn config_defaults() {
         let settings = Settings::default();
-        assert_eq!((settings.fps, settings.volume, settings.mute, settings.fill, settings.layer), (0, 100.0, true, Fill::Cover, Layer::Background));
+        assert_eq!(
+            (settings.fps, settings.volume, settings.mute, settings.fill, settings.layer),
+            (0, 100.0, true, Fill::Cover, Layer::Background)
+        );
         assert!(!settings.passthrough && !settings.video_hardware);
         let tree = settings.to_value();
         let keys: Vec<&str> = tree.members().map(|(k, _)| k).collect();
@@ -292,7 +355,10 @@ mod tests {
     fn settings_take_what_they_say_they_take() {
         let mut settings = Settings::default();
         assert!(settings.set("fps", &Value::from(30)).is_ok() && settings.fps == 30);
-        assert!(settings.set("fps", &Value::from("60")).is_ok() && settings.fps == 60, "a number typed as text is a number");
+        assert!(
+            settings.set("fps", &Value::from("60")).is_ok() && settings.fps == 60,
+            "a number typed as text is a number"
+        );
         assert_eq!(settings.set("fps", &Value::from(-1)).unwrap_err(), "fps takes a number from 0 to 1000");
         assert!(settings.set("volume", &Value::from(150)).is_err() && settings.volume == 100.0);
         assert!(settings.set("fill", &Value::from("contain")).is_ok() && settings.fill == Fill::Contain);
@@ -301,7 +367,10 @@ mod tests {
         assert!(settings.set("mute", &Value::from(false)).is_ok() && !settings.mute);
         assert!(settings.set("mute", &Value::Null).is_err());
         assert!(settings.set("colour", &Value::from(1)).unwrap_err().contains("there is no setting"));
-        settings.apply(&wepaper_json::parse(r#"{"fps": 24, "nonsense": 1, "passthrough": true}"#).unwrap(), "test");
+        settings.apply(
+            &wepaper_json::parse(r#"{"fps": 24, "nonsense": 1, "passthrough": true}"#).unwrap(),
+            "test",
+        );
         assert!(settings.fps == 24 && settings.passthrough, "good settings apply past a bad one");
     }
 

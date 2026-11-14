@@ -44,7 +44,6 @@ uint wepaper_rem(uint x, int y) { return x % uint(y); }
 uint wepaper_rem(int x, uint y) { return uint(x) % y; }
 ";
 
-
 /// HLSL widens a scalar to match a vector argument (`max(0, colour.rgb)`); GLSL has
 /// no such overloads for these functions. They get wrappers that do.
 fn promoting(name: &str, integers: bool) -> String {
@@ -56,8 +55,14 @@ fn promoting(name: &str, integers: bool) -> String {
     }
     for vector in ["vec2", "vec3", "vec4"] {
         let _ = writeln!(out, "{vector} wepaper_{name}({vector} a, {vector} b) {{ return {name}(a, b); }}");
-        let _ = writeln!(out, "{vector} wepaper_{name}({vector} a, float b) {{ return {name}(a, {vector}(b)); }}");
-        let _ = writeln!(out, "{vector} wepaper_{name}(float a, {vector} b) {{ return {name}({vector}(a), b); }}");
+        let _ = writeln!(
+            out,
+            "{vector} wepaper_{name}({vector} a, float b) {{ return {name}(a, {vector}(b)); }}"
+        );
+        let _ = writeln!(
+            out,
+            "{vector} wepaper_{name}(float a, {vector} b) {{ return {name}({vector}(a), b); }}"
+        );
     }
     out
 }

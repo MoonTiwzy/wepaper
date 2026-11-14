@@ -55,7 +55,9 @@ impl Server {
 
     /// The descriptors to wait on: the listener and every client.
     pub fn fds(&self) -> Vec<RawFd> {
-        std::iter::once(self.listener.as_raw_fd()).chain(self.clients.iter().flatten().map(|c| c.stream.as_raw_fd())).collect()
+        std::iter::once(self.listener.as_raw_fd())
+            .chain(self.clients.iter().flatten().map(|c| c.stream.as_raw_fd()))
+            .collect()
     }
 
     /// Accepts new clients, reads what the connected ones sent, and returns the
@@ -65,7 +67,8 @@ impl Server {
             if stream.set_nonblocking(true).is_err() {
                 continue;
             }
-            let client = Client { stream, received: Vec::new(), unsent: Vec::new(), watching: false, gone: false };
+            let client =
+                Client { stream, received: Vec::new(), unsent: Vec::new(), watching: false, gone: false };
             match self.clients.iter_mut().position(|slot| slot.is_none()) {
                 Some(free) => self.clients[free] = Some(client),
                 None => self.clients.push(Some(client)),
@@ -101,7 +104,9 @@ impl Server {
                 if client.watching {
                     continue;
                 }
-                let request = wepaper_json::parse(text).map_err(|e| format!("not JSON: {e}")).and_then(|message| Request::parse(&message));
+                let request = wepaper_json::parse(text)
+                    .map_err(|e| format!("not JSON: {e}"))
+                    .and_then(|message| Request::parse(&message));
                 incoming.push(Incoming { client: index, request });
             }
             if client.received.len() > MAX_LINE {
@@ -211,7 +216,9 @@ mod tests {
     fn requests_are_parsed_and_answered_in_order() {
         let (mut server, path) = server("order");
         let mut client = UnixStream::connect(&path).unwrap();
-        client.write_all(b"{\"cmd\":\"version\"}\n\n{\"cmd\":\"get\",\"path\":\"config/fps\"}\n{\"cmd\":\"se").unwrap();
+        client
+            .write_all(b"{\"cmd\":\"version\"}\n\n{\"cmd\":\"get\",\"path\":\"config/fps\"}\n{\"cmd\":\"se")
+            .unwrap();
         let incoming = receive(&mut server);
         assert_eq!(incoming.len(), 2, "two complete lines; the third is still coming");
         assert_eq!(incoming[0].request, Ok(Request::Version));
@@ -223,7 +230,10 @@ mod tests {
         assert_eq!(lines.next().unwrap().unwrap(), r#"{"ok":true,"value":"a"}"#);
         assert_eq!(lines.next().unwrap().unwrap(), r#"{"ok":true,"value":60}"#);
         client.write_all(b"t\",\"path\":\"config/fps\",\"value\":30}\n").unwrap();
-        assert_eq!(receive(&mut server)[0].request, Ok(Request::Set { path: "config/fps".into(), value: Value::from(30) }));
+        assert_eq!(
+            receive(&mut server)[0].request,
+            Ok(Request::Set { path: "config/fps".into(), value: Value::from(30) })
+        );
     }
 
     #[test]

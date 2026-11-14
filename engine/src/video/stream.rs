@@ -130,9 +130,16 @@ unsafe extern "C" fn on_update(context: *mut c_void) {
 
 impl VideoStream {
     /// Starts playing `path` in a loop. `waker` is poked from libmpv's threads whenever a new frame is ready.
-    pub fn open(gl: &Gl, path: &Path, options: &VideoOptions, waker: Option<Waker>) -> Result<Self, VideoError> {
+    pub fn open(
+        gl: &Gl,
+        path: &Path,
+        options: &VideoOptions,
+        waker: Option<Waker>,
+    ) -> Result<Self, VideoError> {
         let api = mpv::api().ok_or_else(|| VideoError("libmpv is not installed".to_owned()))?;
-        let text = |value: &str| CString::new(value).map_err(|_| VideoError("a NUL byte in a video option".to_owned()));
+        let text = |value: &str| {
+            CString::new(value).map_err(|_| VideoError("a NUL byte in a video option".to_owned()))
+        };
         // SAFETY: every pointer handed to libmpv is a live NUL-terminated string or a
         // struct that outlives the call; results are checked before use.
         unsafe {
@@ -140,7 +147,9 @@ impl VideoStream {
             if handle.is_null() {
                 return Err(VideoError("libmpv could not create a player".to_owned()));
             }
-            let fail = |code: c_int, what: &str| VideoError(format!("{what}: {}", CStr::from_ptr((api.error_string)(code)).to_string_lossy()));
+            let fail = |code: c_int, what: &str| {
+                VideoError(format!("{what}: {}", CStr::from_ptr((api.error_string)(code)).to_string_lossy()))
+            };
             let threads = options.decode_threads.clamp(1, 16).to_string();
             let volume = format!("{:.0}", options.volume.clamp(0.0, 100.0));
             let settings: &[(&str, &str)] = &[
@@ -200,7 +209,8 @@ impl VideoStream {
 
             // The `Gl` clone libmpv resolves functions through lives as long as the stream.
             let gl_box = Box::into_raw(Box::new(gl.clone()));
-            let mut init = mpv::OpenglInitParams { get_proc_address: proc_address, get_proc_address_ctx: gl_box.cast() };
+            let mut init =
+                mpv::OpenglInitParams { get_proc_address: proc_address, get_proc_address_ctx: gl_box.cast() };
             let api_type = c"opengl";
             let mut params = [
                 mpv::RenderParam { kind: mpv::RENDER_PARAM_API_TYPE, data: api_type.as_ptr() as *mut c_void },
@@ -219,7 +229,20 @@ impl VideoStream {
             let signal = Box::into_raw(Box::new(Signal { fresh: AtomicBool::new(false), waker }));
             (api.render_context_set_update_callback)(render, Some(on_update), signal.cast());
 
-            let stream = Self { api, gl: gl.clone(), handle, render, signal, target: None, max_width: options.max_width, holders: Vec::new(), paused: false, ended: false, serial: 0, restart_at_zero: false };
+            let stream = Self {
+                api,
+                gl: gl.clone(),
+                handle,
+                render,
+                signal,
+                target: None,
+                max_width: options.max_width,
+                holders: Vec::new(),
+                paused: false,
+                ended: false,
+                serial: 0,
+                restart_at_zero: false,
+            };
             let file = text(&path.to_string_lossy())?;
             let mut command = [c"loadfile".as_ptr(), file.as_ptr(), std::ptr::null()];
             let code = (api.command)(handle, command.as_mut_ptr());
@@ -233,14 +256,18 @@ impl VideoStream {
     fn property_i64(&self, name: &CStr) -> Option<i64> {
         let mut value = 0i64;
         // SAFETY: `value` is an i64, which is what FORMAT_INT64 writes.
-        let code = unsafe { (self.api.get_property)(self.handle, name.as_ptr(), mpv::FORMAT_INT64, (&raw mut value).cast()) };
+        let code = unsafe {
+            (self.api.get_property)(self.handle, name.as_ptr(), mpv::FORMAT_INT64, (&raw mut value).cast())
+        };
         (code >= 0).then_some(value)
     }
 
     fn property_f64(&self, name: &CStr) -> Option<f64> {
         let mut value = 0f64;
         // SAFETY: `value` is an f64, which is what FORMAT_DOUBLE writes.
-        let code = unsafe { (self.api.get_property)(self.handle, name.as_ptr(), mpv::FORMAT_DOUBLE, (&raw mut value).cast()) };
+        let code = unsafe {
+            (self.api.get_property)(self.handle, name.as_ptr(), mpv::FORMAT_DOUBLE, (&raw mut value).cast())
+        };
         (code >= 0).then_some(value)
     }
 
@@ -265,7 +292,9 @@ impl VideoStream {
                         self.restart_at_zero = false;
                         self.set(c"start", "none");
                     }
-                    mpv::EVENT_SHUTDOWN | mpv::EVENT_END_FILE => self.ended = event.event_id == mpv::EVENT_SHUTDOWN || event.error < 0,
+                    mpv::EVENT_SHUTDOWN | mpv::EVENT_END_FILE => {
+                        self.ended = event.event_id == mpv::EVENT_SHUTDOWN || event.error < 0
+                    }
                     _ => {}
                 }
             }
@@ -277,7 +306,10 @@ impl VideoStream {
                 return false;
             }
         }
-        let (Some(width), Some(height)) = (self.property_i64(c"dwidth"), self.property_i64(c"dheight")) else { return false };
+        let (Some(width), Some(height)) = (self.property_i64(c"dwidth"), self.property_i64(c"dheight"))
+        else {
+            return false;
+        };
         if width <= 0 || height <= 0 {
             return false;
         }
@@ -303,7 +335,12 @@ impl VideoStream {
         }
         let Some(target) = &self.target else { return false };
         // libmpv's own "top" is our texture's first row, as with pictures from files.
-        let mut fbo = mpv::OpenglFbo { fbo: target.framebuffer().0.get() as c_int, w: w as c_int, h: h as c_int, internal_format: 0 };
+        let mut fbo = mpv::OpenglFbo {
+            fbo: target.framebuffer().0.get() as c_int,
+            w: w as c_int,
+            h: h as c_int,
+            internal_format: 0,
+        };
         let mut flip: c_int = 0;
         // Left to itself libmpv sleeps in the call until the frame's display time,
         // which would hold up everything else this thread draws.

@@ -1,6 +1,8 @@
 //! Documents: typed values out of loosely typed JSON.
 
-use wepaper_engine::doc::{Alignment, Blending, Dyn, EffectDoc, Kind, MaterialDoc, ObjectKind, Project, PropertyKind, Scene};
+use wepaper_engine::doc::{
+    Alignment, Blending, Dyn, EffectDoc, Kind, MaterialDoc, ObjectKind, Project, PropertyKind, Scene,
+};
 use wepaper_json::parse;
 
 #[test]
@@ -53,8 +55,12 @@ fn image_object_defaults() {
     assert!(image.effects.is_empty() && image.size.is_none());
     assert!(matches!(&scene.objects[1].kind, ObjectKind::Particle(p) if p.file == "particles/rain.json"));
     assert_eq!(scene.objects[1].parent, Some(7));
-    assert!(matches!(&scene.objects[2].kind, ObjectKind::Text(t) if t.text.value == "hi" && t.text.user.is_some()));
-    assert!(matches!(&scene.objects[3].kind, ObjectKind::Sound(s) if s.volume.value == 0.5 && s.mode == "loop"));
+    assert!(
+        matches!(&scene.objects[2].kind, ObjectKind::Text(t) if t.text.value == "hi" && t.text.user.is_some())
+    );
+    assert!(
+        matches!(&scene.objects[3].kind, ObjectKind::Sound(s) if s.volume.value == 0.5 && s.mode == "loop")
+    );
     assert!(matches!(scene.objects[4].kind, ObjectKind::Unsupported("light")));
     assert!(matches!(scene.objects[5].kind, ObjectKind::Group));
 }
@@ -103,13 +109,21 @@ fn project_kinds_and_properties() {
                    "head": {"type": "text", "text": "Heading", "order": 0}}}}"#)
             .unwrap(),
     );
-    assert_eq!((project.kind, project.title.as_str(), project.workshop_id.as_deref()), (Kind::Scene, "T", Some("123")));
+    assert_eq!(
+        (project.kind, project.title.as_str(), project.workshop_id.as_deref()),
+        (Kind::Scene, "T", Some("123"))
+    );
     let names: Vec<&str> = project.properties.iter().map(|p| p.name.as_str()).collect();
     assert_eq!(names, ["head", "a", "b", "c"]);
     assert_eq!(project.properties[0].kind, PropertyKind::Group);
-    assert!(matches!(project.properties[1].kind, PropertyKind::Slider { min, max, .. } if min == 0.0 && max == 5.0));
+    assert!(
+        matches!(project.properties[1].kind, PropertyKind::Slider { min, max, .. } if min == 0.0 && max == 5.0)
+    );
     assert!(matches!(&project.properties[3].kind, PropertyKind::Combo(options) if options.len() == 1));
-    assert_eq!(Project::parse(&parse(r#"{"dependency": "99", "preset": {"a": 1}}"#).unwrap()).kind, Kind::Preset);
+    assert_eq!(
+        Project::parse(&parse(r#"{"dependency": "99", "preset": {"a": 1}}"#).unwrap()).kind,
+        Kind::Preset
+    );
     assert_eq!(Project::parse(&parse(r#"{"type": "video", "file": "a.mp4"}"#).unwrap()).kind, Kind::Video);
     assert_eq!(Project::parse(&parse("{}").unwrap()).kind, Kind::Scene);
 }

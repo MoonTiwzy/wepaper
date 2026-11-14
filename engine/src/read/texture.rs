@@ -272,12 +272,21 @@ impl TextureFile {
                 let length = cursor.u32()? as usize;
                 let start = cursor.at;
                 cursor.take(length)?;
-                mips.push(Mip { width: mip_width, height: mip_height, range: start..start + length, unpacked });
+                mips.push(Mip {
+                    width: mip_width,
+                    height: mip_height,
+                    range: start..start + length,
+                    unpacked,
+                });
             }
             images.push(Image { mips });
         }
 
-        let sprites = if flags & FLAG_ANIMATED != 0 && cursor.at < bytes.len() { Some(parse_sprites(&mut cursor)?) } else { None };
+        let sprites = if flags & FLAG_ANIMATED != 0 && cursor.at < bytes.len() {
+            Some(parse_sprites(&mut cursor)?)
+        } else {
+            None
+        };
         Ok(Self {
             format,
             width,
@@ -302,7 +311,12 @@ impl TextureFile {
     /// The contents of level `level` of image `image`, unpacked when it was packed.
     ///
     /// `bytes` is the file [`parse`](Self::parse) read.
-    pub fn pixels<'a>(&self, bytes: &'a [u8], image: usize, level: usize) -> Result<Pixels<'a>, TextureError> {
+    pub fn pixels<'a>(
+        &self,
+        bytes: &'a [u8],
+        image: usize,
+        level: usize,
+    ) -> Result<Pixels<'a>, TextureError> {
         let mip = self.images.get(image).and_then(|i| i.mips.get(level)).ok_or(TextureError::NoSuchLevel)?;
         let stored = bytes.get(mip.range.clone()).ok_or(TextureError::Truncated)?;
         let data = match mip.unpacked {
@@ -311,7 +325,9 @@ impl TextureFile {
         };
         if self.video || self.encoded {
             // These are never packed in practice; if one is, it still has to outlive this call.
-            let Cow::Borrowed(data) = data else { return Err(TextureError::Unknown("packed picture".to_owned())) };
+            let Cow::Borrowed(data) = data else {
+                return Err(TextureError::Unknown("packed picture".to_owned()));
+            };
             return Ok(if self.video { Pixels::Video(data) } else { Pixels::Encoded(data) });
         }
         Ok(Pixels::Raw { format: self.format, data })
@@ -339,8 +355,14 @@ fn parse_sprites(cursor: &mut Cursor<'_>) -> Result<SpriteSheet, TextureError> {
         let number = |cursor: &mut Cursor<'_>| -> Result<f32, TextureError> {
             if version == 1 { cursor.u32().map(|v| v as i32 as f32) } else { cursor.f32() }
         };
-        let (x, y, width, down, across, height) =
-            (number(cursor)?, number(cursor)?, number(cursor)?, number(cursor)?, number(cursor)?, number(cursor)?);
+        let (x, y, width, down, across, height) = (
+            number(cursor)?,
+            number(cursor)?,
+            number(cursor)?,
+            number(cursor)?,
+            number(cursor)?,
+            number(cursor)?,
+        );
         frames.push(SpriteFrame { image, duration, x, y, width, height, skew: (down, across) });
     }
     Ok(SpriteSheet { frames })

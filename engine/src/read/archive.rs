@@ -57,7 +57,8 @@ impl Archive {
             entry.offset += consumed;
             index.insert(normalize(&entry.name).1, i);
         }
-        let modified = meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
+        let modified =
+            meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos());
         let mut key = fnv(FNV_SEED, path.to_string_lossy().as_bytes());
         key = fnv(key, &meta.len().to_le_bytes());
         key = fnv(key, &modified.to_le_bytes());

@@ -1,3 +1,5 @@
+//! How the lenient JSON reader and the writer behave.
+
 use wepaper_json::{Value, obj, parse};
 
 #[test]

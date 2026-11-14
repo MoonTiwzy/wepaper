@@ -53,7 +53,8 @@ pub struct EffectDoc {
 impl EffectDoc {
     /// Reads an effect document.
     pub fn parse(doc: &Value) -> Self {
-        let text = |doc: &Value, key: &str| doc.get(key).as_str().filter(|s| !s.is_empty()).map(str::to_owned);
+        let text =
+            |doc: &Value, key: &str| doc.get(key).as_str().filter(|s| !s.is_empty()).map(str::to_owned);
         let passes = doc
             .get("passes")
             .items()
@@ -64,7 +65,10 @@ impl EffectDoc {
                     .get("bind")
                     .items()
                     .filter_map(|bind| {
-                        Some(EffectBind { name: text(bind, "name")?, slot: i32::from_doc(bind.get("index"))?.max(0) as usize })
+                        Some(EffectBind {
+                            name: text(bind, "name")?,
+                            slot: i32::from_doc(bind.get("index"))?.max(0) as usize,
+                        })
                     })
                     .collect(),
                 command: text(pass, "command"),

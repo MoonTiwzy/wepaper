@@ -81,14 +81,23 @@ pub struct Texture {
 
 impl Texture {
     /// Uploads `levels` (width, height, pixels), largest first, as one texture.
-    pub fn from_levels(gl: &Gl, format: TextureFormat, levels: &[(u32, u32, &[u8])], sampling: Sampling) -> Result<Self, GpuError> {
-        let Some(&(width, height, _)) = levels.first() else { return Err(GpuError("a texture needs at least one level".to_owned())) };
+    pub fn from_levels(
+        gl: &Gl,
+        format: TextureFormat,
+        levels: &[(u32, u32, &[u8])],
+        sampling: Sampling,
+    ) -> Result<Self, GpuError> {
+        let Some(&(width, height, _)) = levels.first() else {
+            return Err(GpuError("a texture needs at least one level".to_owned()));
+        };
         if format.compressed() && !gl.caps().s3tc {
             return Err(GpuError("this GPU cannot use DXT-compressed textures".to_owned()));
         }
         let limit = gl.caps().max_texture_size;
         if width == 0 || height == 0 || width > limit || height > limit {
-            return Err(GpuError(format!("a {width}x{height} texture is outside what this GPU takes (up to {limit})")));
+            return Err(GpuError(format!(
+                "a {width}x{height} texture is outside what this GPU takes (up to {limit})"
+            )));
         }
         let (internal, upload, kind) = format.gl();
         let mut bytes = 0;
@@ -102,11 +111,23 @@ impl Texture {
                 if (pixels.len() as u64) < needed {
                     gl.forget_texture(raw);
                     gl.raw().delete_texture(raw);
-                    return Err(GpuError(format!("texture level {level} holds {} bytes, {needed} needed", pixels.len())));
+                    return Err(GpuError(format!(
+                        "texture level {level} holds {} bytes, {needed} needed",
+                        pixels.len()
+                    )));
                 }
                 let pixels = &pixels[..needed as usize];
                 if format.compressed() {
-                    gl.raw().compressed_tex_image_2d(glow::TEXTURE_2D, level as i32, internal as i32, w as i32, h as i32, 0, pixels.len() as i32, pixels);
+                    gl.raw().compressed_tex_image_2d(
+                        glow::TEXTURE_2D,
+                        level as i32,
+                        internal as i32,
+                        w as i32,
+                        h as i32,
+                        0,
+                        pixels.len() as i32,
+                        pixels,
+                    );
                 } else {
                     gl.raw().tex_image_2d(
                         glow::TEXTURE_2D,
@@ -125,23 +146,41 @@ impl Texture {
             gl.raw().tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, levels.len() as i32 - 1);
             raw
         };
-        let texture = Self { gl: gl.clone(), raw, width, height, format, bytes, class: MemoryClass::Textures };
+        let texture =
+            Self { gl: gl.clone(), raw, width, height, format, bytes, class: MemoryClass::Textures };
         texture.set_sampling(sampling, levels.len() > 1);
         gl.account(MemoryClass::Textures, bytes as i64);
         Ok(texture)
     }
 
     /// A texture with storage and no contents, counted under `class`.
-    pub fn empty(gl: &Gl, format: TextureFormat, width: u32, height: u32, class: MemoryClass) -> Result<Self, GpuError> {
+    pub fn empty(
+        gl: &Gl,
+        format: TextureFormat,
+        width: u32,
+        height: u32,
+        class: MemoryClass,
+    ) -> Result<Self, GpuError> {
         let (internal, upload, kind) = format.gl();
-        if format.compressed() || width == 0 || height == 0 || width.max(height) > gl.caps().max_texture_size {
+        if format.compressed() || width == 0 || height == 0 || width.max(height) > gl.caps().max_texture_size
+        {
             return Err(GpuError(format!("cannot make an empty {width}x{height} {format:?} texture")));
         }
         // SAFETY: the context is current; a null pixel pointer allocates without reading.
         let raw = unsafe {
             let raw = gl.raw().create_texture().map_err(GpuError)?;
             gl.bind_texture(15, raw);
-            gl.raw().tex_image_2d(glow::TEXTURE_2D, 0, internal as i32, width as i32, height as i32, 0, upload, kind, glow::PixelUnpackData::Slice(None));
+            gl.raw().tex_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                internal as i32,
+                width as i32,
+                height as i32,
+                0,
+                upload,
+                kind,
+                glow::PixelUnpackData::Slice(None),
+            );
             gl.raw().tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
             raw
         };
@@ -155,13 +194,24 @@ impl Texture {
     /// Replaces the whole of level 0 with `pixels`.
     pub fn write(&self, pixels: &[u8]) -> Result<(), GpuError> {
         let (_, upload, kind) = self.format.gl();
-        if self.format.compressed() || (pixels.len() as u64) < self.format.level_size(self.width, self.height) {
+        if self.format.compressed() || (pixels.len() as u64) < self.format.level_size(self.width, self.height)
+        {
             return Err(GpuError("pixel data does not match the texture".to_owned()));
         }
         self.gl.bind_texture(15, self.raw);
         // SAFETY: the slice holds a full level, checked above.
         unsafe {
-            self.gl.raw().tex_sub_image_2d(glow::TEXTURE_2D, 0, 0, 0, self.width as i32, self.height as i32, upload, kind, glow::PixelUnpackData::Slice(Some(pixels)));
+            self.gl.raw().tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                0,
+                self.width as i32,
+                self.height as i32,
+                upload,
+                kind,
+                glow::PixelUnpackData::Slice(Some(pixels)),
+            );
         }
         Ok(())
     }

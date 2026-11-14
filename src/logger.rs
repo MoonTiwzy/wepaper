@@ -13,7 +13,12 @@ impl log::Log for Logger {
 
     fn log(&self, record: &log::Record<'_>) {
         if self.enabled(record.metadata()) {
-            let _ = writeln!(std::io::stderr().lock(), "wepaper: {}: {}", record.level().as_str().to_lowercase(), record.args());
+            let _ = writeln!(
+                std::io::stderr().lock(),
+                "wepaper: {}: {}",
+                record.level().as_str().to_lowercase(),
+                record.args()
+            );
         }
     }
 

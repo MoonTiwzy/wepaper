@@ -80,8 +80,13 @@ impl Share {
         if let Some(white) = &self.white {
             return white.clone();
         }
-        let texture = Texture::from_levels(&self.gl, TextureFormat::Rgba8, &[(1, 1, &[255, 255, 255, 255])], Sampling::default())
-            .expect("a 1x1 texture always uploads");
+        let texture = Texture::from_levels(
+            &self.gl,
+            TextureFormat::Rgba8,
+            &[(1, 1, &[255, 255, 255, 255])],
+            Sampling::default(),
+        )
+        .expect("a 1x1 texture always uploads");
         let white = Rc::new(SharedTexture { texture, resolution: [1.0; 4], sprites: None, format_code: 0 });
         self.white = Some(white.clone());
         white
@@ -89,7 +94,8 @@ impl Share {
 
     /// The texture a material calls `name`, loaded once however many ask.
     pub fn texture(&mut self, files: &Files, name: &str) -> Result<Loaded, String> {
-        let path = texture_path(files, name).ok_or_else(|| format!("texture {name} is not in the wallpaper or the assets"))?;
+        let path = texture_path(files, name)
+            .ok_or_else(|| format!("texture {name} is not in the wallpaper or the assets"))?;
         let located = files.locate(&path).expect("just found");
         let key = fnv(located.key, &self.max_texture_side.to_le_bytes());
         if let Some(texture) = self.textures.get(&key).and_then(Weak::upgrade) {
@@ -98,9 +104,15 @@ impl Share {
         let bytes = files.read(&path).map_err(|e| e.to_string())?;
         let file = TextureFile::parse(&bytes).map_err(|e| format!("texture {name}: {e}"))?;
         if file.video {
-            return self.video(&file, &bytes, located.key).map(Loaded::Video).map_err(|e| format!("texture {name}: {e}"));
+            return self
+                .video(&file, &bytes, located.key)
+                .map(Loaded::Video)
+                .map_err(|e| format!("texture {name}: {e}"));
         }
-        let texture = Rc::new(upload(&self.gl, &file, &bytes, self.max_texture_side).map_err(|e| format!("texture {name}: {e}"))?);
+        let texture = Rc::new(
+            upload(&self.gl, &file, &bytes, self.max_texture_side)
+                .map_err(|e| format!("texture {name}: {e}"))?,
+        );
         self.textures.insert(key, Rc::downgrade(&texture));
         Ok(Loaded::Picture(texture))
     }
@@ -110,10 +122,14 @@ impl Share {
     fn video(&mut self, file: &TextureFile, bytes: &[u8], key: u64) -> Result<SharedVideo, String> {
         let unpacked = self.video_dir.join(format!("{key:016x}.mp4"));
         if !unpacked.is_file() {
-            let Pixels::Video(data) = file.pixels(bytes, 0, 0).map_err(|e| e.to_string())? else { return Err("no video data".to_owned()) };
+            let Pixels::Video(data) = file.pixels(bytes, 0, 0).map_err(|e| e.to_string())? else {
+                return Err("no video data".to_owned());
+            };
             std::fs::create_dir_all(&self.video_dir).map_err(|e| e.to_string())?;
             let part = unpacked.with_extension(format!("{}.part", std::process::id()));
-            std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &unpacked)).map_err(|e| e.to_string())?;
+            std::fs::write(&part, data)
+                .and_then(|()| std::fs::rename(&part, &unpacked))
+                .map_err(|e| e.to_string())?;
         }
         self.videos.open(&unpacked).map_err(|e| e.to_string())
     }
@@ -132,7 +148,9 @@ impl Share {
             let data = files.read(path).map_err(|e| e.to_string())?;
             std::fs::create_dir_all(&self.video_dir).map_err(|e| e.to_string())?;
             let part = unpacked.with_extension(format!("{}.part", std::process::id()));
-            std::fs::write(&part, data).and_then(|()| std::fs::rename(&part, &unpacked)).map_err(|e| e.to_string())?;
+            std::fs::write(&part, data)
+                .and_then(|()| std::fs::rename(&part, &unpacked))
+                .map_err(|e| e.to_string())?;
         }
         Ok(unpacked)
     }
@@ -167,11 +185,12 @@ impl Share {
             let text = files.read_text(&format!("shaders/{name}.{extension}")).ok()?;
             Some(Source::load(stage, &text, &include))
         };
-        let pair = load(Stage::Vertex, "vert").zip(load(Stage::Fragment, "frag")).map(|(vertex, fragment)| {
-            let mut declared = fragment.declared.clone();
-            declared.merge(vertex.declared.clone());
-            Rc::new(ShaderPair { vertex, fragment, declared })
-        });
+        let pair =
+            load(Stage::Vertex, "vert").zip(load(Stage::Fragment, "frag")).map(|(vertex, fragment)| {
+                let mut declared = fragment.declared.clone();
+                declared.merge(vertex.declared.clone());
+                Rc::new(ShaderPair { vertex, fragment, declared })
+            });
         self.shaders.insert(name.to_owned(), pair.clone());
         pair
     }
@@ -201,7 +220,14 @@ impl Share {
         Ok(program)
     }
 
-    fn compile(&self, pair: &ShaderPair, combos: &Combos, vertex: String, fragment: String, key: u64) -> Result<Program, String> {
+    fn compile(
+        &self,
+        pair: &ShaderPair,
+        combos: &Combos,
+        vertex: String,
+        fragment: String,
+        key: u64,
+    ) -> Result<Program, String> {
         /// How many repairs one shader gets before it is given up on.
         const REPAIRS: usize = 8;
         let mut error = None;
@@ -210,7 +236,11 @@ impl Share {
             if mode && !lenient {
                 break;
             }
-            let (mut vertex, mut fragment) = if mode { (pair.vertex.assemble(combos, true), pair.fragment.assemble(combos, true)) } else { (vertex.clone(), fragment.clone()) };
+            let (mut vertex, mut fragment) = if mode {
+                (pair.vertex.assemble(combos, true), pair.fragment.assemble(combos, true))
+            } else {
+                (vertex.clone(), fragment.clone())
+            };
             for _ in 0..=REPAIRS {
                 match Program::link(&self.gl, &vertex, &fragment) {
                     Ok(program) => return Ok(program),
@@ -225,7 +255,10 @@ impl Share {
                                 let name = format!("{key:016x}{}", if mode { "-lenient" } else { "" });
                                 let _ = std::fs::write(dir.join(format!("{name}.vert")), &vertex);
                                 let _ = std::fs::write(dir.join(format!("{name}.frag")), &fragment);
-                                log::debug!("refused shader kept as {}/{name}.{{vert,frag}}: {refused}", dir.display());
+                                log::debug!(
+                                    "refused shader kept as {}/{name}.{{vert,frag}}: {refused}",
+                                    dir.display()
+                                );
                             }
                             error = Some(refused);
                             break;
@@ -251,7 +284,9 @@ impl Share {
 
 /// Where the texture a material calls `name` is.
 fn texture_path(files: &Files, name: &str) -> Option<String> {
-    [format!("materials/{name}.tex"), format!("{name}.tex"), name.to_owned()].into_iter().find(|path| files.exists(path))
+    [format!("materials/{name}.tex"), format!("{name}.tex"), name.to_owned()]
+        .into_iter()
+        .find(|path| files.exists(path))
 }
 
 /// Puts a parsed texture container on the GPU.
@@ -259,7 +294,8 @@ fn upload(gl: &Gl, file: &TextureFile, bytes: &[u8], max_side: u32) -> Result<Sh
     let image = file.images.first().filter(|i| !i.mips.is_empty()).ok_or("the texture has no picture")?;
     let sampling = Sampling { clamp: file.clamp, nearest: file.nearest };
     // Levels larger than the budget are never read, let alone uploaded.
-    let first = image.mips.iter().position(|m| m.width.max(m.height) <= max_side).unwrap_or(image.mips.len() - 1);
+    let first =
+        image.mips.iter().position(|m| m.width.max(m.height) <= max_side).unwrap_or(image.mips.len() - 1);
     let mut levels: Vec<(u32, u32, std::borrow::Cow<'_, [u8]>)> = Vec::new();
     let mut format = TextureFormat::Rgba8;
     for (level, mip) in image.mips.iter().enumerate().skip(first) {

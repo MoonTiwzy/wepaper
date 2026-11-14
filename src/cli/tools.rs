@@ -48,17 +48,27 @@ fn arguments(mut args: lexopt::Parser, usage: &str) -> Result<Option<Arguments>,
 /// An engine that draws to nothing.
 fn headless(arguments: &Arguments) -> Result<(Context, Engine), Failure> {
     let context = Context::headless(arguments.device.as_deref()).map_err(|e| e.to_string())?;
-    let options = Options { assets: arguments.assets.clone(), cache_dir: Some(super::cache_dir()), ..Options::default() };
+    let options = Options {
+        assets: arguments.assets.clone(),
+        cache_dir: Some(super::cache_dir()),
+        ..Options::default()
+    };
     let engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
     Ok((context, engine))
 }
 
 /// `wepaper inspect`.
 pub fn inspect(args: lexopt::Parser) -> Result<(), Failure> {
-    let Some(arguments) = arguments(args, "wepaper inspect <wallpaper> [--json] [--assets DIR] [--device NODE]\n")? else { return Ok(()) };
+    let Some(arguments) =
+        arguments(args, "wepaper inspect <wallpaper> [--json] [--assets DIR] [--device NODE]\n")?
+    else {
+        return Ok(());
+    };
     let name = arguments.words.first().ok_or("which wallpaper? (a folder or a workshop id)")?;
     let (context, mut engine) = headless(&arguments)?;
-    let wallpaper = engine.load(Path::new(name), Viewport { width: 1920, height: 1080 }, &[]).map_err(|e| e.to_string())?;
+    let wallpaper = engine
+        .load(Path::new(name), Viewport { width: 1920, height: 1080 }, &[])
+        .map_err(|e| e.to_string())?;
     let project = wallpaper.project();
     let memory = context.gl().memory();
     let mut tree = obj! {
@@ -77,22 +87,36 @@ pub fn inspect(args: lexopt::Parser) -> Result<(), Failure> {
         println!("{}", tree.to_json_pretty());
         return Ok(());
     }
-    println!("{} ({})", if project.title.is_empty() { "untitled" } else { &project.title }, project.kind.name());
+    println!(
+        "{} ({})",
+        if project.title.is_empty() { "untitled" } else { &project.title },
+        project.kind.name()
+    );
     println!("video memory when loaded: textures {:.1} MB", memory.textures as f64 / 1048576.0);
     let layers = tree.get("layers");
     println!("layers: {}", layers.members().count());
     for (id, layer) in layers.members() {
-        let effects: Vec<&str> = layer.get("effects").members().filter_map(|(_, effect)| effect.get("name").as_str()).collect();
+        let effects: Vec<&str> =
+            layer.get("effects").members().filter_map(|(_, effect)| effect.get("name").as_str()).collect();
         let hidden = if layer.get("visible").as_bool() == Some(false) { " (hidden)" } else { "" };
-        let with = if effects.is_empty() { String::new() } else { format!(", effects: {}", effects.join(", ")) };
-        println!("  {id:>6}  {:<8} {}{hidden}{with}", layer.get("kind").as_str().unwrap_or("?"), layer.get("name").as_str().unwrap_or(""));
+        let with =
+            if effects.is_empty() { String::new() } else { format!(", effects: {}", effects.join(", ")) };
+        println!(
+            "  {id:>6}  {:<8} {}{hidden}{with}",
+            layer.get("kind").as_str().unwrap_or("?"),
+            layer.get("name").as_str().unwrap_or("")
+        );
     }
     let properties = tree.get("schema");
     if properties.items().len() > 0 {
         println!("properties:");
         for property in properties.items().filter(|p| p.get("type").as_str() != Some("group")) {
             let name = property.get("name").as_str().unwrap_or("");
-            println!("  {name:<28} {:<8} = {}", property.get("type").as_str().unwrap_or("?"), tree.get("properties").get(name).to_json());
+            println!(
+                "  {name:<28} {:<8} = {}",
+                property.get("type").as_str().unwrap_or("?"),
+                tree.get("properties").get(name).to_json()
+            );
         }
     }
     for line in tree.get("skipped").items().filter_map(Value::as_str) {
@@ -106,8 +130,13 @@ fn wallpapers_in(name: &str) -> Vec<PathBuf> {
     if let Some(folder) = locate::wallpaper(name).filter(|folder| folder.join("project.json").is_file()) {
         return vec![folder];
     }
-    let mut found: Vec<PathBuf> =
-        std::fs::read_dir(name).into_iter().flatten().flatten().map(|entry| entry.path()).filter(|path| path.join("project.json").is_file()).collect();
+    let mut found: Vec<PathBuf> = std::fs::read_dir(name)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.join("project.json").is_file())
+        .collect();
     found.sort();
     found
 }
@@ -129,7 +158,13 @@ pub fn check(args: lexopt::Parser) -> Result<(), Failure> {
         let id = folder.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         match engine.load(&folder, Viewport { width: 1280, height: 720 }, &[]) {
             Ok(mut wallpaper) => {
-                wallpaper.draw(&mut engine, &FrameInput { time: 1.0, pointer: [0.5, 0.5], daytime: 0.5 }, Some(frame.framebuffer()), (1280, 720), true);
+                wallpaper.draw(
+                    &mut engine,
+                    &FrameInput { time: 1.0, pointer: [0.5, 0.5], daytime: 0.5 },
+                    Some(frame.framebuffer()),
+                    (1280, 720),
+                    true,
+                );
                 let skipped: Vec<String> = match &wallpaper {
                     Wallpaper::Scene(scene) => scene.skipped().to_vec(),
                     Wallpaper::Video(_) => Vec::new(),
@@ -166,24 +201,40 @@ pub fn check(args: lexopt::Parser) -> Result<(), Failure> {
     if arguments.json {
         println!("{}", Value::Array(report).to_json_pretty());
     } else {
-        println!("{clean} complete, {partial} with parts not shown, {failed} did not load, {other} of a kind left to plugins");
+        println!(
+            "{clean} complete, {partial} with parts not shown, {failed} did not load, {other} of a kind left to plugins"
+        );
     }
     if failed > 0 { Err(format!("{failed} wallpapers did not load")) } else { Ok(()) }
 }
 
 /// `wepaper unpack`.
 pub fn unpack(args: lexopt::Parser) -> Result<(), Failure> {
-    let Some(arguments) = arguments(args, "wepaper unpack <scene.pkg or wallpaper> <folder>\n")? else { return Ok(()) };
-    let (Some(source), Some(target)) = (arguments.words.first(), arguments.words.get(1)) else { return Err("unpack what, and where to?".to_owned()) };
-    let package = if Path::new(source).is_file() { PathBuf::from(source) } else { locate::wallpaper(source).ok_or(format!("no such wallpaper: {source}"))?.join("scene.pkg") };
+    let Some(arguments) = arguments(args, "wepaper unpack <scene.pkg or wallpaper> <folder>\n")? else {
+        return Ok(());
+    };
+    let (Some(source), Some(target)) = (arguments.words.first(), arguments.words.get(1)) else {
+        return Err("unpack what, and where to?".to_owned());
+    };
+    let package = if Path::new(source).is_file() {
+        PathBuf::from(source)
+    } else {
+        locate::wallpaper(source).ok_or(format!("no such wallpaper: {source}"))?.join("scene.pkg")
+    };
     let archive = Archive::open(&package).map_err(|e| format!("{}: {e}", package.display()))?;
     let target = Path::new(target);
     let names: Vec<String> = archive.names().map(str::to_owned).collect();
     for name in &names {
         // A name that climbs out of the folder is not written anywhere.
-        let relative: PathBuf = name.split(['/', '\\']).filter(|part| !part.is_empty() && *part != "." && *part != "..").collect();
+        let relative: PathBuf = name
+            .split(['/', '\\'])
+            .filter(|part| !part.is_empty() && *part != "." && *part != "..")
+            .collect();
         let path = target.join(relative);
-        let bytes = archive.read(name).ok_or("the package changed while it was read")?.map_err(|e| format!("{name}: {e}"))?;
+        let bytes = archive
+            .read(name)
+            .ok_or("the package changed while it was read")?
+            .map_err(|e| format!("{name}: {e}"))?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }

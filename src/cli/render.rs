@@ -29,21 +29,34 @@ Renders one frame of a scene or video wallpaper to a PNG. Needs no compositor.
 
 pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     use lexopt::prelude::*;
-    let (mut wallpaper, mut output, mut assets, mut device) = (None::<String>, None::<PathBuf>, None::<PathBuf>, None::<String>);
-    let (mut size, mut time, mut frames, mut fill, mut cache, mut stats) = ((1920, 1080), 0.0f64, 1u32, Fill::Cover, true, false);
+    let (mut wallpaper, mut output, mut assets, mut device) =
+        (None::<String>, None::<PathBuf>, None::<PathBuf>, None::<String>);
+    let (mut size, mut time, mut frames, mut fill, mut cache, mut stats) =
+        ((1920, 1080), 0.0f64, 1u32, Fill::Cover, true, false);
     let mut properties = Vec::new();
     let text = |value: std::ffi::OsString| value.to_string_lossy().into_owned();
     while let Some(arg) = args.next().map_err(|e| e.to_string())? {
         match arg {
             Short('o') | Long("output") => output = Some(args.value().map_err(|e| e.to_string())?.into()),
             Short('s') | Long("size") => size = parse_size(&text(args.value().map_err(|e| e.to_string())?))?,
-            Short('t') | Long("time") => time = text(args.value().map_err(|e| e.to_string())?).parse().map_err(|_| "--time takes seconds")?,
-            Long("frames") => frames = text(args.value().map_err(|e| e.to_string())?).parse().map_err(|_| "--frames takes a number")?,
+            Short('t') | Long("time") => {
+                time = text(args.value().map_err(|e| e.to_string())?)
+                    .parse()
+                    .map_err(|_| "--time takes seconds")?
+            }
+            Long("frames") => {
+                frames = text(args.value().map_err(|e| e.to_string())?)
+                    .parse()
+                    .map_err(|_| "--frames takes a number")?
+            }
             Long("fill") => {
                 let name = text(args.value().map_err(|e| e.to_string())?);
-                fill = Fill::from_name(&name).ok_or_else(|| format!("unknown fill '{name}': cover, contain or stretch"))?;
+                fill = Fill::from_name(&name)
+                    .ok_or_else(|| format!("unknown fill '{name}': cover, contain or stretch"))?;
             }
-            Short('p') | Long("property") => properties.push(parse_property(&text(args.value().map_err(|e| e.to_string())?))?),
+            Short('p') | Long("property") => {
+                properties.push(parse_property(&text(args.value().map_err(|e| e.to_string())?))?)
+            }
             Long("assets") => assets = Some(args.value().map_err(|e| e.to_string())?.into()),
             Long("device") => device = Some(text(args.value().map_err(|e| e.to_string())?)),
             Long("no-cache") => cache = false,
@@ -64,7 +77,8 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let options = Options { assets, cache_dir: cache.then(cache_dir), ..Options::default() };
     let mut engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
     let viewport = Viewport { width: size.0, height: size.1 };
-    let mut wallpaper = engine.load(Path::new(&wallpaper), viewport, &properties).map_err(|e| e.to_string())?;
+    let mut wallpaper =
+        engine.load(Path::new(&wallpaper), viewport, &properties).map_err(|e| e.to_string())?;
     wallpaper.set_fill(fill);
     let frame = Target::new(context.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
     frame.clear([0.0, 0.0, 0.0, 1.0]);
@@ -91,7 +105,12 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         let memory = context.gl().memory();
         let mb = |bytes: u64| bytes as f64 / 1048576.0;
         eprintln!("gpu: {}", context.description);
-        eprintln!("load: {:.0} ms, {} frames: {:.1} ms", loaded.as_secs_f64() * 1e3, frames, drawn.as_secs_f64() * 1e3);
+        eprintln!(
+            "load: {:.0} ms, {} frames: {:.1} ms",
+            loaded.as_secs_f64() * 1e3,
+            frames,
+            drawn.as_secs_f64() * 1e3
+        );
         eprintln!(
             "video memory: textures {:.1} MB, buffers {:.1} MB, video {:.1} MB; most effect buffers at once: {}",
             mb(memory.textures),
@@ -117,7 +136,8 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
     encoder.set_color(png::ColorType::Rgba);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(png::Compression::Fast);
-    let result = encoder.write_header().and_then(|mut writer| writer.write_image_data(rgba)).map_err(|e| fail(&e));
+    let result =
+        encoder.write_header().and_then(|mut writer| writer.write_image_data(rgba)).map_err(|e| fail(&e));
     match result {
         Ok(()) => std::fs::rename(&part, path).map_err(|e| fail(&e)),
         Err(error) => {

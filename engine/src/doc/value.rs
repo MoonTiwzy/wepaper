@@ -50,7 +50,9 @@ impl<T> Dyn<T> {
 impl<T: FromDoc> Dyn<T> {
     /// Reads a field that is either a literal or an object with `value` and links.
     pub fn read(doc: &Value, default: T) -> Self {
-        let linked = doc.as_object().is_some_and(|o| ["value", "user", "script", "animation"].iter().any(|k| o.get(k).is_some()));
+        let linked = doc
+            .as_object()
+            .is_some_and(|o| ["value", "user", "script", "animation"].iter().any(|k| o.get(k).is_some()));
         if !linked {
             return Self::constant(T::from_doc(doc).unwrap_or(default));
         }
@@ -62,10 +64,10 @@ impl<T: FromDoc> Dyn<T> {
             }),
             _ => None,
         };
-        let script = doc
-            .get("script")
-            .as_str()
-            .map(|source| Script { source: source.to_owned(), properties: doc.get("scriptproperties").clone() });
+        let script = doc.get("script").as_str().map(|source| Script {
+            source: source.to_owned(),
+            properties: doc.get("scriptproperties").clone(),
+        });
         let animation = Animation::read(doc.get("animation"));
         Self { value: T::from_doc(doc.get("value")).unwrap_or(default), user, script, animation }
     }
@@ -73,7 +75,10 @@ impl<T: FromDoc> Dyn<T> {
 
 /// The numbers in a string such as `"0.5 1 -2"`.
 pub fn floats(text: &str) -> Vec<f32> {
-    text.split([' ', ',', '\t']).filter(|part| !part.is_empty()).map(|part| part.parse().unwrap_or(0.0)).collect()
+    text.split([' ', ',', '\t'])
+        .filter(|part| !part.is_empty())
+        .map(|part| part.parse().unwrap_or(0.0))
+        .collect()
 }
 
 /// A value as the numbers an animation or a shader works with.

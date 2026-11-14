@@ -17,7 +17,8 @@ pub fn value(args: &mut lexopt::Parser) -> Result<String, Failure> {
 /// A `WIDTHxHEIGHT` argument.
 pub fn parse_size(text: &str) -> Result<(u32, u32), Failure> {
     let size = text.split_once(['x', 'X']).and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
-    size.filter(|&(w, h): &(u32, u32)| w > 0 && h > 0 && w <= 16384 && h <= 16384).ok_or_else(|| format!("'{text}' is not a size like 1920x1080"))
+    size.filter(|&(w, h): &(u32, u32)| w > 0 && h > 0 && w <= 16384 && h <= 16384)
+        .ok_or_else(|| format!("'{text}' is not a size like 1920x1080"))
 }
 
 /// A `name=value` argument; the value is JSON when it parses as JSON, text otherwise.

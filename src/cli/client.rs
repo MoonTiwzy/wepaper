@@ -31,7 +31,9 @@ Talking to the daemon:
 fn show(value: &Value, json: bool) -> String {
     match value {
         Value::String(text) if !json => text.clone(),
-        Value::Array(items) if !json && items.iter().all(|item| item.as_str().is_some()) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        Value::Array(items) if !json && items.iter().all(|item| item.as_str().is_some()) => {
+            items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n")
+        }
         Value::Object(_) | Value::Array(_) => value.to_json_pretty(),
         other => other.to_json(),
     }
@@ -44,12 +46,23 @@ fn summary(tree: &Value) -> String {
     for (name, output) in tree.get("outputs").members() {
         let wallpaper = output.get("wallpaper");
         let what = match wallpaper.get("title").as_str() {
-            Some(title) => format!("{} ({}, {})", if title.is_empty() { "untitled" } else { title }, wallpaper.get("kind").as_str().unwrap_or("?"), wallpaper.get("path").as_str().unwrap_or("")),
+            Some(title) => format!(
+                "{} ({}, {})",
+                if title.is_empty() { "untitled" } else { title },
+                wallpaper.get("kind").as_str().unwrap_or("?"),
+                wallpaper.get("path").as_str().unwrap_or("")
+            ),
             None => "nothing".to_owned(),
         };
         let size = output.get("size");
         let paused = if output.get("paused").as_bool() == Some(true) { ", paused" } else { "" };
-        lines.push(format!("{name} {}x{} @{}: {what}, {} fps{paused}", show(size.at(0), false), show(size.at(1), false), show(output.get("scale"), false), show(output.get("fps"), false)));
+        lines.push(format!(
+            "{name} {}x{} @{}: {what}, {} fps{paused}",
+            show(size.at(0), false),
+            show(size.at(1), false),
+            show(output.get("scale"), false),
+            show(output.get("fps"), false)
+        ));
         if let Some(error) = output.get("error").as_str() {
             lines.push(format!("  last error: {error}"));
         }
@@ -86,9 +99,14 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
             other => return Err(other.unexpected().to_string()),
         }
     }
-    let word = |index: usize, what: &str| words.get(index).cloned().ok_or_else(|| format!("{command}: {what}?"));
+    let word =
+        |index: usize, what: &str| words.get(index).cloned().ok_or_else(|| format!("{command}: {what}?"));
     let request = match command {
-        "show" => Request::Show { wallpaper: word(0, "which wallpaper")?, output, properties: (!properties.is_empty()).then_some(properties) },
+        "show" => Request::Show {
+            wallpaper: word(0, "which wallpaper")?,
+            output,
+            properties: (!properties.is_empty()).then_some(properties),
+        },
         "hide" => Request::Hide { output },
         "pause" => Request::Pause { output },
         "resume" => Request::Resume { output },
@@ -96,8 +114,15 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
         "get" => Request::Get { path: words.first().cloned().unwrap_or_default() },
         "list" => Request::List { path: words.first().cloned().unwrap_or_default() },
         "set" => {
-            let text = words.get(1..).filter(|rest| !rest.is_empty()).map(|rest| rest.join(" ")).ok_or("set: to what value?")?;
-            Request::Set { path: word(0, "which path")?, value: wepaper_json::parse(&text).unwrap_or(wepaper_json::Value::from(text)) }
+            let text = words
+                .get(1..)
+                .filter(|rest| !rest.is_empty())
+                .map(|rest| rest.join(" "))
+                .ok_or("set: to what value?")?;
+            Request::Set {
+                path: word(0, "which path")?,
+                value: wepaper_json::parse(&text).unwrap_or(wepaper_json::Value::from(text)),
+            }
         }
         "reset" => Request::Reset { path: word(0, "which path")? },
         "snapshot" => {
@@ -110,7 +135,8 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
         "version" => Request::Version,
         other => return Err(format!("unknown command '{other}' (see wepaper --help)")),
     };
-    let mut client = Client::connect(&socket.unwrap_or_else(wepaper_ipc::default_socket)).map_err(|e| e.to_string())?;
+    let mut client =
+        Client::connect(&socket.unwrap_or_else(wepaper_ipc::default_socket)).map_err(|e| e.to_string())?;
     if request == Request::Watch {
         for event in client.watch().map_err(|e| e.to_string())? {
             println!("{}", event.to_json());

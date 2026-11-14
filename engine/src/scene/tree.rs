@@ -110,7 +110,10 @@ impl SceneInstance {
                     PropertyKind::Bool => "bool",
                     PropertyKind::Color => "color",
                     PropertyKind::Combo(options) => {
-                        let options = options.iter().map(|(label, value)| obj! { "label" => label, "value" => value.clone() }).collect::<Vec<_>>();
+                        let options = options
+                            .iter()
+                            .map(|(label, value)| obj! { "label" => label, "value" => value.clone() })
+                            .collect::<Vec<_>>();
                         node.insert("options", Value::Array(options));
                         "combo"
                     }
@@ -163,7 +166,10 @@ impl SceneInstance {
     pub fn edit(&mut self, path: &[&str], value: &Value) -> Result<(), String> {
         match path {
             ["scene", name] => {
-                let (_, field) = SceneField::ALL.into_iter().find(|(known, _)| known == name).ok_or_else(|| format!("the scene has no value \"{name}\""))?;
+                let (_, field) = SceneField::ALL
+                    .into_iter()
+                    .find(|(known, _)| known == name)
+                    .ok_or_else(|| format!("the scene has no value \"{name}\""))?;
                 if field.is_flag() {
                     let on = bool::from_doc(value).ok_or("expected true or false")?;
                     if field == SceneField::Bloom && on && self.bloom.is_none() {
@@ -186,12 +192,20 @@ impl SceneInstance {
                 Ok(())
             }
             ["layers", id, rest @ ..] => {
-                let index = id.parse::<i64>().ok().and_then(|id| self.layers.iter().position(|l| l.id == id)).ok_or_else(|| format!("no layer with id {id}"))?;
+                let index = id
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|id| self.layers.iter().position(|l| l.id == id))
+                    .ok_or_else(|| format!("no layer with id {id}"))?;
                 let layer = &mut self.layers[index];
                 let flag = || bool::from_doc(value).ok_or_else(|| "expected true or false".to_owned());
                 let three = || -> Result<[f32; 3], String> {
                     let floats = value_floats(value, 3);
-                    if value.is_null() { Err("expected three numbers".to_owned()) } else { Ok([floats[0], floats[1], floats[2]]) }
+                    if value.is_null() {
+                        Err("expected three numbers".to_owned())
+                    } else {
+                        Ok([floats[0], floats[1], floats[2]])
+                    }
                 };
                 let number = || f32::from_doc(value).ok_or_else(|| "expected a number".to_owned());
                 match rest {
@@ -204,22 +218,34 @@ impl SceneInstance {
                         layer.parallax_depth = [depth[0], depth[1]];
                     }
                     ["volume"] => {
-                        let LayerKind::Sound(sound) = &mut layer.kind else { return Err(format!("layer {id} is not a sound")) };
+                        let LayerKind::Sound(sound) = &mut layer.kind else {
+                            return Err(format!("layer {id} is not a sound"));
+                        };
                         sound.volume = number()?.clamp(0.0, 1.0);
                     }
                     ["constants", name] => {
-                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no constants")) };
-                        if value.is_null() || !image.base.set_constant(name, value, &mut self.bindings.values) {
+                        let LayerKind::Image(image) = &mut layer.kind else {
+                            return Err(format!("layer {id} has no constants"));
+                        };
+                        if value.is_null() || !image.base.set_constant(name, value, &mut self.bindings.values)
+                        {
                             return Err(format!("layer {id} has no constant \"{name}\""));
                         }
                     }
                     ["effects", effect, "constants", name] => {
-                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no effects")) };
-                        let found = effect.parse::<usize>().ok().and_then(|n| image.effects.get_mut(n)).ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
+                        let LayerKind::Image(image) = &mut layer.kind else {
+                            return Err(format!("layer {id} has no effects"));
+                        };
+                        let found = effect
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|n| image.effects.get_mut(n))
+                            .ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
                         let mut any = false;
                         for step in &mut found.steps {
                             if let Step::Draw { shade, .. } = step {
-                                any |= !value.is_null() && shade.set_constant(name, value, &mut self.bindings.values);
+                                any |= !value.is_null()
+                                    && shade.set_constant(name, value, &mut self.bindings.values);
                             }
                         }
                         if !any {
@@ -227,7 +253,9 @@ impl SceneInstance {
                         }
                     }
                     [field @ ("alpha" | "color" | "brightness")] => {
-                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no {field}")) };
+                        let LayerKind::Image(image) = &mut layer.kind else {
+                            return Err(format!("layer {id} has no {field}"));
+                        };
                         match *field {
                             "alpha" => image.alpha = number()?,
                             "brightness" => image.brightness = number()?,
@@ -235,14 +263,22 @@ impl SceneInstance {
                         }
                     }
                     ["text"] => {
-                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no text")) };
+                        let LayerKind::Image(image) = &mut layer.kind else {
+                            return Err(format!("layer {id} has no text"));
+                        };
                         let text = image.text.as_mut().ok_or_else(|| format!("layer {id} has no text"))?;
                         text.text = String::from_doc(value).ok_or("expected text")?;
                         text.dirty = true;
                     }
                     ["effects", effect, "visible"] => {
-                        let LayerKind::Image(image) = &mut layer.kind else { return Err(format!("layer {id} has no effects")) };
-                        let effect = effect.parse::<usize>().ok().and_then(|n| image.effects.get_mut(n)).ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
+                        let LayerKind::Image(image) = &mut layer.kind else {
+                            return Err(format!("layer {id} has no effects"));
+                        };
+                        let effect = effect
+                            .parse::<usize>()
+                            .ok()
+                            .and_then(|n| image.effects.get_mut(n))
+                            .ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
                         effect.visible = flag()?;
                     }
                     _ => return Err(format!("layers/{id}/{} cannot be set", rest.join("/"))),

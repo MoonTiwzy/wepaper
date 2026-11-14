@@ -1,6 +1,8 @@
 //! The GPU layer on a headless context. Skipped on machines where EGL gives none.
 
-use wepaper_engine::gpu::{Blend, Context, Mesh, Program, Sampling, Target, TargetPool, Texture, TextureFormat};
+use wepaper_engine::gpu::{
+    Blend, Context, Mesh, Program, Sampling, Target, TargetPool, Texture, TextureFormat,
+};
 
 fn context() -> Option<Context> {
     match Context::headless(None) {
@@ -37,7 +39,13 @@ fn draws_a_texture_the_right_way_up() {
     let gl = context.gl();
     // Two rows: the first (top of the picture) red, the second blue.
     let pixels = [255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 255];
-    let texture = Texture::from_levels(gl, TextureFormat::Rgba8, &[(2, 2, &pixels)], Sampling { clamp: true, nearest: true }).unwrap();
+    let texture = Texture::from_levels(
+        gl,
+        TextureFormat::Rgba8,
+        &[(2, 2, &pixels)],
+        Sampling { clamp: true, nearest: true },
+    )
+    .unwrap();
     let program = Program::link(gl, VERTEX, FRAGMENT).unwrap();
     let target = Target::new(gl, 2, 2, TextureFormat::Rgba8).unwrap();
     target.clear([0.0; 4]);
@@ -48,7 +56,16 @@ fn draws_a_texture_the_right_way_up() {
     gl.bind_texture(0, texture.raw());
     gl.set_blend(Blend::None);
     // A layer's quad: the top corners carry v = 0, the picture's first row.
-    let quad = Mesh::quad(gl, &[[-1.0, -1.0, 0.0, 0.0, 1.0], [1.0, -1.0, 0.0, 1.0, 1.0], [-1.0, 1.0, 0.0, 0.0, 0.0], [1.0, 1.0, 0.0, 1.0, 0.0]]).unwrap();
+    let quad = Mesh::quad(
+        gl,
+        &[
+            [-1.0, -1.0, 0.0, 0.0, 1.0],
+            [1.0, -1.0, 0.0, 1.0, 1.0],
+            [-1.0, 1.0, 0.0, 0.0, 0.0],
+            [1.0, 1.0, 0.0, 1.0, 0.0],
+        ],
+    )
+    .unwrap();
     quad.draw();
     let out = target.read_rgba();
     assert_eq!(&out[..4], &[255, 0, 0, 255], "the top row read back is the picture's first row");
@@ -69,10 +86,12 @@ fn program_reflection_lists_uniforms() {
 #[test]
 fn compile_error_carries_log() {
     let Some(context) = context() else { return };
-    let error = Program::link(context.gl(), VERTEX, "#version 330 core\nvoid main() { nonsense }\n").err().unwrap();
+    let error =
+        Program::link(context.gl(), VERTEX, "#version 330 core\nvoid main() { nonsense }\n").err().unwrap();
     assert_eq!(error.stage, "fragment");
     assert!(!error.log.trim().is_empty());
-    let error = Program::link(context.gl(), "#version 330 core\nvoid main() { broken\n", FRAGMENT).err().unwrap();
+    let error =
+        Program::link(context.gl(), "#version 330 core\nvoid main() { broken\n", FRAGMENT).err().unwrap();
     assert_eq!(error.stage, "vertex");
 }
 
@@ -92,7 +111,11 @@ fn program_binaries_are_cached_on_disk() {
     first.save(42);
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "the linked program was saved");
     let second = Program::restore(gl, 42).expect("the saved program comes back");
-    assert_eq!(second.uniforms.len(), first.uniforms.len(), "a restored program reflects like a compiled one");
+    assert_eq!(
+        second.uniforms.len(),
+        first.uniforms.len(),
+        "a restored program reflects like a compiled one"
+    );
     assert!(Program::restore(gl, 43).is_none(), "another key is another program");
     // A cache file that is garbage is ignored, not trusted.
     let file = std::fs::read_dir(&dir).unwrap().next().unwrap().unwrap().path();
@@ -134,15 +157,25 @@ fn memory_stats_follow_allocations() {
     let before = gl.memory();
     let big = vec![0u8; 16 * 16 * 4];
     let small = vec![0u8; 8 * 8 * 4];
-    let texture = Texture::from_levels(gl, TextureFormat::Rgba8, &[(16, 16, &big), (8, 8, &small)], Sampling::default()).unwrap();
+    let texture = Texture::from_levels(
+        gl,
+        TextureFormat::Rgba8,
+        &[(16, 16, &big), (8, 8, &small)],
+        Sampling::default(),
+    )
+    .unwrap();
     assert_eq!(texture.bytes(), 16 * 16 * 4 + 8 * 8 * 4);
     assert_eq!(gl.memory().textures - before.textures, texture.bytes());
     if gl.caps().s3tc {
         let block = vec![0u8; 16];
-        let dxt = Texture::from_levels(gl, TextureFormat::Dxt5, &[(4, 4, &block)], Sampling::default()).unwrap();
+        let dxt =
+            Texture::from_levels(gl, TextureFormat::Dxt5, &[(4, 4, &block)], Sampling::default()).unwrap();
         assert_eq!(dxt.bytes(), 16, "a compressed texture stays compressed: 16 bytes for 16 pixels");
     }
-    assert!(Texture::from_levels(gl, TextureFormat::Rgba8, &[(16, 16, &small)], Sampling::default()).is_err(), "too little data is refused");
+    assert!(
+        Texture::from_levels(gl, TextureFormat::Rgba8, &[(16, 16, &small)], Sampling::default()).is_err(),
+        "too little data is refused"
+    );
     drop(texture);
     assert_eq!(gl.memory().textures, before.textures);
 }

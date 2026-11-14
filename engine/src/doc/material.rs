@@ -78,7 +78,11 @@ impl MaterialPass {
             blending: Blending::from_name(doc.get("blending").as_str().unwrap_or("translucent")),
             textures: texture_slots(doc.get("textures")),
             combos: combos(doc.get("combos")),
-            constants: doc.get("constantshadervalues").members().map(|(k, v)| (k.to_owned(), v.clone())).collect(),
+            constants: doc
+                .get("constantshadervalues")
+                .members()
+                .map(|(k, v)| (k.to_owned(), v.clone()))
+                .collect(),
             cull: doc.get("cullmode").as_str() == Some("normal"),
             depth_test: doc.get("depthtest").as_str().is_some_and(|v| v != "disabled"),
             depth_write: doc.get("depthwrite").as_str().is_some_and(|v| v != "disabled"),

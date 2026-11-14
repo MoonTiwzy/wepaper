@@ -45,7 +45,8 @@ mod tests {
     #[test]
     fn fft_of_sine_peaks_at_bin() {
         let n = 256;
-        let mut re: Vec<f32> = (0..n).map(|i| (2.0 * std::f32::consts::PI * 10.0 * i as f32 / n as f32).sin()).collect();
+        let mut re: Vec<f32> =
+            (0..n).map(|i| (2.0 * std::f32::consts::PI * 10.0 * i as f32 / n as f32).sin()).collect();
         let mut im = vec![0.0; n];
         transform(&mut re, &mut im);
         let magnitude: Vec<f32> = re.iter().zip(&im).map(|(r, i)| (r * r + i * i).sqrt()).collect();

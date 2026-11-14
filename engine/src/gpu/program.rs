@@ -68,19 +68,21 @@ impl Program {
         // SAFETY: the context is current; every object is checked before use and deleted on failure.
         unsafe {
             let raw = gl.raw().create_program().map_err(|log| ProgramError { stage: "link", log })?;
-            let compile = |kind: u32, stage: &'static str, source: &str| -> Result<glow::Shader, ProgramError> {
-                let shader = gl.raw().create_shader(kind).map_err(|log| ProgramError { stage, log })?;
-                gl.raw().shader_source(shader, source);
-                gl.raw().compile_shader(shader);
-                if gl.raw().get_shader_compile_status(shader) {
-                    Ok(shader)
-                } else {
-                    let log = gl.raw().get_shader_info_log(shader);
-                    gl.raw().delete_shader(shader);
-                    Err(ProgramError { stage, log })
-                }
-            };
-            let vs = compile(glow::VERTEX_SHADER, "vertex", vertex).inspect_err(|_| gl.raw().delete_program(raw))?;
+            let compile =
+                |kind: u32, stage: &'static str, source: &str| -> Result<glow::Shader, ProgramError> {
+                    let shader = gl.raw().create_shader(kind).map_err(|log| ProgramError { stage, log })?;
+                    gl.raw().shader_source(shader, source);
+                    gl.raw().compile_shader(shader);
+                    if gl.raw().get_shader_compile_status(shader) {
+                        Ok(shader)
+                    } else {
+                        let log = gl.raw().get_shader_info_log(shader);
+                        gl.raw().delete_shader(shader);
+                        Err(ProgramError { stage, log })
+                    }
+                };
+            let vs = compile(glow::VERTEX_SHADER, "vertex", vertex)
+                .inspect_err(|_| gl.raw().delete_program(raw))?;
             let fs = compile(glow::FRAGMENT_SHADER, "fragment", fragment).inspect_err(|_| {
                 gl.raw().delete_shader(vs);
                 gl.raw().delete_program(raw);
@@ -188,7 +190,12 @@ impl Program {
                 glow::FLOAT_MAT3 => gl.uniform_matrix_3_f32_slice(location, false, take(9)),
                 glow::FLOAT_MAT4 => gl.uniform_matrix_4_f32_slice(location, false, take(16)),
                 glow::FLOAT_MAT4x3 => gl.uniform_matrix_4x3_f32_slice(location, false, take(12)),
-                glow::INT | glow::BOOL | glow::SAMPLER_2D | glow::SAMPLER_3D | glow::SAMPLER_2D_SHADOW | glow::SAMPLER_CUBE => {
+                glow::INT
+                | glow::BOOL
+                | glow::SAMPLER_2D
+                | glow::SAMPLER_3D
+                | glow::SAMPLER_2D_SHADOW
+                | glow::SAMPLER_CUBE => {
                     if let Some(first) = values.first() {
                         gl.uniform_1_i32(location, *first as i32);
                     }

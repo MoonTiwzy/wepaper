@@ -264,12 +264,13 @@ impl Scene {
         let field = |key: &str, default: f32| Dyn::read(general.get(key), default);
         let flag = |key: &str, default: bool| Dyn::read(general.get(key), default);
         let projection = general.get("orthogonalprojection");
-        let orthogonal = match (f32::from_doc(projection.get("width")), f32::from_doc(projection.get("height"))) {
-            (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some([w, h]),
-            // `auto` takes the size of the first image; the loader resolves it.
-            _ if !projection.is_null() => Some([0.0, 0.0]),
-            _ => None,
-        };
+        let orthogonal =
+            match (f32::from_doc(projection.get("width")), f32::from_doc(projection.get("height"))) {
+                (Some(w), Some(h)) if w > 0.0 && h > 0.0 => Some([w, h]),
+                // `auto` takes the size of the first image; the loader resolves it.
+                _ if !projection.is_null() => Some([0.0, 0.0]),
+                _ => None,
+            };
         let vector = |doc: &Value, default: [f32; 3]| <[f32; 3]>::from_doc(doc).unwrap_or(default);
         Self {
             general: General {
@@ -306,7 +307,10 @@ impl Object {
         let kind = if let Some(image) = text("image") {
             ObjectKind::Image(Box::new(ImageObject::parse(doc, image)))
         } else if let Some(file) = text("particle") {
-            ObjectKind::Particle(ParticleObject { file: file.to_owned(), overrides: doc.get("instanceoverride").clone() })
+            ObjectKind::Particle(ParticleObject {
+                file: file.to_owned(),
+                overrides: doc.get("instanceoverride").clone(),
+            })
         } else if !doc.get("text").is_null() {
             ObjectKind::Text(Box::new(TextObject::parse(doc)))
         } else if doc.get("sound").as_array().is_some() {

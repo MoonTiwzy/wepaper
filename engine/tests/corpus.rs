@@ -34,7 +34,12 @@ fn check_texture(name: &str, bytes: &[u8]) -> Result<String, String> {
             let mip = &image.mips[last];
             let expected = format.level_size(mip.width, mip.height);
             if data.len() != expected {
-                return Err(format!("{name}: level {last} is {} bytes, {expected} expected ({format:?} {}x{})", data.len(), mip.width, mip.height));
+                return Err(format!(
+                    "{name}: level {last} is {} bytes, {expected} expected ({format:?} {}x{})",
+                    data.len(),
+                    mip.width,
+                    mip.height
+                ));
             }
             format!("{format:?}")
         }
@@ -54,7 +59,8 @@ fn check_texture(name: &str, bytes: &[u8]) -> Result<String, String> {
 
 #[test]
 fn every_package_and_texture_reads() {
-    let (Some(assets), Some(workshop)) = (env_dir("WEPAPER_TEST_ASSETS"), env_dir("WEPAPER_TEST_WORKSHOP")) else {
+    let (Some(assets), Some(workshop)) = (env_dir("WEPAPER_TEST_ASSETS"), env_dir("WEPAPER_TEST_WORKSHOP"))
+    else {
         eprintln!("skipped: WEPAPER_TEST_ASSETS / WEPAPER_TEST_WORKSHOP are not set");
         return;
     };
@@ -85,7 +91,9 @@ fn every_package_and_texture_reads() {
                 let names: Vec<String> = archive.names().map(str::to_owned).collect();
                 for entry in names {
                     match archive.read(&entry).expect("listed entry") {
-                        Ok(bytes) if entry.ends_with(".tex") => count(check_texture(&format!("{name}:{entry}"), &bytes)),
+                        Ok(bytes) if entry.ends_with(".tex") => {
+                            count(check_texture(&format!("{name}:{entry}"), &bytes))
+                        }
                         Ok(_) => {}
                         Err(e) => count(Err(format!("{name}:{entry}: {e}"))),
                     }
@@ -95,6 +103,11 @@ fn every_package_and_texture_reads() {
         }
     }
     eprintln!("{packages} packages; textures: {tally:?}");
-    assert!(failures.is_empty(), "{} failures, first ones:\n{}", failures.len(), failures.iter().take(15).cloned().collect::<Vec<_>>().join("\n"));
+    assert!(
+        failures.is_empty(),
+        "{} failures, first ones:\n{}",
+        failures.len(),
+        failures.iter().take(15).cloned().collect::<Vec<_>>().join("\n")
+    );
     assert!(packages > 0 && !tally.is_empty(), "nothing was checked");
 }

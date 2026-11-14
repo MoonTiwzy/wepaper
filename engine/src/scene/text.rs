@@ -77,7 +77,8 @@ fn lines<F: Font>(font: &impl ScaleFont<F>, text: &str, wrap_at: Option<f32>) ->
             {
                 // The words after the last space move to a new line.
                 let rest: Vec<(ab_glyph::GlyphId, f32)> = line.glyphs.split_off(count);
-                let first = rest.iter().position(|(glyph, _)| *glyph != font.glyph_id(' ')).unwrap_or(rest.len());
+                let first =
+                    rest.iter().position(|(glyph, _)| *glyph != font.glyph_id(' ')).unwrap_or(rest.len());
                 let shift = rest.get(first).map_or(0.0, |(_, x)| *x);
                 out.push(Line { glyphs: std::mem::take(&mut line.glyphs), width });
                 line.glyphs = rest[first..].iter().map(|(glyph, x)| (*glyph, x - shift)).collect();
@@ -99,7 +100,13 @@ fn lines<F: Font>(font: &impl ScaleFont<F>, text: &str, wrap_at: Option<f32>) ->
 
 /// Coverage of `text` laid out in a box of `size` scene units, at `density` pixels a
 /// unit: (width, height, one byte a pixel, rows top to bottom).
-pub(crate) fn rasterize(font: &FontVec, text: &str, style: &TextStyleSpec, size: [f32; 2], density: f32) -> (u32, u32, Vec<u8>) {
+pub(crate) fn rasterize(
+    font: &FontVec,
+    text: &str,
+    style: &TextStyleSpec,
+    size: [f32; 2],
+    density: f32,
+) -> (u32, u32, Vec<u8>) {
     let density = density.clamp(0.05, 4.0);
     let width = ((size[0] * density).ceil() as u32).clamp(1, MAX_SIDE);
     let height = ((size[1] * density).ceil() as u32).clamp(1, MAX_SIDE);
@@ -111,7 +118,7 @@ pub(crate) fn rasterize(font: &FontVec, text: &str, style: &TextStyleSpec, size:
     let scale = PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0));
     let scaled = font.as_scaled(scale);
     // Lines break where the text says, and at a width only when the layer sets one.
-    let lines = lines(&scaled, text, (style.max_width > 0.0).then(|| style.max_width * density));
+    let lines = lines(&scaled, text, (style.max_width > 0.0).then_some(style.max_width * density));
     let line_height = scaled.height() + scaled.line_gap();
     let block = line_height * lines.len() as f32;
     let top = match style.vertical {
@@ -160,7 +167,12 @@ impl TextState {
             let _ = texture.write(&pixels);
             return;
         }
-        match Texture::from_levels(gl, TextureFormat::R8, &[(width, height, &pixels)], Sampling { clamp: true, nearest: false }) {
+        match Texture::from_levels(
+            gl,
+            TextureFormat::R8,
+            &[(width, height, &pixels)],
+            Sampling { clamp: true, nearest: false },
+        ) {
             Ok(texture) => *slot = Some(texture),
             Err(error) => log::warn!("text layer: {error}"),
         }
@@ -176,7 +188,11 @@ pub(crate) fn system_font(name: &str) -> Option<std::path::PathBuf> {
         "couriernew" => "Courier New",
         other => other,
     };
-    let output = std::process::Command::new("fc-match").args(["--format", "%{file}", family]).stdin(std::process::Stdio::null()).output().ok()?;
+    let output = std::process::Command::new("fc-match")
+        .args(["--format", "%{file}", family])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
     let path = std::path::PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
     path.is_file().then_some(path)
 }
@@ -191,8 +207,18 @@ mod tests {
     }
 
     fn bounds(width: u32, pixels: &[u8]) -> Option<(u32, u32, u32, u32)> {
-        let lit: Vec<(u32, u32)> = pixels.iter().enumerate().filter(|(_, c)| **c > 64).map(|(i, _)| (i as u32 % width, i as u32 / width)).collect();
-        Some((lit.iter().map(|p| p.0).min()?, lit.iter().map(|p| p.1).min()?, lit.iter().map(|p| p.0).max()?, lit.iter().map(|p| p.1).max()?))
+        let lit: Vec<(u32, u32)> = pixels
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| **c > 64)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .collect();
+        Some((
+            lit.iter().map(|p| p.0).min()?,
+            lit.iter().map(|p| p.1).min()?,
+            lit.iter().map(|p| p.0).max()?,
+            lit.iter().map(|p| p.1).max()?,
+        ))
     }
 
     #[test]
@@ -201,23 +227,39 @@ mod tests {
             eprintln!("skipped: no system font");
             return;
         };
-        let style = |horizontal, vertical| TextStyleSpec { point_size: 8.0, horizontal, vertical, padding: 0.0, max_width: 0.0 };
+        let style = |horizontal, vertical| TextStyleSpec {
+            point_size: 8.0,
+            horizontal,
+            vertical,
+            padding: 0.0,
+            max_width: 0.0,
+        };
         let (width, height, left_top) = rasterize(&font, "Hi", &style(-1, 1), [400.0, 200.0], 1.0);
         assert_eq!((width, height, left_top.len()), (400, 200, 400 * 200));
         let (x0, y0, x1, y1) = bounds(width, &left_top).expect("the text has pixels");
-        assert!(x0 < 20 && y0 < 40 && x1 < 200 && y1 < 100, "left/top text sits in the top left corner: {x0} {y0} {x1} {y1}");
+        assert!(
+            x0 < 20 && y0 < 40 && x1 < 200 && y1 < 100,
+            "left/top text sits in the top left corner: {x0} {y0} {x1} {y1}"
+        );
         let (.., right_bottom) = rasterize(&font, "Hi", &style(1, -1), [400.0, 200.0], 1.0);
         let (x0, y0, x1, y1) = bounds(width, &right_bottom).unwrap();
-        assert!(x0 > 200 && x1 > 380 && y0 > 100 && y1 > 160, "right/bottom text sits in the bottom right corner: {x0} {y0} {x1} {y1}");
+        assert!(
+            x0 > 200 && x1 > 380 && y0 > 100 && y1 > 160,
+            "right/bottom text sits in the bottom right corner: {x0} {y0} {x1} {y1}"
+        );
         let (.., centred) = rasterize(&font, "Hi", &style(0, 0), [400.0, 200.0], 1.0);
         let (x0, y0, x1, y1) = bounds(width, &centred).unwrap();
-        assert!(((x0 + x1) as i32 / 2 - 200).abs() < 12 && ((y0 + y1) as i32 / 2 - 100).abs() < 16, "centred text is centred: {x0} {y0} {x1} {y1}");
+        assert!(
+            ((x0 + x1) as i32 / 2 - 200).abs() < 12 && ((y0 + y1) as i32 / 2 - 100).abs() < 16,
+            "centred text is centred: {x0} {y0} {x1} {y1}"
+        );
     }
 
     #[test]
     fn density_scales_the_texture_and_empty_text_is_blank() {
         let Some(font) = font() else { return };
-        let style = TextStyleSpec { point_size: 8.0, horizontal: 0, vertical: 0, padding: 8.0, max_width: 0.0 };
+        let style =
+            TextStyleSpec { point_size: 8.0, horizontal: 0, vertical: 0, padding: 8.0, max_width: 0.0 };
         let (width, height, pixels) = rasterize(&font, "Hello world", &style, [300.0, 100.0], 0.5);
         assert_eq!((width, height), (150, 50), "half the density is half the pixels");
         assert!(pixels.iter().any(|c| *c > 64));
@@ -243,7 +285,10 @@ mod wrapping {
         assert_eq!(unwrapped.len(), 2, "without a width only the text's own breaks count");
         let wrapped = lines(&scaled, "one two three four five six", Some(unwrapped[0].width / 2.5));
         assert!(wrapped.len() >= 3, "a width breaks the line between words");
-        assert!(wrapped.iter().all(|line| line.width <= unwrapped[0].width / 2.5 + 1.0), "and no line is wider than it");
+        assert!(
+            wrapped.iter().all(|line| line.width <= unwrapped[0].width / 2.5 + 1.0),
+            "and no line is wider than it"
+        );
         let glyphs: usize = wrapped.iter().map(|line| line.glyphs.len()).sum();
         assert!(glyphs >= "onetwothreefourfivesix".len(), "no letter is lost at a break");
         let long_word = lines(&scaled, "incomprehensibilities", Some(10.0));

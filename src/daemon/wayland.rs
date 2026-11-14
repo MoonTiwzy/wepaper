@@ -6,10 +6,14 @@
 use std::ffi::c_void;
 
 use wayland_client::globals::{GlobalListContents, registry_queue_init};
-use wayland_client::protocol::{wl_callback, wl_compositor, wl_output, wl_pointer, wl_region, wl_registry, wl_seat, wl_surface};
+use wayland_client::protocol::{
+    wl_callback, wl_compositor, wl_output, wl_pointer, wl_region, wl_registry, wl_seat, wl_surface,
+};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, WEnum, delegate_noop};
 use wayland_egl::WlEglSurface;
-use wayland_protocols::wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, wp_fractional_scale_v1};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1, wp_fractional_scale_v1,
+};
 use wayland_protocols::wp::viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use wepaper_engine::gpu;
@@ -43,7 +47,8 @@ pub struct Sheet {
 impl Sheet {
     /// The size of its buffers in device pixels.
     pub fn pixels(&self) -> (u32, u32) {
-        let scaled = |logical: u32| ((u64::from(logical) * u64::from(self.scale_120) + 60) / 120).max(1) as u32;
+        let scaled =
+            |logical: u32| ((u64::from(logical) * u64::from(self.scale_120) + 60) / 120).max(1) as u32;
         (scaled(self.logical.0), scaled(self.logical.1))
     }
 
@@ -136,10 +141,12 @@ pub struct Display {
 impl Display {
     /// Connects to the compositor the environment names and binds what the daemon needs.
     pub fn connect() -> Result<(Connection, EventQueue<Display>, Display), String> {
-        let connection = Connection::connect_to_env().map_err(|e| format!("no Wayland compositor to connect to: {e}"))?;
+        let connection =
+            Connection::connect_to_env().map_err(|e| format!("no Wayland compositor to connect to: {e}"))?;
         let (globals, mut queue) = registry_queue_init::<Display>(&connection).map_err(|e| e.to_string())?;
         let handle = queue.handle();
-        let compositor = globals.bind(&handle, 4..=6, ()).map_err(|_| "the compositor has no wl_compositor version 4")?;
+        let compositor =
+            globals.bind(&handle, 4..=6, ()).map_err(|_| "the compositor has no wl_compositor version 4")?;
         let layer_shell = globals
             .bind(&handle, 1..=4, ())
             .map_err(|_| "the compositor has no wlr-layer-shell: wepaper needs it to be the desktop background (GNOME does not have it)")?;
@@ -169,11 +176,22 @@ impl Display {
 
     fn add_output(&mut self, registry: &wl_registry::WlRegistry, id: u32, version: u32) {
         if version < 4 {
-            log::warn!("an output without a name (wl_output version {version}) is ignored: the compositor is too old");
+            log::warn!(
+                "an output without a name (wl_output version {version}) is ignored: the compositor is too old"
+            );
             return;
         }
         let output = registry.bind(id, 4, &self.queue, id);
-        self.heads.push(Head { id, output, name: None, announced: false, integer_scale: 1, sheet: None, pointer: [0.5, 0.5], removed: false });
+        self.heads.push(Head {
+            id,
+            output,
+            name: None,
+            announced: false,
+            integer_scale: 1,
+            sheet: None,
+            pointer: [0.5, 0.5],
+            removed: false,
+        });
     }
 
     fn head(&mut self, id: u32) -> Option<&mut Head> {
@@ -189,7 +207,14 @@ impl Display {
             Layer::Bottom => zwlr_layer_shell_v1::Layer::Bottom,
         };
         let head = &self.heads[index];
-        let layer = self.layer_shell.get_layer_surface(&surface, Some(&head.output), on, NAMESPACE.to_owned(), &self.queue, id);
+        let layer = self.layer_shell.get_layer_surface(
+            &surface,
+            Some(&head.output),
+            on,
+            NAMESPACE.to_owned(),
+            &self.queue,
+            id,
+        );
         layer.set_anchor(zwlr_layer_surface_v1::Anchor::all());
         layer.set_exclusive_zone(-1);
         layer.set_size(0, 0);
@@ -200,12 +225,25 @@ impl Display {
             surface.set_input_region(Some(&region));
             region.destroy();
         }
-        let viewport = self.viewporter.as_ref().map(|viewporter| viewporter.get_viewport(&surface, &self.queue, ()));
-        let fractional = self.fractional.as_ref().map(|manager| manager.get_fractional_scale(&surface, &self.queue, id));
+        let viewport =
+            self.viewporter.as_ref().map(|viewporter| viewporter.get_viewport(&surface, &self.queue, ()));
+        let fractional =
+            self.fractional.as_ref().map(|manager| manager.get_fractional_scale(&surface, &self.queue, id));
         surface.commit();
         let scale_120 = (head.integer_scale.max(1) as u32) * 120;
-        self.heads[index].sheet =
-            Some(Sheet { surface, layer, viewport, fractional, logical: (0, 0), scale_120, resized: false, frame_pending: false, closed: false, egl: None, window: None });
+        self.heads[index].sheet = Some(Sheet {
+            surface,
+            layer,
+            viewport,
+            fractional,
+            logical: (0, 0),
+            scale_120,
+            resized: false,
+            frame_pending: false,
+            closed: false,
+            egl: None,
+            window: None,
+        });
     }
 
     /// Asks the compositor to say when the surface on output `id` wants its next frame.
@@ -219,9 +257,18 @@ impl Display {
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Display {
-    fn event(state: &mut Self, registry: &wl_registry::WlRegistry, event: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        registry: &wl_registry::WlRegistry,
+        event: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         match event {
-            wl_registry::Event::Global { name, interface, version } if interface == "wl_output" => state.add_output(registry, name, version),
+            wl_registry::Event::Global { name, interface, version } if interface == "wl_output" => {
+                state.add_output(registry, name, version)
+            }
             wl_registry::Event::GlobalRemove { name } => {
                 if let Some(head) = state.head(name) {
                     head.removed = true;
@@ -233,7 +280,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for Display {
 }
 
 impl Dispatch<wl_output::WlOutput, u32> for Display {
-    fn event(state: &mut Self, _: &wl_output::WlOutput, event: wl_output::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wl_output::WlOutput,
+        event: wl_output::Event,
+        id: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let Some(head) = state.head(*id) else { return };
         match event {
             wl_output::Event::Name { name } => head.name = Some(name),
@@ -252,7 +306,14 @@ impl Dispatch<wl_output::WlOutput, u32> for Display {
 }
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Display {
-    fn event(state: &mut Self, layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        id: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let Some(sheet) = state.head(*id).and_then(|head| head.sheet.as_mut()) else { return };
         match event {
             zwlr_layer_surface_v1::Event::Configure { serial, width, height } => {
@@ -269,7 +330,14 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, u32> for Display {
 }
 
 impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, u32> for Display {
-    fn event(state: &mut Self, _: &wp_fractional_scale_v1::WpFractionalScaleV1, event: wp_fractional_scale_v1::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wp_fractional_scale_v1::WpFractionalScaleV1,
+        event: wp_fractional_scale_v1::Event,
+        id: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event
             && let Some(sheet) = state.head(*id).and_then(|head| head.sheet.as_mut())
             && sheet.scale_120 != scale
@@ -281,7 +349,14 @@ impl Dispatch<wp_fractional_scale_v1::WpFractionalScaleV1, u32> for Display {
 }
 
 impl Dispatch<wl_callback::WlCallback, u32> for Display {
-    fn event(state: &mut Self, _: &wl_callback::WlCallback, event: wl_callback::Event, id: &u32, _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        id: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if let wl_callback::Event::Done { .. } = event
             && let Some(sheet) = state.head(*id).and_then(|head| head.sheet.as_mut())
         {
@@ -291,7 +366,14 @@ impl Dispatch<wl_callback::WlCallback, u32> for Display {
 }
 
 impl Dispatch<wl_seat::WlSeat, ()> for Display {
-    fn event(state: &mut Self, seat: &wl_seat::WlSeat, event: wl_seat::Event, _: &(), _: &Connection, queue: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        seat: &wl_seat::WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        queue: &QueueHandle<Self>,
+    ) {
         if let wl_seat::Event::Capabilities { capabilities: WEnum::Value(capabilities) } = event {
             let has_pointer = capabilities.contains(wl_seat::Capability::Pointer);
             if has_pointer && state.pointer.is_none() {
@@ -304,7 +386,14 @@ impl Dispatch<wl_seat::WlSeat, ()> for Display {
 }
 
 impl Dispatch<wl_pointer::WlPointer, ()> for Display {
-    fn event(state: &mut Self, _: &wl_pointer::WlPointer, event: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        _: &wl_pointer::WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         let place = |state: &mut Self, x: f64, y: f64| {
             let Some(id) = state.pointer_on else { return };
             if let Some(head) = state.head(id)
@@ -312,12 +401,17 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Display {
                 && sheet.logical.0 > 0
                 && sheet.logical.1 > 0
             {
-                head.pointer = [(x / f64::from(sheet.logical.0)) as f32, (y / f64::from(sheet.logical.1)) as f32];
+                head.pointer =
+                    [(x / f64::from(sheet.logical.0)) as f32, (y / f64::from(sheet.logical.1)) as f32];
             }
         };
         match event {
             wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
-                state.pointer_on = state.heads.iter().find(|head| head.sheet.as_ref().is_some_and(|sheet| sheet.surface == surface)).map(|head| head.id);
+                state.pointer_on = state
+                    .heads
+                    .iter()
+                    .find(|head| head.sheet.as_ref().is_some_and(|sheet| sheet.surface == surface))
+                    .map(|head| head.id);
                 place(state, surface_x, surface_y);
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => place(state, surface_x, surface_y),

@@ -89,22 +89,46 @@ impl Context {
             .ok_or_else(|| GpuError("no matching EGL config".to_owned()))?;
         // A compatibility context draws exactly like a core one and, on drivers that
         // have it, also compiles shaders leniently. Core is the fallback.
-        let attributes = |profile: egl::Int| [egl::CONTEXT_MAJOR_VERSION, 3, egl::CONTEXT_MINOR_VERSION, 3, egl::CONTEXT_OPENGL_PROFILE_MASK, profile, egl::NONE];
-        let (context, compatibility) = match egl.create_context(display, config, None, &attributes(egl::CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT)) {
+        let attributes = |profile: egl::Int| {
+            [
+                egl::CONTEXT_MAJOR_VERSION,
+                3,
+                egl::CONTEXT_MINOR_VERSION,
+                3,
+                egl::CONTEXT_OPENGL_PROFILE_MASK,
+                profile,
+                egl::NONE,
+            ]
+        };
+        let (context, compatibility) = match egl.create_context(
+            display,
+            config,
+            None,
+            &attributes(egl::CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT),
+        ) {
             Ok(context) => (context, true),
             Err(_) => {
-                let context = egl.create_context(display, config, None, &attributes(egl::CONTEXT_OPENGL_CORE_PROFILE_BIT)).map_err(|e| fail("eglCreateContext", e))?;
+                let context = egl
+                    .create_context(display, config, None, &attributes(egl::CONTEXT_OPENGL_CORE_PROFILE_BIT))
+                    .map_err(|e| fail("eglCreateContext", e))?;
                 (context, false)
             }
         };
-        egl.make_current(display, None, None, Some(context)).map_err(|e| fail("eglMakeCurrent without a surface", e))?;
+        egl.make_current(display, None, None, Some(context))
+            .map_err(|e| fail("eglMakeCurrent without a surface", e))?;
         let lookup = {
             let egl = egl.clone();
-            move |symbol: &str| egl.get_proc_address(symbol).map_or(std::ptr::null(), |address| address as *const c_void)
+            move |symbol: &str| {
+                egl.get_proc_address(symbol).map_or(std::ptr::null(), |address| address as *const c_void)
+            }
         };
         // SAFETY: the context made current above is the one these functions belong to.
         let raw = unsafe { glow::Context::from_loader_function(&lookup) };
-        let gl = Gl::new(raw, compatibility, Box::new(move |name| name.to_str().map_or(std::ptr::null(), &lookup)));
+        let gl = Gl::new(
+            raw,
+            compatibility,
+            Box::new(move |name| name.to_str().map_or(std::ptr::null(), &lookup)),
+        );
         let description = format!("{} ({}, {name})", gl.caps().renderer, gl.caps().version);
         Ok(Self { egl, display, config, context, gl, description })
     }
@@ -120,15 +144,24 @@ impl Context {
     /// `wl_egl_window` must be a live `wl_egl_window*` that outlives the surface.
     pub unsafe fn window_surface(&self, wl_egl_window: *mut c_void) -> Result<Surface, GpuError> {
         // SAFETY: the caller vouches for the window.
-        let surface = unsafe { self.egl.create_platform_window_surface(self.display, self.config, wl_egl_window, &[egl::ATTRIB_NONE]) }
-            .map_err(|e| fail("eglCreatePlatformWindowSurface", e))?;
+        let surface = unsafe {
+            self.egl.create_platform_window_surface(
+                self.display,
+                self.config,
+                wl_egl_window,
+                &[egl::ATTRIB_NONE],
+            )
+        }
+        .map_err(|e| fail("eglCreatePlatformWindowSurface", e))?;
         Ok(Surface { egl: self.egl.clone(), display: self.display, surface })
     }
 
     /// Directs drawing at `surface`, or at nothing but framebuffer objects.
     pub fn make_current(&self, surface: Option<&Surface>) -> Result<(), GpuError> {
         let surface = surface.map(|s| s.surface);
-        self.egl.make_current(self.display, surface, surface, Some(self.context)).map_err(|e| fail("eglMakeCurrent", e))?;
+        self.egl
+            .make_current(self.display, surface, surface, Some(self.context))
+            .map_err(|e| fail("eglMakeCurrent", e))?;
         self.gl.surface_changed();
         if surface.is_some() {
             // A context first made current without a surface draws its default
@@ -167,10 +200,17 @@ fn headless_displays(egl: &Egl, wanted: Option<&str>) -> Vec<(egl::Display, Stri
     type QueryDevices = unsafe extern "system" fn(egl::Int, *mut *mut c_void, *mut egl::Int) -> egl::Boolean;
     type QueryDeviceString = unsafe extern "system" fn(*mut c_void, egl::Int) -> *const std::ffi::c_char;
     let mut displays = Vec::new();
-    if let (Some(query), Some(describe)) = (egl.get_proc_address("eglQueryDevicesEXT"), egl.get_proc_address("eglQueryDeviceStringEXT")) {
+    if let (Some(query), Some(describe)) =
+        (egl.get_proc_address("eglQueryDevicesEXT"), egl.get_proc_address("eglQueryDeviceStringEXT"))
+    {
         // SAFETY: these are the documented signatures of EGL_EXT_device_enumeration
         // and EGL_EXT_device_query, which the driver said it has by returning them.
-        let (query, describe): (QueryDevices, QueryDeviceString) = unsafe { (std::mem::transmute(query), std::mem::transmute(describe)) };
+        let (query, describe) = unsafe {
+            (
+                std::mem::transmute::<extern "system" fn(), QueryDevices>(query),
+                std::mem::transmute::<extern "system" fn(), QueryDeviceString>(describe),
+            )
+        };
         let mut devices = [std::ptr::null_mut(); 16];
         let mut count = 0;
         // SAFETY: `devices` has room for the 16 entries asked for.
@@ -179,13 +219,19 @@ fn headless_displays(egl: &Egl, wanted: Option<&str>) -> Vec<(egl::Display, Stri
                 // SAFETY: `device` came from the query above; the string is the driver's and outlives the call.
                 let file = unsafe {
                     let text = describe(device, DRM_DEVICE_FILE);
-                    if text.is_null() { String::new() } else { std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned() }
+                    if text.is_null() {
+                        String::new()
+                    } else {
+                        std::ffi::CStr::from_ptr(text).to_string_lossy().into_owned()
+                    }
                 };
                 if wanted.is_some_and(|w| !same_gpu(w, &file)) {
                     continue;
                 }
                 // SAFETY: a device handle is the native display of the device platform.
-                if let Ok(display) = unsafe { egl.get_platform_display(PLATFORM_DEVICE, device, &[egl::ATTRIB_NONE]) } {
+                if let Ok(display) =
+                    unsafe { egl.get_platform_display(PLATFORM_DEVICE, device, &[egl::ATTRIB_NONE]) }
+                {
                     displays.push((display, if file.is_empty() { "device".to_owned() } else { file }));
                 }
             }
@@ -193,7 +239,9 @@ fn headless_displays(egl: &Egl, wanted: Option<&str>) -> Vec<(egl::Display, Stri
     }
     if wanted.is_none() {
         // SAFETY: the surfaceless platform takes no native display.
-        if let Ok(display) = unsafe { egl.get_platform_display(PLATFORM_SURFACELESS, std::ptr::null_mut(), &[egl::ATTRIB_NONE]) } {
+        if let Ok(display) = unsafe {
+            egl.get_platform_display(PLATFORM_SURFACELESS, std::ptr::null_mut(), &[egl::ATTRIB_NONE])
+        } {
             displays.push((display, "surfaceless".to_owned()));
         }
     }

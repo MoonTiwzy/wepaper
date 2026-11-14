@@ -144,7 +144,14 @@ impl Bindings {
                 _ => value.value.as_floats(),
             };
             let running = !animation.start_paused;
-            self.animations.push(Playing { animation: animation.clone(), slot, base, played: 0.0, running, stale: true });
+            self.animations.push(Playing {
+                animation: animation.clone(),
+                slot,
+                base,
+                played: 0.0,
+                running,
+                stale: true,
+            });
         }
     }
 
@@ -182,9 +189,13 @@ impl Bindings {
             .filter(|binding| binding.link.name == property)
             .filter_map(|binding| {
                 Some(match binding.slot {
-                    slot if slot.is_flag() => Change::Flag(slot, holds(value, binding.link.condition.as_deref())),
+                    slot if slot.is_flag() => {
+                        Change::Flag(slot, holds(value, binding.link.condition.as_deref()))
+                    }
                     Slot::LayerText(_) => Change::Text(binding.slot, String::from_doc(value)?),
-                    Slot::Value(index) => Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len())),
+                    Slot::Value(index) => {
+                        Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len()))
+                    }
                     Slot::LayerAlpha(_) => Change::Floats(binding.slot, value_floats(value, 1)),
                     _ => Change::Floats(binding.slot, value_floats(value, 3)),
                 })
@@ -203,7 +214,9 @@ pub(crate) fn holds(value: &Value, condition: Option<&str>) -> bool {
                 Value::Bool(b) => u8::from(*b).to_string(),
                 other => other.to_json(),
             };
-            text == condition || (matches!(value, Value::Bool(true)) && condition == "true") || (matches!(value, Value::Bool(false)) && condition == "false")
+            text == condition
+                || (matches!(value, Value::Bool(true)) && condition == "true")
+                || (matches!(value, Value::Bool(false)) && condition == "false")
         }
         None => bool::from_doc(value).unwrap_or(false),
     }
@@ -214,7 +227,12 @@ mod tests {
     use super::*;
 
     fn link(name: &str, condition: Option<&str>) -> Dyn<bool> {
-        Dyn { value: true, user: Some(UserLink { name: name.to_owned(), condition: condition.map(str::to_owned) }), script: None, animation: None }
+        Dyn {
+            value: true,
+            user: Some(UserLink { name: name.to_owned(), condition: condition.map(str::to_owned) }),
+            script: None,
+            animation: None,
+        }
     }
 
     #[test]
@@ -225,7 +243,13 @@ mod tests {
         bindings.link(&link("tint", None), Slot::LayerColor(4));
         bindings.link(&link("other", None), Slot::LayerAlpha(1));
         let changes = bindings.changes("tint", &Value::from("1 0.5 0"));
-        assert_eq!(changes, [Change::Floats(Slot::Value(slot), vec![1.0, 0.5, 0.0]), Change::Floats(Slot::LayerColor(4), vec![1.0, 0.5, 0.0])]);
+        assert_eq!(
+            changes,
+            [
+                Change::Floats(Slot::Value(slot), vec![1.0, 0.5, 0.0]),
+                Change::Floats(Slot::LayerColor(4), vec![1.0, 0.5, 0.0])
+            ]
+        );
         assert!(bindings.changes("unknown", &Value::from(1)).is_empty());
     }
 
@@ -275,9 +299,15 @@ mod tests {
         let mut bindings = Bindings::default();
         bindings.link(&link("mode", Some("2")), Slot::LayerVisible(0));
         bindings.link(&link("mode", None), Slot::EffectVisible(1, 0));
-        assert_eq!(bindings.changes("mode", &Value::from(2)), [Change::Flag(Slot::LayerVisible(0), true), Change::Flag(Slot::EffectVisible(1, 0), true)]);
+        assert_eq!(
+            bindings.changes("mode", &Value::from(2)),
+            [Change::Flag(Slot::LayerVisible(0), true), Change::Flag(Slot::EffectVisible(1, 0), true)]
+        );
         assert_eq!(bindings.changes("mode", &Value::from(1))[0], Change::Flag(Slot::LayerVisible(0), false));
-        assert_eq!(bindings.changes("mode", &Value::from(0))[1], Change::Flag(Slot::EffectVisible(1, 0), false));
+        assert_eq!(
+            bindings.changes("mode", &Value::from(0))[1],
+            Change::Flag(Slot::EffectVisible(1, 0), false)
+        );
         assert!(holds(&Value::from("b"), Some("b")) && !holds(&Value::from("a"), Some("b")));
         assert!(holds(&Value::from(true), Some("1")) && holds(&Value::from(false), Some("0")));
     }

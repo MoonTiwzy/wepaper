@@ -36,7 +36,6 @@ pub mod glsl;
 pub mod gpu;
 pub mod locate;
 pub mod math;
-#[cfg(not(lead_build))]
 pub mod particles;
 pub mod post;
 pub mod read;
@@ -123,7 +122,7 @@ pub enum Wallpaper {
     /// A scene.
     Scene(Box<SceneInstance>),
     /// A video.
-    Video(VideoInstance),
+    Video(Box<VideoInstance>),
 }
 
 impl Wallpaper {
@@ -139,7 +138,14 @@ impl Wallpaper {
     ///
     /// Returns whether anything was drawn: a video draws only when it has a new
     /// frame, unless `force` says the destination's contents are gone.
-    pub fn draw(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32), force: bool) -> bool {
+    pub fn draw(
+        &mut self,
+        engine: &mut Engine,
+        input: &FrameInput,
+        to: Option<glow::Framebuffer>,
+        size: (u32, u32),
+        force: bool,
+    ) -> bool {
         match self {
             Wallpaper::Scene(scene) => {
                 scene.render(engine, input, to, size);
@@ -281,9 +287,12 @@ impl Engine {
 
     /// Opens a wallpaper folder: its project and its files stacked on the stock assets.
     pub fn open(&self, wallpaper: &Path) -> Result<(Files, Project), LoadError> {
-        let dir = locate::wallpaper(&wallpaper.to_string_lossy()).ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
-        let text = std::fs::read(dir.join("project.json")).map_err(|e| LoadError(format!("{}: {e}", dir.join("project.json").display())))?;
-        let document = wepaper_json::parse(&String::from_utf8_lossy(&text)).map_err(|e| LoadError(format!("project.json: {e}")))?;
+        let dir = locate::wallpaper(&wallpaper.to_string_lossy())
+            .ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
+        let text = std::fs::read(dir.join("project.json"))
+            .map_err(|e| LoadError(format!("{}: {e}", dir.join("project.json").display())))?;
+        let document = wepaper_json::parse(&String::from_utf8_lossy(&text))
+            .map_err(|e| LoadError(format!("project.json: {e}")))?;
         let project = Project::parse(&document);
         let mut files = Files::new();
         match &self.assets {
@@ -296,16 +305,27 @@ impl Engine {
         files.mount_dir(dir.clone());
         let package = dir.join("scene.pkg");
         if package.is_file() {
-            files.mount_archive(Archive::open(&package).map_err(|e| LoadError(format!("{}: {e}", package.display())))?);
+            files.mount_archive(
+                Archive::open(&package).map_err(|e| LoadError(format!("{}: {e}", package.display())))?,
+            );
         }
         Ok((files, project))
     }
 
     /// Loads a scene wallpaper for an output of `viewport`, with the user's property `values`.
-    pub fn load_scene(&mut self, wallpaper: &Path, viewport: Viewport, values: &[(String, Value)]) -> Result<SceneInstance, LoadError> {
+    pub fn load_scene(
+        &mut self,
+        wallpaper: &Path,
+        viewport: Viewport,
+        values: &[(String, Value)],
+    ) -> Result<SceneInstance, LoadError> {
         let (files, project) = self.open(wallpaper)?;
         if project.kind != Kind::Scene {
-            return Err(LoadError(format!("{} is a {} wallpaper, not a scene", wallpaper.display(), project.kind.name())));
+            return Err(LoadError(format!(
+                "{} is a {} wallpaper, not a scene",
+                wallpaper.display(),
+                project.kind.name()
+            )));
         }
         let scene = SceneInstance::build(self, &files, project, viewport, values)?;
         self.share.sweep();
@@ -315,16 +335,26 @@ impl Engine {
     /// Loads a wallpaper of any kind the engine draws: a scene or a video. A preset
     /// (property values for another wallpaper) plays that wallpaper with its values
     /// under the user's.
-    pub fn load(&mut self, wallpaper: &Path, viewport: Viewport, values: &[(String, Value)]) -> Result<Wallpaper, LoadError> {
+    pub fn load(
+        &mut self,
+        wallpaper: &Path,
+        viewport: Viewport,
+        values: &[(String, Value)],
+    ) -> Result<Wallpaper, LoadError> {
         let (files, project) = self.open(wallpaper)?;
         match project.kind {
             Kind::Preset => {
-                let dependency = project.dependency.as_deref().ok_or_else(|| LoadError("the preset does not say which wallpaper it is for".to_owned()))?;
-                let target = locate::wallpaper(dependency).ok_or_else(|| LoadError(format!("the preset is for wallpaper {dependency}, which is not installed")))?;
+                let dependency = project.dependency.as_deref().ok_or_else(|| {
+                    LoadError("the preset does not say which wallpaper it is for".to_owned())
+                })?;
+                let target = locate::wallpaper(dependency).ok_or_else(|| {
+                    LoadError(format!("the preset is for wallpaper {dependency}, which is not installed"))
+                })?;
                 if self.open(&target)?.1.kind == Kind::Preset {
                     return Err(LoadError("a preset of a preset".to_owned()));
                 }
-                let mut merged: Vec<(String, Value)> = project.preset.members().map(|(name, value)| (name.to_owned(), value.clone())).collect();
+                let mut merged: Vec<(String, Value)> =
+                    project.preset.members().map(|(name, value)| (name.to_owned(), value.clone())).collect();
                 merged.extend(values.iter().cloned());
                 self.load(&target, viewport, &merged)
             }
@@ -334,9 +364,11 @@ impl Engine {
                 Ok(Wallpaper::Scene(Box::new(scene)))
             }
             Kind::Video => {
-                let dir = locate::wallpaper(&wallpaper.to_string_lossy()).ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
-                let stream = self.share.videos.open(&dir.join(&project.file)).map_err(|e| LoadError(e.to_string()))?;
-                Ok(Wallpaper::Video(VideoInstance::new(project, stream)))
+                let dir = locate::wallpaper(&wallpaper.to_string_lossy())
+                    .ok_or_else(|| LoadError(format!("no such wallpaper: {}", wallpaper.display())))?;
+                let stream =
+                    self.share.videos.open(&dir.join(&project.file)).map_err(|e| LoadError(e.to_string()))?;
+                Ok(Wallpaper::Video(Box::new(VideoInstance::new(project, stream))))
             }
             other => Err(LoadError(format!("{} wallpapers are not drawn by the engine", other.name()))),
         }

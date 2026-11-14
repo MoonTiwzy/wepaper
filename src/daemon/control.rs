@@ -98,10 +98,22 @@ impl Daemon {
             match manifest.kind {
                 Kind::Service => node.insert("running", Value::from(self.plugins.running(&manifest.id))),
                 Kind::Shader => {
-                    let params = self.shaders.iter().find(|(id, _)| *id == manifest.id).map(|(_, pass)| pass.params.clone()).unwrap_or_default();
-                    node.insert("params", Value::Object(params.into_iter().map(|(name, value)| (name, Value::from(value))).collect()));
+                    let params = self
+                        .shaders
+                        .iter()
+                        .find(|(id, _)| *id == manifest.id)
+                        .map(|(_, pass)| pass.params.clone())
+                        .unwrap_or_default();
+                    node.insert(
+                        "params",
+                        Value::Object(
+                            params.into_iter().map(|(name, value)| (name, Value::from(value))).collect(),
+                        ),
+                    );
                 }
-                Kind::Renderer => node.insert("handles", Value::Array(manifest.handles.iter().map(Value::from).collect())),
+                Kind::Renderer => {
+                    node.insert("handles", Value::Array(manifest.handles.iter().map(Value::from).collect()))
+                }
                 Kind::Hook => {}
             }
             plugins.insert(manifest.id.clone(), Value::Object(node));
@@ -124,9 +136,17 @@ impl Daemon {
 
     /// The ids of the outputs a name stands for: one output, or all for `None` and `*`.
     fn targets(&self, output: Option<&str>) -> Result<Vec<u32>, String> {
-        let known = || self.display.heads.iter().filter_map(|head| head.name.as_deref()).collect::<Vec<_>>().join(", ");
+        let known = || {
+            self.display.heads.iter().filter_map(|head| head.name.as_deref()).collect::<Vec<_>>().join(", ")
+        };
         match output.filter(|name| *name != "*") {
-            None => Ok(self.display.heads.iter().filter(|head| head.name.is_some() && self.slots.contains_key(&head.id)).map(|head| head.id).collect()),
+            None => Ok(self
+                .display
+                .heads
+                .iter()
+                .filter(|head| head.name.is_some() && self.slots.contains_key(&head.id))
+                .map(|head| head.id)
+                .collect()),
             Some(name) => match self.display.heads.iter().find(|head| head.name.as_deref() == Some(name)) {
                 Some(head) => Ok(vec![head.id]),
                 None => Err(format!("there is no output \"{name}\" (outputs: {})", known())),
@@ -145,20 +165,28 @@ impl Daemon {
             }),
             Request::Get { path } => {
                 let tree = self.tree();
-                descend(&tree, &split_path(&path)).cloned().ok_or_else(|| format!("there is nothing at \"{path}\""))
+                descend(&tree, &split_path(&path))
+                    .cloned()
+                    .ok_or_else(|| format!("there is nothing at \"{path}\""))
             }
             Request::List { path } => {
                 let tree = self.tree();
                 match descend(&tree, &split_path(&path)) {
-                    Some(Value::Object(map)) => Ok(Value::Array(map.iter().map(|(key, _)| Value::from(key)).collect())),
-                    Some(Value::Array(items)) => Ok(Value::Array((0..items.len()).map(Value::from).collect())),
+                    Some(Value::Object(map)) => {
+                        Ok(Value::Array(map.iter().map(|(key, _)| Value::from(key)).collect()))
+                    }
+                    Some(Value::Array(items)) => {
+                        Ok(Value::Array((0..items.len()).map(Value::from).collect()))
+                    }
                     Some(_) => Err(format!("\"{path}\" is a value, not a list")),
                     None => Err(format!("there is nothing at \"{path}\"")),
                 }
             }
             Request::Set { path, value } => self.set(&split_path(&path), &value).map(|()| Value::Null),
             Request::Reset { path } => self.reset(&split_path(&path)).map(|()| Value::Null),
-            Request::Show { wallpaper, output, properties } => self.show(&wallpaper, output.as_deref(), properties).map(|()| Value::Null),
+            Request::Show { wallpaper, output, properties } => {
+                self.show(&wallpaper, output.as_deref(), properties).map(|()| Value::Null)
+            }
             Request::Hide { output } => self.targets(output.as_deref()).map(|ids| {
                 for id in ids {
                     if let Some(slot) = self.slots.get_mut(&id) {
@@ -176,7 +204,9 @@ impl Daemon {
             }),
             Request::Pause { output } => self.pause(output.as_deref(), true),
             Request::Resume { output } => self.pause(output.as_deref(), false),
-            Request::Snapshot { output, file } => self.snapshot(output.as_deref(), Path::new(&file)).map(|()| Value::Null),
+            Request::Snapshot { output, file } => {
+                self.snapshot(output.as_deref(), Path::new(&file)).map(|()| Value::Null)
+            }
             Request::Watch => {
                 self.server.watch(client);
                 Ok(Value::Null)
@@ -209,8 +239,18 @@ impl Daemon {
                     renderer.send(&obj! { "cmd" => if paused { "pause" } else { "resume" } });
                 }
             }
-            let output = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.name.clone()).unwrap_or_default();
-            self.plugins.announce(&Happening { event: if paused { "paused" } else { "resumed" }, output, ..Happening::default() });
+            let output = self
+                .display
+                .heads
+                .iter()
+                .find(|head| head.id == id)
+                .and_then(|head| head.name.clone())
+                .unwrap_or_default();
+            self.plugins.announce(&Happening {
+                event: if paused { "paused" } else { "resumed" },
+                output,
+                ..Happening::default()
+            });
         }
         if paused {
             // A frozen output needs no effect buffers until it plays again.
@@ -220,8 +260,14 @@ impl Daemon {
         Ok(Value::Null)
     }
 
-    fn show(&mut self, wallpaper: &str, output: Option<&str>, properties: Option<Vec<(String, Value)>>) -> Result<(), String> {
-        let folder = wepaper_engine::locate::wallpaper(wallpaper).ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
+    fn show(
+        &mut self,
+        wallpaper: &str,
+        output: Option<&str>,
+        properties: Option<Vec<(String, Value)>>,
+    ) -> Result<(), String> {
+        let folder = wepaper_engine::locate::wallpaper(wallpaper)
+            .ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
         let ids = self.targets(output)?;
         if ids.is_empty() {
             return Err("there are no outputs to show it on".to_owned());
@@ -230,7 +276,8 @@ impl Daemon {
         let remembered = Remembered::load(&self.memory_dir, &folder);
         let named = properties.is_some();
         let properties = properties.map_or(remembered.properties, |named| named.into_iter().collect());
-        let shown = Shown { wallpaper: Some(folder.clone()), properties, edits: remembered.edits, fill: None };
+        let shown =
+            Shown { wallpaper: Some(folder.clone()), properties, edits: remembered.edits, fill: None };
         for id in ids {
             self.load(id, &shown)?;
             if let Some(slot) = self.slots.get_mut(&id) {
@@ -251,7 +298,8 @@ impl Daemon {
     /// Keeps a wallpaper's values for the next time it is shown.
     fn remember(&self, shown: &Shown) {
         if let Some(folder) = &shown.wallpaper {
-            Remembered { properties: shown.properties.clone(), edits: shown.edits.clone() }.save(&self.memory_dir, folder);
+            Remembered { properties: shown.properties.clone(), edits: shown.edits.clone() }
+                .save(&self.memory_dir, folder);
         }
     }
 
@@ -259,7 +307,11 @@ impl Daemon {
     /// fresh wallpaper has back.
     fn reload_outputs(&mut self, name: &str) -> Result<(), String> {
         for id in self.targets(Some(name))? {
-            let Some(shown) = self.slots.get(&id).map(|slot| slot.shown.clone()).filter(|shown| shown.wallpaper.is_some()) else { continue };
+            let Some(shown) =
+                self.slots.get(&id).map(|slot| slot.shown.clone()).filter(|shown| shown.wallpaper.is_some())
+            else {
+                continue;
+            };
             self.load(id, &shown)?;
             self.remember(&shown);
         }
@@ -282,7 +334,12 @@ impl Daemon {
             ["outputs", name, "fill"] => {
                 let fill = match value {
                     Value::Null => None,
-                    other => Some(other.as_str().and_then(Fill::from_name).ok_or("fill takes cover, contain or stretch (or null for the setting)")?),
+                    other => Some(
+                        other
+                            .as_str()
+                            .and_then(Fill::from_name)
+                            .ok_or("fill takes cover, contain or stretch (or null for the setting)")?,
+                    ),
                 };
                 for id in self.targets(Some(name))? {
                     if let Some(slot) = self.slots.get_mut(&id) {
@@ -298,7 +355,12 @@ impl Daemon {
             }
             ["plugins", id, "enabled"] => {
                 let enabled = bool::from_doc(value).ok_or("enabled takes true or false")?;
-                let manifest = self.plugins.manifests.iter_mut().find(|m| m.id == *id).ok_or_else(|| format!("there is no plugin \"{id}\""))?;
+                let manifest = self
+                    .plugins
+                    .manifests
+                    .iter_mut()
+                    .find(|m| m.id == *id)
+                    .ok_or_else(|| format!("there is no plugin \"{id}\""))?;
                 manifest.enabled = enabled;
                 if let Some((_, pass)) = self.shaders.iter_mut().find(|(shader, _)| shader == id) {
                     pass.enabled = enabled;
@@ -308,14 +370,23 @@ impl Daemon {
             }
             ["plugins", id, "params", param] => {
                 let number = f32::from_doc(value).ok_or("a parameter takes a number")?;
-                let (_, pass) = self.shaders.iter_mut().find(|(shader, _)| shader == id).ok_or_else(|| format!("there is no shader plugin \"{id}\""))?;
+                let (_, pass) = self
+                    .shaders
+                    .iter_mut()
+                    .find(|(shader, _)| shader == id)
+                    .ok_or_else(|| format!("there is no shader plugin \"{id}\""))?;
                 if !pass.set(param, number) {
                     return Err(format!("the shader of \"{id}\" has no parameter \"{param}\""));
                 }
                 self.redraw_all();
                 Ok(())
             }
-            ["outputs", name, "wallpaper", "properties", property] if self.targets(Some(name))?.iter().any(|id| self.slots.get(id).is_some_and(|slot| slot.renderer.is_some())) => {
+            ["outputs", name, "wallpaper", "properties", property]
+                if self
+                    .targets(Some(name))?
+                    .iter()
+                    .any(|id| self.slots.get(id).is_some_and(|slot| slot.renderer.is_some())) =>
+            {
                 let mut remembered = Vec::new();
                 for id in self.targets(Some(name))? {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
@@ -344,7 +415,9 @@ impl Daemon {
                     slot.stale = true;
                     changed = true;
                     match rest {
-                        ["properties", property] => slot.shown.properties.insert((*property).to_owned(), value.clone()),
+                        ["properties", property] => {
+                            slot.shown.properties.insert((*property).to_owned(), value.clone())
+                        }
                         _ => slot.shown.edits.insert(rest.join("/"), value.clone()),
                     };
                     remembered.push(slot.shown.clone());
@@ -377,8 +450,16 @@ impl Daemon {
                 for id in self.targets(Some(name))? {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     let Some(wallpaper) = &mut slot.wallpaper else { continue };
-                    let defaults: Vec<(String, Value)> = wallpaper.project().properties.iter().map(|p| (p.name.clone(), p.default.clone())).collect();
-                    for (property, default) in defaults.iter().filter(|(property, _)| rest.first().is_none_or(|only| only == property)) {
+                    let defaults: Vec<(String, Value)> = wallpaper
+                        .project()
+                        .properties
+                        .iter()
+                        .map(|p| (p.name.clone(), p.default.clone()))
+                        .collect();
+                    for (property, default) in defaults
+                        .iter()
+                        .filter(|(property, _)| rest.first().is_none_or(|only| only == property))
+                    {
                         if !default.is_null() {
                             wallpaper.set_property(property, default);
                         }
@@ -399,7 +480,9 @@ impl Daemon {
                     if rest.is_empty() {
                         slot.shown.properties.clear();
                     }
-                    slot.shown.edits.retain(|path, _| !(under.is_empty() || path == &under || path.starts_with(&format!("{under}/"))));
+                    slot.shown.edits.retain(|path, _| {
+                        !(under.is_empty() || path == &under || path.starts_with(&format!("{under}/")))
+                    });
                 }
                 self.reload_outputs(name)?;
             }
@@ -480,7 +563,8 @@ impl Daemon {
         let pointer = head.pointer;
         let slot = self.slots.get_mut(&id).ok_or("the output is gone")?;
         let wallpaper = slot.wallpaper.as_mut().ok_or("no wallpaper is shown there")?;
-        let frame = Target::new(self.engine.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
+        let frame =
+            Target::new(self.engine.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
         frame.clear([0.0, 0.0, 0.0, 1.0]);
         let input = wepaper_engine::scene::FrameInput { time: slot.clock, pointer, daytime: daytime() };
         wallpaper.draw(&mut self.engine, &input, Some(frame.framebuffer()), size, true);

@@ -36,7 +36,11 @@ fn main() {
     let command = loop {
         match args.next() {
             Ok(Some(lexopt::Arg::Short('v') | lexopt::Arg::Long("verbose"))) => {
-                verbosity = if verbosity == log::LevelFilter::Warn { log::LevelFilter::Info } else { log::LevelFilter::Debug };
+                verbosity = if verbosity == log::LevelFilter::Warn {
+                    log::LevelFilter::Info
+                } else {
+                    log::LevelFilter::Debug
+                };
             }
             Ok(Some(lexopt::Arg::Short('V') | lexopt::Arg::Long("version"))) => {
                 println!("wepaper {}", env!("CARGO_PKG_VERSION"));

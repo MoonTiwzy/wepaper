@@ -8,7 +8,6 @@ mod archive;
 mod files;
 pub mod lz4;
 pub mod picture;
-#[cfg(not(lead_build))]
 pub mod puppet;
 mod texture;
 

@@ -54,10 +54,20 @@ impl VideoHub {
         if let Some(stream) = self.streams.get(&key).and_then(|playing| playing.stream.upgrade()) {
             return Ok(stream);
         }
-        let copy = self.cache.as_ref().map(|dir| transcode::cached_path(dir, &key, self.limits)).filter(|copy| copy.is_file());
-        let stream = Rc::new(RefCell::new(VideoStream::open(&self.gl, copy.as_deref().unwrap_or(&key), &self.options, self.waker.clone())?));
+        let copy = self
+            .cache
+            .as_ref()
+            .map(|dir| transcode::cached_path(dir, &key, self.limits))
+            .filter(|copy| copy.is_file());
+        let stream = Rc::new(RefCell::new(VideoStream::open(
+            &self.gl,
+            copy.as_deref().unwrap_or(&key),
+            &self.options,
+            self.waker.clone(),
+        )?));
         self.streams.retain(|_, playing| playing.stream.strong_count() > 0);
-        self.streams.insert(key, Playing { stream: Rc::downgrade(&stream), settled: copy.is_some(), job: None });
+        self.streams
+            .insert(key, Playing { stream: Rc::downgrade(&stream), settled: copy.is_some(), job: None });
         Ok(stream)
     }
 
@@ -94,7 +104,12 @@ impl VideoHub {
             let (Some(width), Some(fps)) = (width, fps) else { continue };
             playing.settled = true;
             if limits.exceeded_by(width, fps) {
-                log::info!("{} is {width} wide at {fps:.0} fps: making a copy within {} wide, {:.0} fps", source.display(), limits.max_width, limits.max_fps);
+                log::info!(
+                    "{} is {width} wide at {fps:.0} fps: making a copy within {} wide, {:.0} fps",
+                    source.display(),
+                    limits.max_width,
+                    limits.max_fps
+                );
                 playing.job = transcode::start(source, &transcode::cached_path(&dir, source, limits), limits);
                 running += usize::from(playing.job.is_some());
             }

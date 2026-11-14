@@ -214,10 +214,9 @@ impl Parser<'_> {
     /// A number, a literal, or one of the things written where a number was meant.
     fn scalar(&mut self) -> Result<Value, Error> {
         let start = self.at;
-        while self
-            .peek()
-            .is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'(' | b')' | b'#' | b'_'))
-        {
+        while self.peek().is_some_and(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'.' | b'(' | b')' | b'#' | b'_')
+        }) {
             self.at += 1;
         }
         let token = &self.text[start..self.at];
@@ -230,7 +229,11 @@ impl Parser<'_> {
         }
         let lower = token.to_ascii_lowercase();
         let unsigned = lower.trim_start_matches(['+', '-']);
-        if unsigned.starts_with("nan") || unsigned.starts_with("inf") || unsigned.contains("#ind") || unsigned.contains("#qnan") {
+        if unsigned.starts_with("nan")
+            || unsigned.starts_with("inf")
+            || unsigned.contains("#ind")
+            || unsigned.contains("#qnan")
+        {
             return Ok(Value::Number(0.0));
         }
         match lower.trim_start_matches('+').parse::<f64>() {

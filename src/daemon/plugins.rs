@@ -66,13 +66,16 @@ impl Manifest {
     /// Reads a manifest. The error says what is wrong with it.
     pub fn parse(doc: &Value, dir: &Path) -> Result<Self, String> {
         let text = |key: &str| doc.get(key).as_str().unwrap_or("").to_owned();
-        let list = |key: &str| doc.get(key).items().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
+        let list =
+            |key: &str| doc.get(key).items().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
         let kind = match doc.get("kind").as_str() {
             Some("hook") => Kind::Hook,
             Some("service") => Kind::Service,
             Some("shader") => Kind::Shader,
             Some("renderer") => Kind::Renderer,
-            Some(other) => return Err(format!("unknown kind \"{other}\" (hook, service, shader or renderer)")),
+            Some(other) => {
+                return Err(format!("unknown kind \"{other}\" (hook, service, shader or renderer)"));
+            }
             None => return Err("no \"kind\"".to_owned()),
         };
         let folder = dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
@@ -89,7 +92,9 @@ impl Manifest {
             params: doc
                 .get("params")
                 .members()
-                .filter_map(|(name, value)| Some((name.to_owned(), value.as_f32().or_else(|| value.get("default").as_f32())?)))
+                .filter_map(|(name, value)| {
+                    Some((name.to_owned(), value.as_f32().or_else(|| value.get("default").as_f32())?))
+                })
                 .collect(),
             enabled: doc.get("enabled").as_bool().unwrap_or(true),
         };
@@ -97,9 +102,15 @@ impl Manifest {
             return Err("the id must be a name without slashes".to_owned());
         }
         match kind {
-            Kind::Shader if manifest.shader.is_empty() => Err("a shader plugin names its \"shader\" file".to_owned()),
-            Kind::Renderer if manifest.handles.is_empty() => Err("a renderer says which kinds it \"handles\"".to_owned()),
-            Kind::Hook | Kind::Service | Kind::Renderer if manifest.exec.is_empty() => Err(format!("a {} plugin needs \"exec\"", kind.name())),
+            Kind::Shader if manifest.shader.is_empty() => {
+                Err("a shader plugin names its \"shader\" file".to_owned())
+            }
+            Kind::Renderer if manifest.handles.is_empty() => {
+                Err("a renderer says which kinds it \"handles\"".to_owned())
+            }
+            Kind::Hook | Kind::Service | Kind::Renderer if manifest.exec.is_empty() => {
+                Err(format!("a {} plugin needs \"exec\"", kind.name()))
+            }
             _ => Ok(manifest),
         }
     }
@@ -107,7 +118,11 @@ impl Manifest {
     /// The program of `exec` with paths relative to the plugin's folder resolved.
     pub fn program(&self) -> PathBuf {
         let first = self.exec.split_whitespace().next().unwrap_or("");
-        if first.starts_with("./") || first.starts_with("../") { self.dir.join(first) } else { PathBuf::from(first) }
+        if first.starts_with("./") || first.starts_with("../") {
+            self.dir.join(first)
+        } else {
+            PathBuf::from(first)
+        }
     }
 }
 
@@ -121,7 +136,8 @@ pub fn search_dirs(extra: &[PathBuf]) -> Vec<PathBuf> {
     {
         dirs.push(prefix.join("share/wepaper/plugins"));
     }
-    let data_dirs = std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
+    let data_dirs =
+        std::env::var("XDG_DATA_DIRS").unwrap_or_else(|_| "/usr/local/share:/usr/share".to_owned());
     dirs.extend(data_dirs.split(':').filter(|d| !d.is_empty()).map(|d| Path::new(d).join("wepaper/plugins")));
     dirs.push(super::settings::xdg_dir("XDG_DATA_HOME", ".local/share").join("plugins"));
     dirs.push(super::settings::xdg_dir("XDG_CONFIG_HOME", ".config").join("plugins"));
@@ -137,7 +153,9 @@ pub fn discover(dirs: &[PathBuf]) -> Vec<Manifest> {
         for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
             let folder = entry.path();
             let Ok(text) = std::fs::read_to_string(folder.join("plugin.json")) else { continue };
-            let manifest = wepaper_json::parse(&text).map_err(|e| e.to_string()).and_then(|doc| Manifest::parse(&doc, &folder));
+            let manifest = wepaper_json::parse(&text)
+                .map_err(|e| e.to_string())
+                .and_then(|doc| Manifest::parse(&doc, &folder));
             match manifest {
                 Ok(manifest) => {
                     found.insert(manifest.id.clone(), manifest);
@@ -236,7 +254,9 @@ impl Plugins {
 
     /// The renderer plugin that draws wallpapers of `kind`.
     pub fn renderer_for(&self, kind: &str) -> Option<&Manifest> {
-        self.manifests.iter().find(|m| m.kind == Kind::Renderer && m.enabled && m.handles.iter().any(|h| h == kind))
+        self.manifests
+            .iter()
+            .find(|m| m.kind == Kind::Renderer && m.enabled && m.handles.iter().any(|h| h == kind))
     }
 
     /// Runs every hook that listens for `happening`. They are not waited for here.
@@ -246,7 +266,11 @@ impl Plugins {
                 continue;
             }
             let mut command = Command::new("sh");
-            command.arg("-c").arg(&manifest.exec).current_dir(&manifest.dir).envs(happening.variables(&self.socket));
+            command
+                .arg("-c")
+                .arg(&manifest.exec)
+                .current_dir(&manifest.dir)
+                .envs(happening.variables(&self.socket));
             command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
             match command.spawn() {
                 Ok(child) => self.hooks.push(child),
@@ -260,7 +284,12 @@ impl Plugins {
         self.hooks.retain_mut(|child| matches!(child.try_wait(), Ok(None)));
         let now = Instant::now();
         for manifest in self.manifests.iter().filter(|m| m.kind == Kind::Service) {
-            let running = self.services.entry(manifest.id.clone()).or_insert(Running { child: None, backoff: Duration::from_secs(1), retry_at: now, started: now });
+            let running = self.services.entry(manifest.id.clone()).or_insert(Running {
+                child: None,
+                backoff: Duration::from_secs(1),
+                retry_at: now,
+                started: now,
+            });
             if !manifest.enabled {
                 if let Some(mut child) = running.child.take() {
                     let _ = child.kill();
@@ -273,10 +302,18 @@ impl Plugins {
                     Ok(None) => continue,
                     _ => {
                         // One that lasted a minute starts over at once; one that keeps dying waits longer each time.
-                        running.backoff = if running.started.elapsed() > Duration::from_secs(60) { Duration::from_secs(1) } else { (running.backoff * 2).min(Duration::from_secs(60)) };
+                        running.backoff = if running.started.elapsed() > Duration::from_secs(60) {
+                            Duration::from_secs(1)
+                        } else {
+                            (running.backoff * 2).min(Duration::from_secs(60))
+                        };
                         running.retry_at = now + running.backoff;
                         running.child = None;
-                        log::warn!("service {} stopped; next start in {} s", manifest.id, running.backoff.as_secs());
+                        log::warn!(
+                            "service {} stopped; next start in {} s",
+                            manifest.id,
+                            running.backoff.as_secs()
+                        );
                     }
                 }
             }
@@ -284,7 +321,12 @@ impl Plugins {
                 continue;
             }
             let mut command = Command::new("sh");
-            command.arg("-c").arg(&manifest.exec).current_dir(&manifest.dir).env("WEPAPER_SOCKET", &self.socket).stdin(Stdio::null());
+            command
+                .arg("-c")
+                .arg(&manifest.exec)
+                .current_dir(&manifest.dir)
+                .env("WEPAPER_SOCKET", &self.socket)
+                .stdin(Stdio::null());
             match command.spawn() {
                 Ok(child) => {
                     running.child = Some(child);
@@ -352,13 +394,25 @@ mod tests {
     fn manifest_kinds() {
         let dir = Path::new("/plugins/crt");
         let shader = manifest(r#"{"kind": "shader", "shader": "crt.frag", "params": {"strength": 0.5, "curve": {"default": 2, "min": 0, "max": 4}}}"#, dir).unwrap();
-        assert_eq!((shader.id.as_str(), shader.kind, shader.enabled), ("crt", Kind::Shader, true), "the folder's name is the id");
+        assert_eq!(
+            (shader.id.as_str(), shader.kind, shader.enabled),
+            ("crt", Kind::Shader, true),
+            "the folder's name is the id"
+        );
         assert_eq!(shader.params, [("curve".to_owned(), 2.0), ("strength".to_owned(), 0.5)].into());
         let renderer = manifest(r#"{"id": "web", "kind": "renderer", "exec": "wepaper-web --fast", "handles": ["web"], "enabled": false}"#, dir).unwrap();
-        assert_eq!((renderer.id.as_str(), renderer.handles.as_slice(), renderer.enabled), ("web", &["web".to_owned()][..], false));
+        assert_eq!(
+            (renderer.id.as_str(), renderer.handles.as_slice(), renderer.enabled),
+            ("web", &["web".to_owned()][..], false)
+        );
         assert_eq!(renderer.program(), PathBuf::from("wepaper-web"), "a bare name is looked up on the PATH");
-        let local = manifest(r#"{"kind": "hook", "exec": "./notify.sh now", "events": ["shown"]}"#, dir).unwrap();
-        assert_eq!(local.program(), PathBuf::from("/plugins/crt/./notify.sh"), "a relative path starts at the plugin's folder");
+        let local =
+            manifest(r#"{"kind": "hook", "exec": "./notify.sh now", "events": ["shown"]}"#, dir).unwrap();
+        assert_eq!(
+            local.program(),
+            PathBuf::from("/plugins/crt/./notify.sh"),
+            "a relative path starts at the plugin's folder"
+        );
         assert!(manifest(r#"{"kind": "dance"}"#, dir).unwrap_err().contains("unknown kind"));
         assert!(manifest(r#"{"exec": "x"}"#, dir).unwrap_err().contains("kind"));
         assert!(manifest(r#"{"kind": "shader"}"#, dir).unwrap_err().contains("shader"));
@@ -381,7 +435,10 @@ mod tests {
             std::fs::write(root.join(name).join("plugin.json"), body).unwrap();
         }
         let found = discover(&[system, user, PathBuf::from("/nonexistent/plugins")]);
-        assert_eq!(found.iter().map(|m| (m.id.as_str(), m.name.as_str())).collect::<Vec<_>>(), [("a", "user a"), ("b", "")]);
+        assert_eq!(
+            found.iter().map(|m| (m.id.as_str(), m.name.as_str())).collect::<Vec<_>>(),
+            [("a", "user a"), ("b", "")]
+        );
     }
 
     #[test]
@@ -391,7 +448,13 @@ mod tests {
         let hook = manifest(&format!(r#"{{"kind": "hook", "events": ["shown"], "exec": "echo $WEPAPER_EVENT $WEPAPER_OUTPUT $WEPAPER_KIND \"$WEPAPER_TITLE\" $WEPAPER_SOCKET > {}"}}"#, out.display()), &dir).unwrap();
         let mut plugins = Plugins::new(vec![hook], PathBuf::from("/run/wepaper.sock"));
         plugins.announce(&Happening { event: "paused", output: "DP-1".into(), ..Happening::default() });
-        plugins.announce(&Happening { event: "shown", output: "DP-1".into(), wallpaper: "/w/1".into(), title: "A B".into(), kind: "scene".into() });
+        plugins.announce(&Happening {
+            event: "shown",
+            output: "DP-1".into(),
+            wallpaper: "/w/1".into(),
+            title: "A B".into(),
+            kind: "scene".into(),
+        });
         for _ in 0..200 {
             plugins.upkeep();
             if plugins.hooks.is_empty() {
@@ -399,7 +462,11 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert_eq!(std::fs::read_to_string(&out).unwrap().trim(), "shown DP-1 scene A B /run/wepaper.sock", "only the event it listens for ran it");
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap().trim(),
+            "shown DP-1 scene A B /run/wepaper.sock",
+            "only the event it listens for ran it"
+        );
     }
 
     #[test]
@@ -413,7 +480,10 @@ mod tests {
         let running = &plugins.services["service"];
         assert!(running.child.is_none(), "the process that exited is noticed");
         assert_eq!(running.backoff, Duration::from_secs(2), "it died young: the wait doubles");
-        assert!(running.retry_at > Instant::now() + Duration::from_secs(1), "and it is not started again at once");
+        assert!(
+            running.retry_at > Instant::now() + Duration::from_secs(1),
+            "and it is not started again at once"
+        );
         plugins.upkeep();
         assert!(!plugins.running("service"));
     }

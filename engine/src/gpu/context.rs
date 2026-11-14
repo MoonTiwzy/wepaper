@@ -115,11 +115,19 @@ impl Gl {
                 renderer: raw.get_parameter_string(glow::RENDERER),
                 version: raw.get_parameter_string(glow::VERSION),
                 s3tc: extensions.contains("GL_EXT_texture_compression_s3tc"),
-                program_binary: extensions.contains("GL_ARB_get_program_binary") && raw.get_parameter_i32(glow::NUM_PROGRAM_BINARY_FORMATS) > 0,
+                program_binary: extensions.contains("GL_ARB_get_program_binary")
+                    && raw.get_parameter_i32(glow::NUM_PROGRAM_BINARY_FORMATS) > 0,
                 max_texture_size: raw.get_parameter_i32(glow::MAX_TEXTURE_SIZE).max(0) as u32,
             }
         };
-        Self(Rc::new(Shared { raw, loader, caps, memory: Cell::default(), state: RefCell::default(), cache_dir: RefCell::default() }))
+        Self(Rc::new(Shared {
+            raw,
+            loader,
+            caps,
+            memory: Cell::default(),
+            state: RefCell::default(),
+            cache_dir: RefCell::default(),
+        }))
     }
 
     /// The raw functions, for what the cache does not cover.
@@ -232,14 +240,31 @@ impl Gl {
 
     /// Copies the picture of one framebuffer onto another (`None`: the current
     /// surface), scaled when their sizes differ.
-    pub fn copy_framebuffer(&self, from: Option<glow::Framebuffer>, from_size: (u32, u32), to: Option<glow::Framebuffer>, to_size: (u32, u32)) {
+    pub fn copy_framebuffer(
+        &self,
+        from: Option<glow::Framebuffer>,
+        from_size: (u32, u32),
+        to: Option<glow::Framebuffer>,
+        to_size: (u32, u32),
+    ) {
         let filter = if from_size == to_size { glow::NEAREST } else { glow::LINEAR };
         // SAFETY: both framebuffers are alive (or the surface's), and the rectangles are their sizes.
         unsafe {
             let gl = &self.0.raw;
             gl.bind_framebuffer(glow::READ_FRAMEBUFFER, from);
             gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, to);
-            gl.blit_framebuffer(0, 0, from_size.0 as i32, from_size.1 as i32, 0, 0, to_size.0 as i32, to_size.1 as i32, glow::COLOR_BUFFER_BIT, filter);
+            gl.blit_framebuffer(
+                0,
+                0,
+                from_size.0 as i32,
+                from_size.1 as i32,
+                0,
+                0,
+                to_size.0 as i32,
+                to_size.1 as i32,
+                glow::COLOR_BUFFER_BIT,
+                filter,
+            );
         }
         self.surface_changed();
     }
@@ -257,10 +282,16 @@ impl Gl {
         let started = std::time::Instant::now();
         // SAFETY: a sync object is made, polled without blocking and deleted, all on the current context.
         unsafe {
-            let Ok(fence) = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0) else { return std::time::Duration::ZERO };
+            let Ok(fence) = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0) else {
+                return std::time::Duration::ZERO;
+            };
             gl.flush();
             let mut nap = std::time::Duration::from_micros(250);
-            while !matches!(gl.client_wait_sync(fence, 0, 0), glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED) && started.elapsed() < patience {
+            while !matches!(
+                gl.client_wait_sync(fence, 0, 0),
+                glow::ALREADY_SIGNALED | glow::CONDITION_SATISFIED
+            ) && started.elapsed() < patience
+            {
                 std::thread::sleep(nap);
                 nap = (nap * 2).min(std::time::Duration::from_millis(1));
             }
@@ -283,7 +314,12 @@ impl Gl {
                 Blend::None => gl.disable(glow::BLEND),
                 Blend::Alpha => {
                     gl.enable(glow::BLEND);
-                    gl.blend_func_separate(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                    gl.blend_func_separate(
+                        glow::SRC_ALPHA,
+                        glow::ONE_MINUS_SRC_ALPHA,
+                        glow::ONE,
+                        glow::ONE_MINUS_SRC_ALPHA,
+                    );
                 }
                 Blend::Additive => {
                     gl.enable(glow::BLEND);
@@ -291,7 +327,12 @@ impl Gl {
                 }
                 Blend::Premultiplied => {
                     gl.enable(glow::BLEND);
-                    gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+                    gl.blend_func_separate(
+                        glow::ONE,
+                        glow::ONE_MINUS_SRC_ALPHA,
+                        glow::ONE,
+                        glow::ONE_MINUS_SRC_ALPHA,
+                    );
                 }
             }
         }

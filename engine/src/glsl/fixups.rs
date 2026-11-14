@@ -5,7 +5,8 @@
 //! pattern found in real wallpapers.
 
 /// Words workshop shaders use as names that GLSL reserves.
-const RESERVED: &[&str] = &["sample", "active", "input", "output", "filter", "common", "partition", "smooth", "flat", "packed"];
+const RESERVED: &[&str] =
+    &["sample", "active", "input", "output", "filter", "common", "partition", "smooth", "flat", "packed"];
 
 /// Renames identifiers that GLSL reserves, in whatever role the shader uses them.
 ///
@@ -52,7 +53,9 @@ pub(super) fn rename_reserved(text: &str) -> String {
 pub(super) fn rename_own_mod(text: &str) -> String {
     let defines_mod = text.lines().any(|line| {
         let line = line.trim_start();
-        ["float mod(", "float mod (", "vec2 mod(", "vec3 mod(", "vec4 mod("].iter().any(|start| line.starts_with(start))
+        ["float mod(", "float mod (", "vec2 mod(", "vec3 mod(", "vec4 mod("]
+            .iter()
+            .any(|start| line.starts_with(start))
     });
     if !defines_mod {
         return text.to_owned();
@@ -70,7 +73,8 @@ fn replace_word(text: &str, word: &str, with: &str) -> String {
     while let Some(found) = text[search..].find(word) {
         let start = search + found;
         let end = start + word.len();
-        let alone = (start == 0 || !ident(bytes[start - 1]) && bytes[start - 1] != b'.') && (end >= bytes.len() || !ident(bytes[end]));
+        let alone = (start == 0 || !ident(bytes[start - 1]) && bytes[start - 1] != b'.')
+            && (end >= bytes.len() || !ident(bytes[end]));
         if alone {
             out.push_str(&text[rest..start]);
             out.push_str(with);
@@ -98,7 +102,9 @@ pub(super) fn hoist_samplers(text: &str) -> String {
             .filter(|rest| rest.starts_with("sampler"))
             .and_then(|rest| rest.split_whitespace().nth(1))
             .map(|name| name.trim_end_matches(';'))
-            .filter(|name| name.starts_with("g_Texture") && name["g_Texture".len()..].bytes().all(|b| b.is_ascii_digit()));
+            .filter(|name| {
+                name.starts_with("g_Texture") && name["g_Texture".len()..].bytes().all(|b| b.is_ascii_digit())
+            });
         match name {
             Some(name) => {
                 if !names.contains(&name) {

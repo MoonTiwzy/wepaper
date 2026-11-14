@@ -50,7 +50,8 @@ impl Files {
 
     /// Puts files that exist only in memory on top.
     pub fn mount_memory(&mut self, files: impl IntoIterator<Item = (String, Vec<u8>)>) {
-        self.layers.push(Layer::Memory(files.into_iter().map(|(name, data)| (normalize(&name).1, data)).collect()));
+        self.layers
+            .push(Layer::Memory(files.into_iter().map(|(name, data)| (normalize(&name).1, data)).collect()));
     }
 
     /// The contents of `path` from the topmost layer that has it.
@@ -75,7 +76,10 @@ impl Files {
                 }
             }
         }
-        Err(io::Error::new(io::ErrorKind::NotFound, format!("no such file in the wallpaper or the assets: {clean}")))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no such file in the wallpaper or the assets: {clean}"),
+        ))
     }
 
     /// The contents of `path` as text, without a byte order mark.
@@ -132,7 +136,10 @@ fn find_in_dir(root: &Path, relative: &str) -> Option<PathBuf> {
             continue;
         }
         let wanted = part.to_lowercase();
-        let entry = std::fs::read_dir(&current).ok()?.flatten().find(|e| e.file_name().to_string_lossy().to_lowercase() == wanted)?;
+        let entry = std::fs::read_dir(&current)
+            .ok()?
+            .flatten()
+            .find(|e| e.file_name().to_string_lossy().to_lowercase() == wanted)?;
         current = entry.path();
     }
     current.is_file().then_some(current)

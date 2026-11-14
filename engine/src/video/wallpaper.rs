@@ -33,13 +33,23 @@ impl Drop for VideoHold {
     }
 }
 
+/// The quad a video is drawn on, and what it was made for.
+struct Quad {
+    mesh: Mesh,
+    /// The video's size.
+    video: (u32, u32),
+    /// The output's size.
+    output: (u32, u32),
+    fill: Fill,
+}
+
 /// One playing copy of a video wallpaper, for one output.
 pub struct VideoInstance {
     project: Project,
     hold: VideoHold,
     fill: Fill,
     /// The quad the video is drawn on, for the sizes it was last made for.
-    quad: Option<(Mesh, (u32, u32), (u32, u32), Fill)>,
+    quad: Option<Quad>,
     /// The frame this instance drew last.
     seen: u64,
 }
@@ -66,7 +76,13 @@ impl VideoInstance {
 
     /// Draws the current frame into `to` if it is newer than what this instance drew
     /// last, or if `force` says the destination lost its contents. Returns whether it drew.
-    pub fn draw(&mut self, engine: &mut Engine, to: Option<glow::Framebuffer>, size: (u32, u32), force: bool) -> bool {
+    pub fn draw(
+        &mut self,
+        engine: &mut Engine,
+        to: Option<glow::Framebuffer>,
+        size: (u32, u32),
+        force: bool,
+    ) -> bool {
         let mut stream = self.hold.stream.borrow_mut();
         stream.poll();
         let serial = stream.serial();
@@ -75,7 +91,11 @@ impl VideoInstance {
             return false;
         }
         self.seen = serial;
-        if self.quad.as_ref().is_none_or(|(_, v, o, f)| (*v, *o, *f) != (video, size, self.fill)) {
+        if self
+            .quad
+            .as_ref()
+            .is_none_or(|quad| (quad.video, quad.output, quad.fill) != (video, size, self.fill))
+        {
             let (vw, vh, ow, oh) = (video.0 as f32, video.1 as f32, size.0 as f32, size.1 as f32);
             let scale = match self.fill {
                 Fill::Cover => (ow / vw).max(oh / vh),
@@ -83,9 +103,18 @@ impl VideoInstance {
                 Fill::Stretch => 0.0,
             };
             // Half the video's size on the output, in clip units; what is past the edge is cropped.
-            let (x, y) = if self.fill == Fill::Stretch { (1.0, 1.0) } else { (vw * scale / ow, vh * scale / oh) };
-            match Mesh::quad(&engine.gl, &[[-x, -y, 0.0, 0.0, 1.0], [x, -y, 0.0, 1.0, 1.0], [-x, y, 0.0, 0.0, 0.0], [x, y, 0.0, 1.0, 0.0]]) {
-                Ok(mesh) => self.quad = Some((mesh, video, size, self.fill)),
+            let (x, y) =
+                if self.fill == Fill::Stretch { (1.0, 1.0) } else { (vw * scale / ow, vh * scale / oh) };
+            match Mesh::quad(
+                &engine.gl,
+                &[
+                    [-x, -y, 0.0, 0.0, 1.0],
+                    [x, -y, 0.0, 1.0, 1.0],
+                    [-x, y, 0.0, 0.0, 0.0],
+                    [x, y, 0.0, 1.0, 0.0],
+                ],
+            ) {
+                Ok(mesh) => self.quad = Some(Quad { mesh, video, output: size, fill: self.fill }),
                 Err(error) => {
                     log::warn!("video quad: {error}");
                     return false;
@@ -98,7 +127,7 @@ impl VideoInstance {
         }
         engine.gl.set_blend(Blend::None);
         engine.composite(texture, &Mat4::IDENTITY, 1.0);
-        if let Some((mesh, ..)) = &self.quad {
+        if let Some(Quad { mesh, .. }) = &self.quad {
             mesh.draw();
         }
         true

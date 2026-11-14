@@ -76,8 +76,10 @@ pub(crate) struct Api {
     pub(crate) command: unsafe extern "C" fn(*mut Handle, *mut *const c_char) -> c_int,
     pub(crate) wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut Event,
     pub(crate) error_string: unsafe extern "C" fn(c_int) -> *const c_char,
-    pub(crate) render_context_create: unsafe extern "C" fn(*mut *mut RenderContext, *mut Handle, *mut RenderParam) -> c_int,
-    pub(crate) render_context_set_update_callback: unsafe extern "C" fn(*mut RenderContext, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
+    pub(crate) render_context_create:
+        unsafe extern "C" fn(*mut *mut RenderContext, *mut Handle, *mut RenderParam) -> c_int,
+    pub(crate) render_context_set_update_callback:
+        unsafe extern "C" fn(*mut RenderContext, Option<unsafe extern "C" fn(*mut c_void)>, *mut c_void),
     pub(crate) render_context_update: unsafe extern "C" fn(*mut RenderContext) -> u64,
     pub(crate) render_context_render: unsafe extern "C" fn(*mut RenderContext, *mut RenderParam) -> c_int,
     pub(crate) render_context_free: unsafe extern "C" fn(*mut RenderContext),

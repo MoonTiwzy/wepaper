@@ -55,7 +55,8 @@ impl Spectrum {
                 // Bands are spread evenly in pitch, from about 40 Hz to about 16 kHz.
                 let edge = |b: usize| (1.0 * (372.0f32 / 1.0).powf(b as f32 / 64.0)).round() as usize;
                 let (from, to) = (edge(band).max(1), edge(band + 1).max(edge(band) + 1).min(WINDOW / 2));
-                let power: f32 = (from..to).map(|bin| re[bin] * re[bin] + im[bin] * im[bin]).sum::<f32>() / (to - from).max(1) as f32;
+                let power: f32 = (from..to).map(|bin| re[bin] * re[bin] + im[bin] * im[bin]).sum::<f32>()
+                    / (to - from).max(1) as f32;
                 // Scaled so that music at a normal level fills most of 0..1.
                 let target = (power.sqrt() / (WINDOW as f32 / 4.0) * 6.0).min(1.5);
                 let rate = if target > *level { 30.0 } else { 6.0 };
@@ -125,7 +126,11 @@ mod tests {
     use super::*;
 
     fn tone(frequency: f32, amplitude: f32) -> Vec<f32> {
-        (0..WINDOW).flat_map(|i| [(2.0 * std::f32::consts::PI * frequency * i as f32 / 44100.0).sin() * amplitude; 2]).collect()
+        (0..WINDOW)
+            .flat_map(|i| {
+                [(2.0 * std::f32::consts::PI * frequency * i as f32 / 44100.0).sin() * amplitude; 2]
+            })
+            .collect()
     }
 
     fn settled(samples: &[f32]) -> Spectrum {
@@ -143,7 +148,10 @@ mod tests {
         let low = (0..64).max_by(|a, b| out[*a].total_cmp(&out[*b])).unwrap();
         settled(&tone(5000.0, 0.5)).bands(64, false, &mut out);
         let high = (0..64).max_by(|a, b| out[*a].total_cmp(&out[*b])).unwrap();
-        assert!(low < 20 && high > 40, "a low tone lights a low band ({low}), a high tone a high one ({high})");
+        assert!(
+            low < 20 && high > 40,
+            "a low tone lights a low band ({low}), a high tone a high one ({high})"
+        );
     }
 
     #[test]
@@ -178,7 +186,10 @@ mod tests {
         let mut falling = settled(&tone);
         falling.feed(&vec![0.0; WINDOW * 2], 1.0 / 60.0);
         falling.bands(64, false, &mut out);
-        assert!(out.iter().copied().fold(0.0, f32::max) > full * 0.8, "one frame of silence barely lowers it");
+        assert!(
+            out.iter().copied().fold(0.0, f32::max) > full * 0.8,
+            "one frame of silence barely lowers it"
+        );
         falling.feed(&[], 1.0 / 60.0);
         assert!(!falling.is_silent(), "too few samples only lets the bands fall");
     }

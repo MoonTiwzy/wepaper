@@ -8,7 +8,9 @@
 /// source carries. Understands NVIDIA (`0(12) : error`) and Mesa (`0:12(4): error`).
 fn error_line(log: &str) -> Option<(usize, &str)> {
     for message in log.lines().filter(|line| line.contains("error")) {
-        let digits = |text: &str| text.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<usize>().ok();
+        let digits = |text: &str| {
+            text.chars().take_while(char::is_ascii_digit).collect::<String>().parse::<usize>().ok()
+        };
         let line = if let Some(rest) = message.strip_prefix("0(") {
             digits(rest)
         } else if let Some(rest) = message.strip_prefix("0:") {
@@ -27,7 +29,9 @@ fn error_line(log: &str) -> Option<(usize, &str)> {
 /// whether anything was changed: when not, compiling again would fail the same way.
 pub fn repair(source: &mut String, log: &str) -> bool {
     let Some((number, message)) = error_line(log) else { return false };
-    let marker = [super::source::BODY, super::source::BODY_LENIENT].into_iter().find_map(|m| source.find(m).map(|at| at + m.len()));
+    let marker = [super::source::BODY, super::source::BODY_LENIENT]
+        .into_iter()
+        .find_map(|m| source.find(m).map(|at| at + m.len()));
     let Some(body_start) = marker else { return false };
     let body = &source[body_start..];
     let Some(line_start) = line_offset(body, number) else { return false };
@@ -36,7 +40,10 @@ pub fn repair(source: &mut String, log: &str) -> bool {
 
     let replacement = if message.contains("unmatched #endif") || message.contains("#endif without #if") {
         line.trim_start().starts_with("#endif").then(|| "// #endif without an #if".to_owned())
-    } else if message.contains("\"%\"") || message.contains("operator '%'") || message.contains("operands to %") {
+    } else if message.contains("\"%\"")
+        || message.contains("operator '%'")
+        || message.contains("operands to %")
+    {
         remainder_calls(line)
     } else if message.contains("Syntax error in #if") || message.contains("#if with no expression") {
         // A condition the preprocessor cannot evaluate (it names a variable) is false.
@@ -151,12 +158,23 @@ mod tests {
 
     #[test]
     fn float_remainder_becomes_a_call() {
-        let mut text = source("float a;\nuint b = frequency % RESOLUTION;\nfloat c = g[(i + 1) % 4] + (x % (y * 2.0));\ni %= 3;\n");
+        let mut text = source(
+            "float a;\nuint b = frequency % RESOLUTION;\nfloat c = g[(i + 1) % 4] + (x % (y * 2.0));\ni %= 3;\n",
+        );
         assert!(repair(&mut text, "0(2) : error C1021: operands to \"%\" must be integral\n"));
         assert!(text.contains("uint b = wepaper_rem(frequency, RESOLUTION);"));
-        assert!(repair(&mut text, "0:3(12): error: operator '%' is reserved in GLSL 1.20\n"), "Mesa's message format is read too");
-        assert!(text.contains("float c = g[wepaper_rem((i + 1), 4)] + (wepaper_rem(x, (y * 2.0)));"), "{text}");
-        assert!(!repair(&mut text, "0(4) : error C1021: operands to \"%\" must be integral\n"), "%= is not rewritten");
+        assert!(
+            repair(&mut text, "0:3(12): error: operator '%' is reserved in GLSL 1.20\n"),
+            "Mesa's message format is read too"
+        );
+        assert!(
+            text.contains("float c = g[wepaper_rem((i + 1), 4)] + (wepaper_rem(x, (y * 2.0)));"),
+            "{text}"
+        );
+        assert!(
+            !repair(&mut text, "0(4) : error C1021: operands to \"%\" must be integral\n"),
+            "%= is not rewritten"
+        );
     }
 
     #[test]

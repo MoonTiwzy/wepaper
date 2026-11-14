@@ -102,14 +102,21 @@ impl Request {
             Request::Show { wallpaper, output, properties } => {
                 let mut message = obj! { "cmd" => "show", "wallpaper" => wallpaper, "output" => on(output) };
                 if let (Some(properties), Value::Object(map)) = (properties, &mut message) {
-                    map.insert("properties", Value::Object(properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect()));
+                    map.insert(
+                        "properties",
+                        Value::Object(
+                            properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect(),
+                        ),
+                    );
                 }
                 message
             }
             Request::Hide { output } => obj! { "cmd" => "hide", "output" => on(output) },
             Request::Pause { output } => obj! { "cmd" => "pause", "output" => on(output) },
             Request::Resume { output } => obj! { "cmd" => "resume", "output" => on(output) },
-            Request::Snapshot { output, file } => obj! { "cmd" => "snapshot", "output" => on(output), "file" => file },
+            Request::Snapshot { output, file } => {
+                obj! { "cmd" => "snapshot", "output" => on(output), "file" => file }
+            }
             Request::Watch => obj! { "cmd" => "watch" },
             Request::Reload => obj! { "cmd" => "reload" },
             Request::Quit => obj! { "cmd" => "quit" },
@@ -119,8 +126,12 @@ impl Request {
     /// Reads a request from the JSON object a client sent. The error says what is
     /// wrong in words a person at a terminal can act on.
     pub fn parse(message: &Value) -> Result<Self, String> {
-        let Some(command) = message.get("cmd").as_str() else { return Err("a request is an object with a \"cmd\"".to_owned()) };
-        let text = |key: &str| message.get(key).as_str().map(str::to_owned).ok_or_else(|| format!("{command} needs \"{key}\""));
+        let Some(command) = message.get("cmd").as_str() else {
+            return Err("a request is an object with a \"cmd\"".to_owned());
+        };
+        let text = |key: &str| {
+            message.get(key).as_str().map(str::to_owned).ok_or_else(|| format!("{command} needs \"{key}\""))
+        };
         let path = || text("path");
         let output = || match message.get("output") {
             Value::Null => Ok(None),
@@ -143,7 +154,10 @@ impl Request {
             "show" => Request::Show {
                 wallpaper: text("wallpaper")?,
                 output: output()?,
-                properties: message.get("properties").as_object().map(|map| map.iter().map(|(name, value)| (name.to_owned(), value.clone())).collect()),
+                properties: message
+                    .get("properties")
+                    .as_object()
+                    .map(|map| map.iter().map(|(name, value)| (name.to_owned(), value.clone())).collect()),
             },
             "hide" => Request::Hide { output: output()? },
             "pause" => Request::Pause { output: output()? },

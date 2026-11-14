@@ -68,7 +68,9 @@ impl Declared {
             let (Some(kind), Some(name)) = (words.next(), words.next()) else { continue };
             let name = name.split('[').next().unwrap_or(name).to_owned();
             if kind.starts_with("sampler") {
-                let Some(slot) = name.strip_prefix("g_Texture").and_then(|n| n.parse().ok()) else { continue };
+                let Some(slot) = name.strip_prefix("g_Texture").and_then(|n| n.parse().ok()) else {
+                    continue;
+                };
                 declared.samplers.push(SamplerDecl {
                     slot,
                     default: doc.get("default").as_str().filter(|s| !s.is_empty()).map(str::to_owned),

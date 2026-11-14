@@ -20,7 +20,13 @@ impl Mesh {
     ///
     /// `layout` lists (attribute location, component count) in the order they are
     /// interleaved in `vertices`; `indices`, when given, are 16-bit triangle indices.
-    pub fn new(gl: &Gl, layout: &[(u32, i32)], vertices: &[f32], indices: Option<&[u16]>, dynamic: bool) -> Result<Self, GpuError> {
+    pub fn new(
+        gl: &Gl,
+        layout: &[(u32, i32)],
+        vertices: &[f32],
+        indices: Option<&[u16]>,
+        dynamic: bool,
+    ) -> Result<Self, GpuError> {
         let stride: i32 = layout.iter().map(|(_, n)| n * 4).sum();
         let usage = if dynamic { glow::DYNAMIC_DRAW } else { glow::STATIC_DRAW };
         // SAFETY: the context is current; attribute offsets stay within `stride`, and the
@@ -48,7 +54,15 @@ impl Mesh {
                 None => (None, vertices.len() as i32 * 4 / stride.max(1)),
             };
             raw.bind_vertex_array(None);
-            Ok(Self { gl: gl.clone(), array, buffer, indices: index_buffer, count, capacity: vertices.len(), layout: layout.to_vec() })
+            Ok(Self {
+                gl: gl.clone(),
+                array,
+                buffer,
+                indices: index_buffer,
+                count,
+                capacity: vertices.len(),
+                layout: layout.to_vec(),
+            })
         }
     }
 
@@ -63,7 +77,15 @@ impl Mesh {
     /// The quad that covers a whole target, texture coordinates running with the
     /// picture: `(0, 0)` at the first row drawn.
     pub fn fullscreen(gl: &Gl) -> Result<Self, GpuError> {
-        Self::quad(gl, &[[-1.0, -1.0, 0.0, 0.0, 0.0], [1.0, -1.0, 0.0, 1.0, 0.0], [-1.0, 1.0, 0.0, 0.0, 1.0], [1.0, 1.0, 0.0, 1.0, 1.0]])
+        Self::quad(
+            gl,
+            &[
+                [-1.0, -1.0, 0.0, 0.0, 0.0],
+                [1.0, -1.0, 0.0, 1.0, 0.0],
+                [-1.0, 1.0, 0.0, 0.0, 1.0],
+                [1.0, 1.0, 0.0, 1.0, 1.0],
+            ],
+        )
     }
 
     /// Replaces the vertices of a dynamic mesh without indices.

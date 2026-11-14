@@ -18,7 +18,7 @@ pub use material::{Blending, MaterialDoc, MaterialPass};
 pub use model::ModelDoc;
 pub use project::{Kind, Project, Property, PropertyKind};
 pub use scene::{
-    Alignment, EffectUse, General, ImageObject, Object, ObjectKind, ParticleObject, PassOverride, Scene, SoundObject,
-    TextObject,
+    Alignment, EffectUse, General, ImageObject, Object, ObjectKind, ParticleObject, PassOverride, Scene,
+    SoundObject, TextObject,
 };
 pub use value::{AsFloats, Dyn, FromDoc, Script, UserLink, floats};

@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use wepaper_json::Value;
 
-use crate::doc::{Alignment, Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object, ObjectKind, Project, Scene, TextObject};
+use crate::doc::{
+    Alignment, Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object,
+    ObjectKind, Project, Scene, TextObject,
+};
 use crate::glsl::Combos;
 use crate::gpu::{Blend, Mesh};
 use crate::math::Mat4;
@@ -20,14 +23,21 @@ impl SceneInstance {
     ///
     /// `values` are the user's property values; properties not in it keep the
     /// wallpaper's own. A layer that cannot be built is skipped and noted.
-    pub(crate) fn build(engine: &mut Engine, files: &Files, project: Project, viewport: Viewport, values: &[(String, Value)]) -> Result<Self, LoadError> {
+    pub(crate) fn build(
+        engine: &mut Engine,
+        files: &Files,
+        project: Project,
+        viewport: Viewport,
+        values: &[(String, Value)],
+    ) -> Result<Self, LoadError> {
         let text = files.read_text(&project.file).map_err(|e| LoadError(format!("{}: {e}", project.file)))?;
         let document = wepaper_json::parse(&text).map_err(|e| LoadError(format!("{}: {e}", project.file)))?;
         let scene = Scene::parse(&document);
 
         let mut bindings = Bindings::default();
         let mut skipped = Vec::new();
-        let index_of: HashMap<i64, usize> = scene.objects.iter().enumerate().map(|(index, object)| (object.id, index)).collect();
+        let index_of: HashMap<i64, usize> =
+            scene.objects.iter().enumerate().map(|(index, object)| (object.id, index)).collect();
         let mut scene_size = scene.general.orthogonal.filter(|s| s[0] > 0.0 && s[1] > 0.0);
         if scene.general.orthogonal.is_none() {
             skipped.push("the scene uses a perspective camera, which is drawn flat".to_owned());
@@ -53,7 +63,14 @@ impl SceneInstance {
         for (index, object) in scene.objects.iter().enumerate() {
             let kind = match &object.kind {
                 ObjectKind::Image(image) => {
-                    match build_image(engine, files, &mut bindings, index, image, scene_size.unwrap_or([1920.0, 1080.0])) {
+                    match build_image(
+                        engine,
+                        files,
+                        &mut bindings,
+                        index,
+                        image,
+                        scene_size.unwrap_or([1920.0, 1080.0]),
+                    ) {
                         Ok(layer) => {
                             // A scene without a size of its own takes its first picture's.
                             scene_size.get_or_insert(layer.size);
@@ -75,8 +92,19 @@ impl SceneInstance {
                     }
                 },
                 ObjectKind::Sound(sound) => {
-                    let file = sound.files.first().and_then(|file| engine.share.on_disk(files, file).inspect_err(|why| log::warn!("sound {file}: {why}")).ok());
-                    LayerKind::Sound(SoundLayer { file, looping: sound.mode != "single", volume: sound.volume.value.clamp(0.0, 1.0), player: None })
+                    let file = sound.files.first().and_then(|file| {
+                        engine
+                            .share
+                            .on_disk(files, file)
+                            .inspect_err(|why| log::warn!("sound {file}: {why}"))
+                            .ok()
+                    });
+                    LayerKind::Sound(SoundLayer {
+                        file,
+                        looping: sound.mode != "single",
+                        volume: sound.volume.value.clamp(0.0, 1.0),
+                        player: None,
+                    })
                 }
                 ObjectKind::Unsupported(what) => {
                     skipped.push(format!("layer {}: {what} objects are not drawn", object.name));
@@ -136,7 +164,8 @@ impl SceneInstance {
         let (sound, volume) = (engine.share.videos.options.audio, engine.share.videos.options.volume);
         instance.set_sound(sound, volume);
         // Every property takes effect once: the wallpaper's own value, or the user's.
-        let defaults: Vec<(String, Value)> = instance.project.properties.iter().map(|p| (p.name.clone(), p.default.clone())).collect();
+        let defaults: Vec<(String, Value)> =
+            instance.project.properties.iter().map(|p| (p.name.clone(), p.default.clone())).collect();
         for (name, value) in defaults.iter().chain(values) {
             if !value.is_null() {
                 instance.set_property(name, value);
@@ -183,12 +212,36 @@ impl SceneInstance {
 }
 
 /// The scene's bloom passes, from the stock shaders.
-fn build_bloom(engine: &mut Engine, files: &Files, bindings: &mut Bindings, scene: &Scene) -> Result<super::Bloom, String> {
+fn build_bloom(
+    engine: &mut Engine,
+    files: &Files,
+    bindings: &mut Bindings,
+    scene: &Scene,
+) -> Result<super::Bloom, String> {
     let general = &scene.general;
-    let number = |value: &Dyn<f32>| Dyn { value: Value::from(value.value), user: value.user.clone(), script: None, animation: None };
-    let constants = [("bloomstrength".to_owned(), number(&general.bloom_strength)), ("bloomthreshold".to_owned(), number(&general.bloom_threshold))];
+    let number = |value: &Dyn<f32>| Dyn {
+        value: Value::from(value.value),
+        user: value.user.clone(),
+        script: None,
+        animation: None,
+    };
+    let constants = [
+        ("bloomstrength".to_owned(), number(&general.bloom_strength)),
+        ("bloomthreshold".to_owned(), number(&general.bloom_threshold)),
+    ];
     let mut pass = |shader: &str, textures: &[TextureChoice], constants: &[(String, Dyn<Value>)]| {
-        Shade::compile(&mut engine.share, files, &PassInput { shader, textures, combos: &Combos::new(), constants, buffers: &["_bloom".to_owned()] }, bindings)
+        Shade::compile(
+            &mut engine.share,
+            files,
+            &PassInput {
+                shader,
+                textures,
+                combos: &Combos::new(),
+                constants,
+                buffers: &["_bloom".to_owned()],
+            },
+            bindings,
+        )
     };
     Ok(super::Bloom {
         bright: pass("downsample_quarter_bloom", &[TextureChoice::Previous], &constants)?,
@@ -235,7 +288,14 @@ fn constants(pass: &MaterialPass) -> Vec<(String, Dyn<Value>)> {
     pass.constants.iter().map(|(name, value)| (name.clone(), Dyn::constant(value.clone()))).collect()
 }
 
-fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, index: usize, image: &ImageObject, scene_size: [f32; 2]) -> Result<ImageLayer, String> {
+fn build_image(
+    engine: &mut Engine,
+    files: &Files,
+    bindings: &mut Bindings,
+    index: usize,
+    image: &ImageObject,
+    scene_size: [f32; 2],
+) -> Result<ImageLayer, String> {
     let model = ModelDoc::parse(&read_doc(files, &image.image)?);
     let material = MaterialDoc::parse(&read_doc(files, &model.material)?);
     let pass = material.passes.first().ok_or("the material has no passes")?;
@@ -248,19 +308,29 @@ fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, inde
     let base = Shade::compile(
         &mut engine.share,
         files,
-        &PassInput { shader: &pass.shader, textures: &choices(&pass.textures), combos: &pass.combos, constants: &constants(pass), buffers: &[] },
+        &PassInput {
+            shader: &pass.shader,
+            textures: &choices(&pass.textures),
+            combos: &pass.combos,
+            constants: &constants(pass),
+            buffers: &[],
+        },
         bindings,
     )?;
 
     // The picture: its size and how much of its texture it fills.
-    let picture = base.samplers.iter().find(|(_, unit, _)| *unit == 0).and_then(|(_, _, source)| match source {
-        TextureRef::Shared(texture) => Some(texture.clone()),
-        _ => None,
-    });
+    let picture =
+        base.samplers.iter().find(|(_, unit, _)| *unit == 0).and_then(|(_, _, source)| match source {
+            TextureRef::Shared(texture) => Some(texture.clone()),
+            _ => None,
+        });
     let (picture_size, extent) = match &picture {
         Some(texture) if texture.sprites.is_some() => {
             let frame = texture.sprites.as_ref().and_then(|s| s.frames.first().copied());
-            (frame.map(|f| [f.width.abs().max(f.skew.1.abs()), f.height.abs().max(f.skew.0.abs())]), [1.0, 1.0])
+            (
+                frame.map(|f| [f.width.abs().max(f.skew.1.abs()), f.height.abs().max(f.skew.0.abs())]),
+                [1.0, 1.0],
+            )
         }
         Some(texture) => {
             let r = texture.resolution;
@@ -268,7 +338,11 @@ fn build_image(engine: &mut Engine, files: &Files, bindings: &mut Bindings, inde
         }
         None => (None, [1.0, 1.0]),
     };
-    let size = if mode == ImageMode::Fullscreen { scene_size } else { image.size.or(model.size).or(picture_size).unwrap_or(scene_size) };
+    let size = if mode == ImageMode::Fullscreen {
+        scene_size
+    } else {
+        image.size.or(model.size).or(picture_size).unwrap_or(scene_size)
+    };
 
     let (quad, quad_unit, base_quad) = quads(engine, size, image.alignment, extent)?;
     let (effects, buffers) = build_effects(engine, files, bindings, &image.effects);
@@ -304,14 +378,30 @@ fn blend_pass(engine: &mut Engine, files: &Files, bindings: &mut Bindings, mode:
     }
     let combos: Combos = [("BLENDMODE".to_owned(), mode), ("TRANSFORM".to_owned(), 1)].into();
     let textures = [TextureChoice::Previous, TextureChoice::Named("_rt_FullFrameBuffer".to_owned())];
-    Shade::compile(&mut engine.share, files, &PassInput { shader: "passthroughblend", textures: &textures, combos: &combos, constants: &[], buffers: &[] }, bindings)
-        .inspect_err(|why| log::warn!("blend mode {mode}: {why}"))
-        .ok()
+    Shade::compile(
+        &mut engine.share,
+        files,
+        &PassInput {
+            shader: "passthroughblend",
+            textures: &textures,
+            combos: &combos,
+            constants: &[],
+            buffers: &[],
+        },
+        bindings,
+    )
+    .inspect_err(|why| log::warn!("blend mode {mode}: {why}"))
+    .ok()
 }
 
 /// The three quads a layer is drawn with: in layer space over the picture, in layer
 /// space over a whole buffer, and in clip space over the picture.
-fn quads(engine: &Engine, size: [f32; 2], alignment: Alignment, extent: [f32; 2]) -> Result<(Mesh, Mesh, Mesh), String> {
+fn quads(
+    engine: &Engine,
+    size: [f32; 2],
+    alignment: Alignment,
+    extent: [f32; 2],
+) -> Result<(Mesh, Mesh, Mesh), String> {
     // Where the origin sits on the layer.
     let (w, h) = (size[0], size[1]);
     let (ax, ay) = (-f32::from(alignment.horizontal) * w / 2.0, -f32::from(alignment.vertical) * h / 2.0);
@@ -320,14 +410,29 @@ fn quads(engine: &Engine, size: [f32; 2], alignment: Alignment, extent: [f32; 2]
     let mesh = |corners: &[[f32; 5]; 4]| Mesh::quad(&engine.gl, corners).map_err(|e| e.to_string());
     Ok((
         mesh(&[[x0, y0, 0.0, 0.0, v], [x1, y0, 0.0, u, v], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, u, 0.0]])?,
-        mesh(&[[x0, y0, 0.0, 0.0, 1.0], [x1, y0, 0.0, 1.0, 1.0], [x0, y1, 0.0, 0.0, 0.0], [x1, y1, 0.0, 1.0, 0.0]])?,
-        mesh(&[[-1.0, -1.0, 0.0, 0.0, 0.0], [1.0, -1.0, 0.0, u, 0.0], [-1.0, 1.0, 0.0, 0.0, v], [1.0, 1.0, 0.0, u, v]])?,
+        mesh(&[
+            [x0, y0, 0.0, 0.0, 1.0],
+            [x1, y0, 0.0, 1.0, 1.0],
+            [x0, y1, 0.0, 0.0, 0.0],
+            [x1, y1, 0.0, 1.0, 0.0],
+        ])?,
+        mesh(&[
+            [-1.0, -1.0, 0.0, 0.0, 0.0],
+            [1.0, -1.0, 0.0, u, 0.0],
+            [-1.0, 1.0, 0.0, 0.0, v],
+            [1.0, 1.0, 0.0, u, v],
+        ])?,
     ))
 }
 
 /// A layer's effects and the buffers they declare. An effect that cannot be built
 /// is kept switched off, so the chain still joins up and the layer shows without it.
-fn build_effects(engine: &mut Engine, files: &Files, bindings: &mut Bindings, uses: &[EffectUse]) -> (Vec<Effect>, Vec<BufferSpec>) {
+fn build_effects(
+    engine: &mut Engine,
+    files: &Files,
+    bindings: &mut Bindings,
+    uses: &[EffectUse],
+) -> (Vec<Effect>, Vec<BufferSpec>) {
     let mut buffers: Vec<BufferSpec> = Vec::new();
     let mut effects = Vec::new();
     for effect_use in uses {
@@ -349,7 +454,12 @@ fn build_effects(engine: &mut Engine, files: &Files, bindings: &mut Bindings, us
 }
 
 /// A text layer: an image layer whose picture is rasterised text.
-fn build_text(engine: &mut Engine, files: &Files, bindings: &mut Bindings, text: &TextObject) -> Result<ImageLayer, String> {
+fn build_text(
+    engine: &mut Engine,
+    files: &Files,
+    bindings: &mut Bindings,
+    text: &TextObject,
+) -> Result<ImageLayer, String> {
     use super::text::{TextState, TextStyleSpec, TextSurface};
     let font = engine
         .share
@@ -357,7 +467,15 @@ fn build_text(engine: &mut Engine, files: &Files, bindings: &mut Bindings, text:
         .or_else(|| engine.share.font(files, "fonts/NotoSans-Regular.ttf"))
         .or_else(|| engine.share.font(files, "systemfont_sans"))
         .ok_or_else(|| format!("font {} is not there and neither is a fallback", text.font))?;
-    let side = |name: &str, low: &str, high: &str| if name == low { -1 } else if name == high { 1 } else { 0 };
+    let side = |name: &str, low: &str, high: &str| {
+        if name == low {
+            -1
+        } else if name == high {
+            1
+        } else {
+            0
+        }
+    };
     let style = TextStyleSpec {
         point_size: text.point_size.value,
         horizontal: side(&text.horizontal_align, "left", "right"),
@@ -371,7 +489,13 @@ fn build_text(engine: &mut Engine, files: &Files, bindings: &mut Bindings, text:
     let base = Shade::compile(
         &mut engine.share,
         files,
-        &PassInput { shader: "font", textures: &[TextureChoice::Text(surface.clone())], combos: &Combos::new(), constants: &[], buffers: &[] },
+        &PassInput {
+            shader: "font",
+            textures: &[TextureChoice::Text(surface.clone())],
+            combos: &Combos::new(),
+            constants: &[],
+            buffers: &[],
+        },
         bindings,
     )?;
     let (quad, quad_unit, base_quad) = quads(engine, size, Alignment::default(), [1.0, 1.0])?;
@@ -403,7 +527,13 @@ fn buffer_slot(buffers: &mut Vec<BufferSpec>, name: &str, scale: f32) -> usize {
     buffers.len() - 1
 }
 
-fn build_effect(engine: &mut Engine, files: &Files, bindings: &mut Bindings, effect_use: &crate::doc::EffectUse, buffers: &mut Vec<BufferSpec>) -> Result<Vec<Step>, String> {
+fn build_effect(
+    engine: &mut Engine,
+    files: &Files,
+    bindings: &mut Bindings,
+    effect_use: &crate::doc::EffectUse,
+    buffers: &mut Vec<BufferSpec>,
+) -> Result<Vec<Step>, String> {
     let effect = EffectDoc::parse(&read_doc(files, &effect_use.file)?);
     for fbo in &effect.fbos {
         buffer_slot(buffers, &fbo.name, fbo.scale);
@@ -414,7 +544,10 @@ fn build_effect(engine: &mut Engine, files: &Files, bindings: &mut Bindings, eff
     for pass in &effect.passes {
         if pass.command.as_deref() == Some("copy") {
             let (Some(source), Some(target)) = (&pass.source, &pass.target) else { continue };
-            steps.push(Step::Copy { source: buffer_slot(buffers, source, 1.0), target: buffer_slot(buffers, target, 1.0) });
+            steps.push(Step::Copy {
+                source: buffer_slot(buffers, source, 1.0),
+                target: buffer_slot(buffers, target, 1.0),
+            });
             continue;
         }
         let material = MaterialDoc::parse(&read_doc(files, &pass.material)?);
@@ -448,7 +581,9 @@ fn build_effect(engine: &mut Engine, files: &Files, bindings: &mut Bindings, eff
             }
             textures[bind.slot] = match bind.name.as_str() {
                 "previous" => TextureChoice::Previous,
-                name if buffers.iter().any(|b| b.name == name) => TextureChoice::Buffer(buffer_slot(buffers, name, 1.0)),
+                name if buffers.iter().any(|b| b.name == name) => {
+                    TextureChoice::Buffer(buffer_slot(buffers, name, 1.0))
+                }
                 name => TextureChoice::Named(name.to_owned()),
             };
         }
@@ -460,8 +595,18 @@ fn build_effect(engine: &mut Engine, files: &Files, bindings: &mut Bindings, eff
         }
 
         let names: Vec<String> = buffers.iter().map(|b| b.name.clone()).collect();
-        let shade =
-            Shade::compile(&mut engine.share, files, &PassInput { shader: &base.shader, textures: &textures, combos: &combos, constants: &values, buffers: &names }, bindings)?;
+        let shade = Shade::compile(
+            &mut engine.share,
+            files,
+            &PassInput {
+                shader: &base.shader,
+                textures: &textures,
+                combos: &combos,
+                constants: &values,
+                buffers: &names,
+            },
+            bindings,
+        )?;
         let target = pass.target.as_ref().map(|name| buffer_slot(buffers, name, 1.0));
         steps.push(Step::Draw { shade, target });
     }

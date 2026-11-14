@@ -76,7 +76,22 @@ struct Slot {
 
 impl Slot {
     fn new(now: Instant) -> Self {
-        Self { wallpaper: None, shown: Shown::default(), paused: false, clock: 0.0, last_tick: now, last_draw: now, due: now, light_frames: 0, stale: true, waiting: false, error: None, renderer: None, staging: None, frames: (now, 0, 0) }
+        Self {
+            wallpaper: None,
+            shown: Shown::default(),
+            paused: false,
+            clock: 0.0,
+            last_tick: now,
+            last_draw: now,
+            due: now,
+            light_frames: 0,
+            stale: true,
+            waiting: false,
+            error: None,
+            renderer: None,
+            staging: None,
+            frames: (now, 0, 0),
+        }
     }
 }
 
@@ -146,7 +161,8 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let server = Server::bind(&socket)?;
     let (connection, mut queue, display) = Display::connect()?;
     // SAFETY: the display pointer is the connection's, which the daemon keeps for as long as the context.
-    let context = unsafe { gpu::Context::wayland(connection.backend().display_ptr().cast()) }.map_err(|e| e.to_string())?;
+    let context = unsafe { gpu::Context::wayland(connection.backend().display_ptr().cast()) }
+        .map_err(|e| e.to_string())?;
     log::info!("drawing with {}", context.description);
     let state = State::load(&state_file);
     let mut settings = Settings::default();
@@ -155,7 +171,11 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     for (key, value) in &from_flags {
         settings.set(key, value)?;
     }
-    let options = Options { assets, cache_dir: Some(crate::cli::cache_dir()), max_texture_side: settings.texture_max_side };
+    let options = Options {
+        assets,
+        cache_dir: Some(crate::cli::cache_dir()),
+        max_texture_side: settings.texture_max_side,
+    };
     let engine = Engine::new(context.gl(), options).map_err(|e| e.to_string())?;
 
     let found = plugins::discover(&plugins::search_dirs(&plugin_dirs));
@@ -163,7 +183,9 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     for manifest in found.iter().filter(|m| m.kind == plugins::Kind::Shader) {
         let compiled = std::fs::read_to_string(manifest.dir.join(&manifest.shader))
             .map_err(|e| e.to_string())
-            .and_then(|source| wepaper_engine::post::PostPass::compile(context.gl(), &source).map_err(|e| e.to_string()));
+            .and_then(|source| {
+                wepaper_engine::post::PostPass::compile(context.gl(), &source).map_err(|e| e.to_string())
+            });
         match compiled {
             Ok(mut pass) => {
                 pass.enabled = manifest.enabled;
@@ -199,7 +221,8 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     daemon.apply_sound();
     if let Some(wallpaper) = wallpaper {
         // Shown once the outputs are known; until then it is what "last" is.
-        let folder = wepaper_engine::locate::wallpaper(&wallpaper).ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
+        let folder = wepaper_engine::locate::wallpaper(&wallpaper)
+            .ok_or_else(|| format!("no such wallpaper: {wallpaper}"))?;
         daemon.state.last = Shown { wallpaper: Some(folder), ..Shown::default() };
         daemon.state.outputs.clear();
     }
@@ -215,7 +238,9 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
 impl Daemon {
     fn run(&mut self, queue: &mut EventQueue<Display>) -> Result<(), Failure> {
         while !self.quit && !STOP.load(Ordering::Relaxed) {
-            queue.dispatch_pending(&mut self.display).map_err(|e| format!("the compositor went away: {e}"))?;
+            queue
+                .dispatch_pending(&mut self.display)
+                .map_err(|e| format!("the compositor went away: {e}"))?;
             self.follow_outputs();
             for incoming in self.server.receive() {
                 let response = match incoming.request {
@@ -236,7 +261,8 @@ impl Daemon {
                 .chain(waker)
                 .map(|fd| libc::pollfd { fd, events: libc::POLLIN, revents: 0 })
                 .collect();
-            let timeout = wake.map_or(1000, |at| at.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32);
+            let timeout = wake
+                .map_or(1000, |at| at.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32);
             // SAFETY: `fds` is a live array of `fds.len()` pollfd structures.
             let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
             if ready > 0 && fds[0].revents != 0 {
@@ -254,14 +280,25 @@ impl Daemon {
     /// Gives new outputs a surface and what they showed last, and lets go of unplugged ones.
     fn follow_outputs(&mut self) {
         let now = Instant::now();
-        let gone: Vec<u32> = self.display.heads.iter().filter(|head| head.removed || head.sheet.as_ref().is_some_and(|sheet| sheet.closed)).map(|head| head.id).collect();
+        let gone: Vec<u32> = self
+            .display
+            .heads
+            .iter()
+            .filter(|head| head.removed || head.sheet.as_ref().is_some_and(|sheet| sheet.closed))
+            .map(|head| head.id)
+            .collect();
         for id in gone {
             self.slots.remove(&id);
             self.display.heads.retain(|head| head.id != id);
             self.engine.trim();
         }
-        let fresh: Vec<(u32, String)> =
-            self.display.heads.iter().filter(|head| head.announced && head.sheet.is_none()).filter_map(|head| Some((head.id, head.name.clone()?))).collect();
+        let fresh: Vec<(u32, String)> = self
+            .display
+            .heads
+            .iter()
+            .filter(|head| head.announced && head.sheet.is_none())
+            .filter_map(|head| Some((head.id, head.name.clone()?)))
+            .collect();
         for (id, name) in fresh {
             self.display.cover(id, self.settings.layer, self.settings.passthrough);
             let mut slot = Slot::new(now);
@@ -300,7 +337,14 @@ impl Daemon {
 
     /// The size the output's surface is drawn at; a guess until the compositor has said.
     fn viewport(&self, id: u32) -> Viewport {
-        let size = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.sheet.as_ref()).filter(|sheet| sheet.logical.0 > 0).map(|sheet| sheet.pixels());
+        let size = self
+            .display
+            .heads
+            .iter()
+            .find(|head| head.id == id)
+            .and_then(|head| head.sheet.as_ref())
+            .filter(|sheet| sheet.logical.0 > 0)
+            .map(|sheet| sheet.pixels());
         let (width, height) = size.unwrap_or((1920, 1080));
         Viewport { width, height }
     }
@@ -308,27 +352,62 @@ impl Daemon {
     /// Loads what `shown` says for an output: the wallpaper, with its property values
     /// and with what was changed inside it. On failure the output keeps what it had.
     fn load(&mut self, id: u32, shown: &Shown) -> Result<(), String> {
-        let Some(folder) = shown.wallpaper.as_deref() else { return Err("there is no wallpaper to load".to_owned()) };
-        let properties: Vec<(String, wepaper_json::Value)> = shown.properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
+        let Some(folder) = shown.wallpaper.as_deref() else {
+            return Err("there is no wallpaper to load".to_owned());
+        };
+        let properties: Vec<(String, wepaper_json::Value)> =
+            shown.properties.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
         let properties = properties.as_slice();
         // Videos are stored no wider than the widest output: nobody sees more.
-        let widest = self.display.heads.iter().filter_map(|head| head.sheet.as_ref()).filter(|sheet| sheet.logical.0 > 0).map(|sheet| sheet.pixels().0).max().unwrap_or(0);
-        let max_width = if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
+        let widest = self
+            .display
+            .heads
+            .iter()
+            .filter_map(|head| head.sheet.as_ref())
+            .filter(|sheet| sheet.logical.0 > 0)
+            .map(|sheet| sheet.pixels().0)
+            .max()
+            .unwrap_or(0);
+        let max_width =
+            if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
         self.engine.videos().options.max_width = max_width;
         self.engine.videos().options.hardware_decode = self.settings.video_hardware;
         // Under a frame cap, a video's extra frames would be decoded for nothing.
-        self.engine.videos().limits = wepaper_engine::video::Limits { max_width, max_fps: self.settings.fps as f32 };
+        self.engine.videos().limits =
+            wepaper_engine::video::Limits { max_width, max_fps: self.settings.fps as f32 };
         let viewport = self.viewport(id);
         let (_, project) = self.engine.open(folder).map_err(|e| e.to_string())?;
         let kind = project.kind.name();
-        let name = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.name.clone()).unwrap_or_default();
+        let name = self
+            .display
+            .heads
+            .iter()
+            .find(|head| head.id == id)
+            .and_then(|head| head.name.clone())
+            .unwrap_or_default();
 
         // A kind the engine does not draw goes to the plugin that does.
         let loaded = if let Some(manifest) = self.plugins.renderer_for(kind).cloned() {
-            let mut arguments: Vec<String> = ["--dir", &folder.to_string_lossy(), "--file", &project.file, "--output", &name, "--layer", self.settings.layer.name(), "--namespace", wayland::NAMESPACE]
-                .map(str::to_owned)
-                .into();
-            arguments.extend(["--fps".to_owned(), self.settings.fps.to_string(), "--volume".to_owned(), format!("{:.0}", self.settings.volume)]);
+            let mut arguments: Vec<String> = [
+                "--dir",
+                &folder.to_string_lossy(),
+                "--file",
+                &project.file,
+                "--output",
+                &name,
+                "--layer",
+                self.settings.layer.name(),
+                "--namespace",
+                wayland::NAMESPACE,
+            ]
+            .map(str::to_owned)
+            .into();
+            arguments.extend([
+                "--fps".to_owned(),
+                self.settings.fps.to_string(),
+                "--volume".to_owned(),
+                format!("{:.0}", self.settings.volume),
+            ]);
             if self.settings.mute {
                 arguments.push("--muted".to_owned());
             }
@@ -398,10 +477,15 @@ impl Daemon {
     /// Draws every output that is due a frame. Returns when to wake up for the next one, if a timer is what it waits for.
     fn draw_due(&mut self) -> Option<Instant> {
         let now = Instant::now();
-        let interval = (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)));
+        let interval =
+            (self.settings.fps > 0).then(|| Duration::from_secs_f64(1.0 / f64::from(self.settings.fps)));
         let mut wake: Option<Instant> = None;
         // Somebody listens to the system's sound only while a playing wallpaper reads the spectrum.
-        let listen = self.settings.audio_response && self.slots.values().any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
+        let listen = self.settings.audio_response
+            && self
+                .slots
+                .values()
+                .any(|slot| !slot.paused && slot.wallpaper.as_ref().is_some_and(Wallpaper::wants_audio));
         self.engine.listen(listen, now.duration_since(self.last_round).as_secs_f32().min(0.1));
         self.last_round = now;
         // Once a second is plenty for looking after the videos' cheaper copies.
@@ -421,7 +505,10 @@ impl Daemon {
         let ids: Vec<u32> = self.display.heads.iter().map(|head| head.id).collect();
         for id in ids {
             let Some(head) = self.display.heads.iter().find(|head| head.id == id) else { continue };
-            let Some(sheet) = head.sheet.as_ref().filter(|sheet| sheet.egl.is_some() && !sheet.resized) else { continue };
+            let Some(sheet) = head.sheet.as_ref().filter(|sheet| sheet.egl.is_some() && !sheet.resized)
+            else {
+                continue;
+            };
             let Some(slot) = self.slots.get_mut(&id) else { continue };
             let Some(wallpaper) = slot.wallpaper.as_mut() else { continue };
             if slot.paused && !slot.stale {
@@ -459,16 +546,26 @@ impl Daemon {
             if shaded {
                 // The frame goes into a buffer first, then through the output shaders onto the surface.
                 if slot.staging.as_ref().is_none_or(|t| (t.width(), t.height()) != size) {
-                    slot.staging = gpu::Target::new(self.engine.gl(), size.0, size.1, gpu::TextureFormat::Rgba8).inspect_err(|e| log::warn!("{e}")).ok();
+                    slot.staging =
+                        gpu::Target::new(self.engine.gl(), size.0, size.1, gpu::TextureFormat::Rgba8)
+                            .inspect_err(|e| log::warn!("{e}"))
+                            .ok();
                 }
             } else {
                 slot.staging = None;
             }
             let drew = match &slot.staging {
                 Some(staging) => {
-                    let drew = wallpaper.draw(&mut self.engine, &input, Some(staging.framebuffer()), size, slot.stale);
+                    let drew = wallpaper.draw(
+                        &mut self.engine,
+                        &input,
+                        Some(staging.framebuffer()),
+                        size,
+                        slot.stale,
+                    );
                     if drew {
-                        let passes: Vec<&wepaper_engine::post::PostPass> = self.shaders.iter().map(|(_, pass)| pass).collect();
+                        let passes: Vec<&wepaper_engine::post::PostPass> =
+                            self.shaders.iter().map(|(_, pass)| pass).collect();
                         self.engine.post(&passes, staging, None, size, slot.clock as f32);
                     }
                     drew
@@ -485,8 +582,19 @@ impl Daemon {
                 // SAFETY: reads one pixel of the bound default framebuffer into a four-byte buffer.
                 unsafe {
                     gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None);
-                    gl.read_pixels((size.0 / 2) as i32, (size.1 / 2) as i32, 1, 1, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut pixel)));
-                    log::trace!("frame on output {id}: centre pixel {pixel:?}, GL error {:#x}", gl.get_error());
+                    gl.read_pixels(
+                        (size.0 / 2) as i32,
+                        (size.1 / 2) as i32,
+                        1,
+                        1,
+                        glow::RGBA,
+                        glow::UNSIGNED_BYTE,
+                        glow::PixelPackData::Slice(Some(&mut pixel)),
+                    );
+                    log::trace!(
+                        "frame on output {id}: centre pixel {pixel:?}, GL error {:#x}",
+                        gl.get_error()
+                    );
                 }
             }
             slot.stale = false;
@@ -508,7 +616,13 @@ impl Daemon {
             }
             // The request for the next frame rides on the commit the swap makes.
             self.display.request_frame(id);
-            if let Some(egl) = self.display.heads.iter().find(|head| head.id == id).and_then(|head| head.sheet.as_ref()).and_then(|sheet| sheet.egl.as_ref())
+            if let Some(egl) = self
+                .display
+                .heads
+                .iter()
+                .find(|head| head.id == id)
+                .and_then(|head| head.sheet.as_ref())
+                .and_then(|sheet| sheet.egl.as_ref())
                 && let Err(error) = self.context.present(egl)
             {
                 log::warn!("{error}");
@@ -542,4 +656,3 @@ impl Daemon {
         self.state.save(&self.state_file);
     }
 }
-

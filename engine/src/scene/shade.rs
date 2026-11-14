@@ -71,7 +71,10 @@ pub(crate) enum Feed {
     Color,
     Alpha,
     Brightness,
-    Audio { bands: usize, right: bool },
+    Audio {
+        bands: usize,
+        right: bool,
+    },
 }
 
 /// A pass ready to draw.
@@ -181,7 +184,10 @@ fn builtin(name: &str) -> Option<Feed> {
         "g_ModelViewProjectionMatrixInverse" => Feed::MvpInverse,
         "g_ModelMatrix" | "g_AltModelMatrix" => Feed::Model,
         "g_ViewProjectionMatrix" | "g_AltViewProjectionMatrix" => Feed::ViewProjection,
-        "g_EffectTextureProjectionMatrix" | "g_EffectTextureProjectionMatrixInverse" | "g_ModelMatrixInverse" | "g_NormalModelMatrix" => Feed::Identity,
+        "g_EffectTextureProjectionMatrix"
+        | "g_EffectTextureProjectionMatrixInverse"
+        | "g_ModelMatrixInverse"
+        | "g_NormalModelMatrix" => Feed::Identity,
         "g_Time" => Feed::Time,
         "g_Daytime" => Feed::Daytime,
         "g_PointerPosition" | "g_PointerPositionLast" => Feed::PointerPosition,
@@ -202,37 +208,46 @@ fn builtin(name: &str) -> Option<Feed> {
 impl Shade {
     /// Compiles a pass: picks the combos, gets the program, and decides for every
     /// uniform the driver kept where its value will come from.
-    pub(crate) fn compile(share: &mut Share, files: &Files, input: &PassInput<'_>, bindings: &mut Bindings) -> Result<Self, String> {
-        let pair = share.shader(files, input.shader).ok_or_else(|| format!("shader {} is not in the wallpaper or the assets", input.shader))?;
+    pub(crate) fn compile(
+        share: &mut Share,
+        files: &Files,
+        input: &PassInput<'_>,
+        bindings: &mut Bindings,
+    ) -> Result<Self, String> {
+        let pair = share
+            .shader(files, input.shader)
+            .ok_or_else(|| format!("shader {} is not in the wallpaper or the assets", input.shader))?;
 
         // Resolve the textures first: which are bound decides combos.
-        let slots = input.textures.len().max(pair.declared.samplers.iter().map(|s| s.slot + 1).max().unwrap_or(0));
+        let slots =
+            input.textures.len().max(pair.declared.samplers.iter().map(|s| s.slot + 1).max().unwrap_or(0));
         let mut textures: Vec<Option<TextureRef>> = Vec::with_capacity(slots);
-        let mut bound = vec![false; slots];
+        let mut bound = Vec::with_capacity(slots);
         let mut wants_background = false;
         for slot in 0..slots {
             let declared = pair.declared.samplers.iter().find(|s| s.slot == slot);
-            let resolve = |share: &mut Share, name: &str, wants_background: &mut bool| -> Option<TextureRef> {
-                if name == "_rt_FullFrameBuffer" {
-                    *wants_background = true;
-                    return Some(TextureRef::Background);
-                }
-                if let Some(rest) = name.strip_prefix("_rt_imageLayerComposite_") {
-                    // `<id>_a`: the picture of layer <id> after its effects.
-                    return rest.split('_').next().and_then(|id| id.parse().ok()).map(TextureRef::Layer);
-                }
-                if name.starts_with("_rt_") || name.starts_with("_alias_") {
-                    return input.buffers.iter().position(|b| b == name).map(TextureRef::Buffer);
-                }
-                match share.texture(files, name) {
-                    Ok(Loaded::Picture(texture)) => Some(TextureRef::Shared(texture)),
-                    Ok(Loaded::Video(video)) => Some(TextureRef::Video(video)),
-                    Err(why) => {
-                        log::warn!("{why}");
-                        None
+            let resolve =
+                |share: &mut Share, name: &str, wants_background: &mut bool| -> Option<TextureRef> {
+                    if name == "_rt_FullFrameBuffer" {
+                        *wants_background = true;
+                        return Some(TextureRef::Background);
                     }
-                }
-            };
+                    if let Some(rest) = name.strip_prefix("_rt_imageLayerComposite_") {
+                        // `<id>_a`: the picture of layer <id> after its effects.
+                        return rest.split('_').next().and_then(|id| id.parse().ok()).map(TextureRef::Layer);
+                    }
+                    if name.starts_with("_rt_") || name.starts_with("_alias_") {
+                        return input.buffers.iter().position(|b| b == name).map(TextureRef::Buffer);
+                    }
+                    match share.texture(files, name) {
+                        Ok(Loaded::Picture(texture)) => Some(TextureRef::Shared(texture)),
+                        Ok(Loaded::Video(video)) => Some(TextureRef::Video(video)),
+                        Err(why) => {
+                            log::warn!("{why}");
+                            None
+                        }
+                    }
+                };
             let chosen = match input.textures.get(slot).unwrap_or(&TextureChoice::Default) {
                 TextureChoice::Previous => Some(TextureRef::Previous),
                 TextureChoice::Buffer(index) => Some(TextureRef::Buffer(*index)),
@@ -240,8 +255,12 @@ impl Shade {
                 TextureChoice::Named(name) => resolve(share, name, &mut wants_background),
                 TextureChoice::Default => None,
             };
-            bound[slot] = chosen.is_some();
-            let chosen = chosen.or_else(|| declared.and_then(|d| d.default.as_deref()).and_then(|name| resolve(share, name, &mut wants_background)));
+            bound.push(chosen.is_some());
+            let chosen = chosen.or_else(|| {
+                declared
+                    .and_then(|d| d.default.as_deref())
+                    .and_then(|name| resolve(share, name, &mut wants_background))
+            });
             textures.push(chosen);
         }
 
@@ -281,9 +300,16 @@ impl Shade {
         let mut constants = Vec::new();
         let mut wants_audio = false;
         for uniform in &program.uniforms {
-            if matches!(uniform.kind, glow::SAMPLER_2D | glow::SAMPLER_3D | glow::SAMPLER_CUBE | glow::SAMPLER_2D_SHADOW) {
-                let unit: u32 = uniform.name.strip_prefix("g_Texture").and_then(|n| n.parse().ok()).unwrap_or(0);
-                let texture = textures.get_mut(unit as usize).and_then(Option::take).unwrap_or_else(|| TextureRef::Shared(share.white()));
+            if matches!(
+                uniform.kind,
+                glow::SAMPLER_2D | glow::SAMPLER_3D | glow::SAMPLER_CUBE | glow::SAMPLER_2D_SHADOW
+            ) {
+                let unit: u32 =
+                    uniform.name.strip_prefix("g_Texture").and_then(|n| n.parse().ok()).unwrap_or(0);
+                let texture = textures
+                    .get_mut(unit as usize)
+                    .and_then(Option::take)
+                    .unwrap_or_else(|| TextureRef::Shared(share.white()));
                 samplers.push((uniform.clone(), unit, texture));
                 continue;
             }
@@ -296,7 +322,9 @@ impl Shade {
                 if let Some(key) = declared.and_then(|d| d.material.as_deref()) {
                     constants.push((key.to_owned(), feeds.len()));
                 }
-                let constant = declared.and_then(|d| d.material.as_deref()).and_then(|key| input.constants.iter().find(|(name, _)| name == key));
+                let constant = declared
+                    .and_then(|d| d.material.as_deref())
+                    .and_then(|key| input.constants.iter().find(|(name, _)| name == key));
                 match (constant, declared) {
                     (Some((_, value)), _) if value.is_driven() => {
                         let slot = bindings.value(value_floats(&value.value, count));

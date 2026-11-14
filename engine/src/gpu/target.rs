@@ -22,7 +22,13 @@ impl Target {
         let framebuffer = unsafe {
             let framebuffer = gl.raw().create_framebuffer().map_err(GpuError)?;
             gl.bind_framebuffer(Some(framebuffer), (width, height));
-            gl.raw().framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture.raw()), 0);
+            gl.raw().framebuffer_texture_2d(
+                glow::FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(texture.raw()),
+                0,
+            );
             if gl.raw().check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
                 gl.raw().delete_framebuffer(framebuffer);
                 gl.surface_changed();
@@ -80,7 +86,15 @@ impl Target {
         self.bind();
         // SAFETY: the buffer holds width * height RGBA pixels and pack alignment is 1.
         unsafe {
-            self.gl.raw().read_pixels(0, 0, width as i32, height as i32, glow::RGBA, glow::UNSIGNED_BYTE, glow::PixelPackData::Slice(Some(&mut pixels)));
+            self.gl.raw().read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
         }
         // GL's first row is the bottom one.
         let row = width * 4;

@@ -122,8 +122,12 @@ impl Project {
             None => Kind::Scene,
             Some(_) => Kind::Unknown,
         };
-        let mut properties: Vec<Property> =
-            doc.get("general").get("properties").members().map(|(name, doc)| Property::parse(name, doc)).collect();
+        let mut properties: Vec<Property> = doc
+            .get("general")
+            .get("properties")
+            .members()
+            .map(|(name, doc)| Property::parse(name, doc))
+            .collect();
         properties.sort_by(|a, b| a.order.total_cmp(&b.order));
         Self {
             kind,
@@ -143,11 +147,18 @@ impl Property {
         let number = |key: &str| doc.get(key).as_f64();
         let kind_name = doc.get("type").as_str().unwrap_or("").to_lowercase();
         let kind = match kind_name.as_str() {
-            "slider" => PropertyKind::Slider { min: number("min").unwrap_or(0.0), max: number("max").unwrap_or(1.0), step: number("step") },
+            "slider" => PropertyKind::Slider {
+                min: number("min").unwrap_or(0.0),
+                max: number("max").unwrap_or(1.0),
+                step: number("step"),
+            },
             "bool" => PropertyKind::Bool,
             "color" => PropertyKind::Color,
             "combo" => PropertyKind::Combo(
-                doc.get("options").items().map(|o| (o.get("label").as_str().unwrap_or("").to_owned(), o.get("value").clone())).collect(),
+                doc.get("options")
+                    .items()
+                    .map(|o| (o.get("label").as_str().unwrap_or("").to_owned(), o.get("value").clone()))
+                    .collect(),
             ),
             "textinput" => PropertyKind::Text,
             // A `text` property without a value is a label between properties.

@@ -112,7 +112,9 @@ impl Animation {
     /// The value of every component at `frame` of the timeline.
     pub fn sample(&self, frame: f32, out: &mut Vec<f32>) {
         out.clear();
-        out.extend(self.curves.iter().map(|curve| sample_curve(curve, frame, self.wrap.then_some(self.length))));
+        out.extend(
+            self.curves.iter().map(|curve| sample_curve(curve, frame, self.wrap.then_some(self.length))),
+        );
     }
 }
 
@@ -153,7 +155,8 @@ fn between(from: &Key, to: &Key, frame: f32) -> f32 {
     // that the curve has one value per frame.
     let front = from.front.unwrap_or([0.0, 0.0]);
     let back = to.back.unwrap_or([0.0, 0.0]);
-    let x = [from.frame, from.frame + front[0].clamp(0.0, span), to.frame + back[0].clamp(-span, 0.0), to.frame];
+    let x =
+        [from.frame, from.frame + front[0].clamp(0.0, span), to.frame + back[0].clamp(-span, 0.0), to.frame];
     let y = [from.value, from.value + front[1], to.value + back[1], to.value];
     let bezier = |p: &[f32; 4], t: f32| {
         let u = 1.0 - t;
@@ -188,7 +191,10 @@ mod tests {
     #[test]
     fn straight_between_keys_and_flat_outside_them() {
         let a = animation(LINEAR);
-        assert_eq!((a.name.as_str(), a.fps, a.length, a.repeat, a.relative), ("fade", 60.0, 120.0, Repeat::Loop, false));
+        assert_eq!(
+            (a.name.as_str(), a.fps, a.length, a.repeat, a.relative),
+            ("fade", 60.0, 120.0, Repeat::Loop, false)
+        );
         assert_eq!(at(&a, 0.0), 0.0);
         assert!((at(&a, 15.0) - 0.25).abs() < 1e-6);
         assert_eq!(at(&a, 60.0), 1.0);
@@ -218,7 +224,9 @@ mod tests {
 
     #[test]
     fn bezier_handles_bend_the_curve_through_both_keys() {
-        let eased = LINEAR.replace("\"enabled\":false,\"x\":1,", "\"enabled\":true,\"x\":30,").replace("\"enabled\":false,\"x\":-1,", "\"enabled\":true,\"x\":-30,");
+        let eased = LINEAR
+            .replace("\"enabled\":false,\"x\":1,", "\"enabled\":true,\"x\":30,")
+            .replace("\"enabled\":false,\"x\":-1,", "\"enabled\":true,\"x\":-30,");
         let a = animation(&eased);
         assert!(at(&a, 0.0).abs() < 1e-4 && (at(&a, 60.0) - 1.0).abs() < 1e-4);
         // Flat handles ease in and out: slow at the ends, symmetric in the middle.

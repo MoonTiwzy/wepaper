@@ -232,7 +232,10 @@ impl SceneInstance {
         self.project
             .properties
             .iter()
-            .map(|p| PropertyValue { name: p.name.clone(), value: self.bindings.properties.get(&p.name).cloned().unwrap_or_else(|| p.default.clone()) })
+            .map(|p| PropertyValue {
+                name: p.name.clone(),
+                value: self.bindings.properties.get(&p.name).cloned().unwrap_or_else(|| p.default.clone()),
+            })
             .collect()
     }
 
@@ -252,7 +255,11 @@ impl SceneInstance {
                 }
             }
             Change::Floats(slot, floats) => {
-                let three = [floats.first().copied().unwrap_or(0.0), floats.get(1).copied().unwrap_or(0.0), floats.get(2).copied().unwrap_or(0.0)];
+                let three = [
+                    floats.first().copied().unwrap_or(0.0),
+                    floats.get(1).copied().unwrap_or(0.0),
+                    floats.get(2).copied().unwrap_or(0.0),
+                ];
                 match slot {
                     Slot::Scene(field) => match field {
                         SceneField::Zoom => self.zoom = three[0].max(0.01),
@@ -343,7 +350,10 @@ impl SceneInstance {
                 (Some(player), true) => player.set_volume(level),
                 (Some(_), false) => sound.player = None,
                 (None, true) => {
-                    sound.player = sound.file.as_ref().and_then(|file| crate::audio::Sound::play(file, sound.looping, level));
+                    sound.player = sound
+                        .file
+                        .as_ref()
+                        .and_then(|file| crate::audio::Sound::play(file, sound.looping, level));
                     if let Some(player) = &sound.player {
                         player.set_paused(self.paused);
                     }

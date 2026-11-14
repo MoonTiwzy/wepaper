@@ -56,7 +56,14 @@ impl PostPass {
 impl Engine {
     /// Runs the enabled passes of `chain` over `frame` and puts the result into `to`
     /// (`None`: the current surface) of `size`.
-    pub fn post(&mut self, chain: &[&PostPass], frame: &Target, to: Option<glow::Framebuffer>, size: (u32, u32), time: f32) {
+    pub fn post(
+        &mut self,
+        chain: &[&PostPass],
+        frame: &Target,
+        to: Option<glow::Framebuffer>,
+        size: (u32, u32),
+        time: f32,
+    ) {
         let passes: Vec<&PostPass> = chain.iter().copied().filter(|pass| pass.enabled).collect();
         if passes.is_empty() {
             frame.blit(to, size);
@@ -81,14 +88,17 @@ impl Engine {
                 }
             }
             // The newest buffer is the one being drawn into; the input is the one before it.
-            let input = if last { held.last() } else { held.len().checked_sub(2).and_then(|i| held.get(i)) }.map_or(&frame.texture, |t| &t.texture);
+            let input = if last { held.last() } else { held.len().checked_sub(2).and_then(|i| held.get(i)) }
+                .map_or(&frame.texture, |t| &t.texture);
             self.gl.set_blend(Blend::None);
             pass.program.bind();
             self.gl.bind_texture(0, input.raw());
             for uniform in &pass.program.uniforms {
                 match uniform.name.as_str() {
                     "u_Frame" => pass.program.set_sampler(uniform, 0),
-                    "u_Resolution" => pass.program.set(uniform, &[frame.width() as f32, frame.height() as f32]),
+                    "u_Resolution" => {
+                        pass.program.set(uniform, &[frame.width() as f32, frame.height() as f32])
+                    }
                     "u_Time" => pass.program.set(uniform, &[time]),
                     name => {
                         if let Some((_, value)) = pass.params.iter().find(|(param, _)| param == name) {

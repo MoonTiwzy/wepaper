@@ -24,7 +24,15 @@ impl Capture {
     pub(super) fn start() -> Option<Self> {
         let rate = RATE.to_string();
         let mut child = Command::new("parec")
-            .args(["--device=@DEFAULT_MONITOR@", "--raw", "--format=s16le", "--channels=2", "--latency-msec=25", "--client-name=wepaper", "--stream-name=spectrum"])
+            .args([
+                "--device=@DEFAULT_MONITOR@",
+                "--raw",
+                "--format=s16le",
+                "--channels=2",
+                "--latency-msec=25",
+                "--client-name=wepaper",
+                "--stream-name=spectrum",
+            ])
             .arg(format!("--rate={rate}"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -46,7 +54,7 @@ impl Capture {
                 let have = pending + count;
                 let whole = have / 4 * 4;
                 let Ok(mut samples) = shared.lock() else { break };
-                for frame in bytes[..whole].chunks_exact(4) {
+                for frame in bytes[..whole].as_chunks::<4>().0 {
                     samples.push(f32::from(i16::from_le_bytes([frame[0], frame[1]])) / 32768.0);
                     samples.push(f32::from(i16::from_le_bytes([frame[2], frame[3]])) / 32768.0);
                 }

@@ -127,7 +127,14 @@ fn lz4_rejects_overrun() {
 }
 
 /// A TEXB container around `mips`, each `(width, height, bytes, lz4 output size or 0)`.
-fn tex_bytes(container: &str, format: u32, flags: u32, size: (u32, u32), image_kind: i32, mips: &[(u32, u32, Vec<u8>, u32)]) -> Vec<u8> {
+fn tex_bytes(
+    container: &str,
+    format: u32,
+    flags: u32,
+    size: (u32, u32),
+    image_kind: i32,
+    mips: &[(u32, u32, Vec<u8>, u32)],
+) -> Vec<u8> {
     let mut out = b"TEXV0005\0TEXI0001\0".to_vec();
     for v in [format, flags, size.0.next_power_of_two(), size.1.next_power_of_two(), size.0, size.1, 0] {
         u32le(&mut out, v);
@@ -181,7 +188,9 @@ fn parses_raw_and_packed_mips() {
 fn embedded_pictures_are_handed_out_encoded() {
     let bytes = tex_bytes("TEXB0003", 0, 0, (8, 8), 13, &[(8, 8, b"\x89PNG....".to_vec(), 0)]);
     let tex = TextureFile::parse(&bytes).unwrap();
-    assert!(matches!(tex.pixels(&bytes, 0, 0).unwrap(), Pixels::Encoded(data) if data.starts_with(b"\x89PNG")));
+    assert!(
+        matches!(tex.pixels(&bytes, 0, 0).unwrap(), Pixels::Encoded(data) if data.starts_with(b"\x89PNG"))
+    );
 }
 
 #[test]
@@ -190,7 +199,9 @@ fn old_container_and_compressed_formats() {
     let tex = TextureFile::parse(&bytes).unwrap();
     assert_eq!(tex.format, PixelFormat::Dxt5);
     assert!(tex.nearest);
-    assert!(matches!(tex.pixels(&bytes, 0, 0).unwrap(), Pixels::Raw { format: PixelFormat::Dxt5, data } if data.len() == 64));
+    assert!(
+        matches!(tex.pixels(&bytes, 0, 0).unwrap(), Pixels::Raw { format: PixelFormat::Dxt5, data } if data.len() == 64)
+    );
 }
 
 #[test]

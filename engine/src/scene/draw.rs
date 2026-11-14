@@ -63,15 +63,26 @@ impl SceneInstance {
     /// Draws the frame for `input` into `to` (`None`: the current surface) of
     /// `size` pixels. The scene has no buffer of its own: layers go straight
     /// to where the frame is wanted.
-    pub fn render(&mut self, engine: &mut Engine, input: &FrameInput, to: Option<glow::Framebuffer>, size: (u32, u32)) {
+    pub fn render(
+        &mut self,
+        engine: &mut Engine,
+        input: &FrameInput,
+        to: Option<glow::Framebuffer>,
+        size: (u32, u32),
+    ) {
         self.viewport = crate::Viewport { width: size.0.max(1), height: size.1.max(1) };
         let size = (self.viewport.width, self.viewport.height);
         // A scene that blooms is drawn into a buffer first: the bloom reads the finished frame.
         let staged = match self.bloom.as_ref().filter(|bloom| bloom.enabled) {
-            Some(_) => engine.pool.take(size.0, size.1, TextureFormat::Rgba8).inspect_err(|e| log::warn!("bloom: {e}")).ok(),
+            Some(_) => engine
+                .pool
+                .take(size.0, size.1, TextureFormat::Rgba8)
+                .inspect_err(|e| log::warn!("bloom: {e}"))
+                .ok(),
             None => None,
         };
-        let canvas = Canvas { framebuffer: staged.as_ref().map_or(to, |target| Some(target.framebuffer())), size };
+        let canvas =
+            Canvas { framebuffer: staged.as_ref().map_or(to, |target| Some(target.framebuffer())), size };
         for video in &self.videos {
             video.stream.borrow_mut().poll();
         }
@@ -106,7 +117,10 @@ impl SceneInstance {
             eased_pointer: self.eased_pointer,
             // The pointer counts from the top left; the scene's y points up.
             parallax: Some(self.parallax).filter(|p| p.enabled).map(|p| {
-                let pointer = [(0.5 - self.eased_pointer[0]) * self.scene_size[0], (self.eased_pointer[1] - 0.5) * self.scene_size[1]];
+                let pointer = [
+                    (0.5 - self.eased_pointer[0]) * self.scene_size[0],
+                    (self.eased_pointer[1] - 0.5) * self.scene_size[1],
+                ];
                 ([pointer[0] * p.mouse_influence, pointer[1] * p.mouse_influence], p.amount)
             }),
             scene_center: [self.scene_size[0] / 2.0, self.scene_size[1] / 2.0],
@@ -116,7 +130,9 @@ impl SceneInstance {
         canvas.bind(&engine.gl);
         engine.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
         // How many output pixels one scene unit covers: layer buffers are sized by it.
-        let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0).abs().max((frame.view_projection.0[5] * frame.screen[1] / 2.0).abs());
+        let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0)
+            .abs()
+            .max((frame.view_projection.0[5] * frame.screen[1] / 2.0).abs());
         // Text that changed is drawn into its texture before anything samples it.
         for layer in &mut self.layers {
             if let LayerKind::Image(image) = &mut layer.kind
@@ -136,14 +152,44 @@ impl SceneInstance {
             }
             if let LayerKind::Image(image) = &layer.kind {
                 let keep = self.provides.contains(&layer.id);
-                draw_image(engine, &frame, layer, image, canvas, &mut background, &mut pictures, keep, density);
+                draw_image(
+                    engine,
+                    &frame,
+                    layer,
+                    image,
+                    canvas,
+                    &mut background,
+                    &mut pictures,
+                    keep,
+                    density,
+                );
             }
         }
         if let (Some(staged), Some(bloom)) = (&staged, &self.bloom) {
-            let flat = LayerState { mvp: Mat4::IDENTITY, model: Mat4::IDENTITY, color: [1.0; 3], alpha: 1.0, brightness: 1.0, authored: frame.screen };
-            let run = |engine: &mut Engine, shade: &super::shade::Shade, input: &Texture, extra: Option<&Texture>| {
+            let flat = LayerState {
+                mvp: Mat4::IDENTITY,
+                model: Mat4::IDENTITY,
+                color: [1.0; 3],
+                alpha: 1.0,
+                brightness: 1.0,
+                authored: frame.screen,
+            };
+            let run = |engine: &mut Engine,
+                       shade: &super::shade::Shade,
+                       input: &Texture,
+                       extra: Option<&Texture>| {
                 engine.gl.set_blend(Blend::None);
-                apply(&engine.gl, shade, &frame, &flat, Some(input), &[extra], None, &pictures, engine.white());
+                apply(
+                    &engine.gl,
+                    shade,
+                    &frame,
+                    &flat,
+                    Some(input),
+                    &[extra],
+                    None,
+                    &pictures,
+                    engine.white(),
+                );
                 engine.fullscreen.draw();
             };
             let small = |divisor: u32| ((size.0 / divisor).max(1), (size.1 / divisor).max(1));
@@ -169,7 +215,9 @@ impl SceneInstance {
                 staged.blit(to, size);
             }
         }
-        for target in background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)).chain(staged) {
+        for target in
+            background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)).chain(staged)
+        {
             engine.pool.give(target);
         }
         engine.pool.end_frame();
@@ -179,11 +227,16 @@ impl SceneInstance {
     fn update_transforms(&mut self) {
         for index in 0..self.layers.len() {
             let layer = &self.layers[index];
-            let local = Mat4::translation(layer.origin).mul(&Mat4::rotation(layer.angles)).mul(&Mat4::scaling(layer.scale));
+            let local = Mat4::translation(layer.origin)
+                .mul(&Mat4::rotation(layer.angles))
+                .mul(&Mat4::scaling(layer.scale));
             // Parents come before their children in a scene; one that does not is ignored.
-            let parent = layer.parent.filter(|&p| p < index).map(|p| (self.layers[p].world, self.layers[p].shown));
+            let parent =
+                layer.parent.filter(|&p| p < index).map(|p| (self.layers[p].world, self.layers[p].shown));
             let (world, shown) = match parent {
-                Some((parent_world, parent_shown)) => (parent_world.mul(&local), parent_shown && layer.visible),
+                Some((parent_world, parent_shown)) => {
+                    (parent_world.mul(&local), parent_shown && layer.visible)
+                }
                 None => (local, layer.visible),
             };
             let layer = &mut self.layers[index];
@@ -237,8 +290,12 @@ fn draw_image(
     // the pointer, scaled by its depth: near layers travel further than far ones.
     let world = match frame.parallax {
         Some((pointer, amount)) if layer.parallax_depth != [0.0, 0.0] => {
-            let from_center = [layer.world.0[12] - frame.scene_center[0], layer.world.0[13] - frame.scene_center[1]];
-            let shift = [(from_center[0] + pointer[0]) * layer.parallax_depth[0] * amount, (from_center[1] + pointer[1]) * layer.parallax_depth[1] * amount];
+            let from_center =
+                [layer.world.0[12] - frame.scene_center[0], layer.world.0[13] - frame.scene_center[1]];
+            let shift = [
+                (from_center[0] + pointer[0]) * layer.parallax_depth[0] * amount,
+                (from_center[1] + pointer[1]) * layer.parallax_depth[1] * amount,
+            ];
             Mat4::translation([shift[0], shift[1], 0.0]).mul(&layer.world)
         }
         _ => layer.world,
@@ -256,8 +313,10 @@ fn draw_image(
         return; // A compose layer without effects changes nothing.
     }
 
-    let needs_background =
-        image.mode != ImageMode::Normal || image.blend_pass.is_some() || image.base.wants_background || steps.iter().any(|s| matches!(s, Step::Draw { shade, .. } if shade.wants_background));
+    let needs_background = image.mode != ImageMode::Normal
+        || image.blend_pass.is_some()
+        || image.base.wants_background
+        || steps.iter().any(|s| matches!(s, Step::Draw { shade, .. } if shade.wants_background));
     if needs_background {
         let copy = match background.take() {
             Some(copy) => copy,
@@ -279,7 +338,17 @@ fn draw_image(
     if steps.is_empty() && !keep {
         scene.bind(&engine.gl);
         engine.gl.set_blend(image.blend);
-        apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, pictures, engine.white());
+        apply(
+            &engine.gl,
+            &image.base,
+            frame,
+            &state,
+            None,
+            &[],
+            background_texture,
+            pictures,
+            engine.white(),
+        );
         image.quad.draw();
         return;
     }
@@ -291,7 +360,8 @@ fn draw_image(
         ImageMode::Fullscreen => scene.size,
         _ => (((image.size[0] * scale).ceil() as u32).max(1), ((image.size[1] * scale).ceil() as u32).max(1)),
     };
-    let mut chain = Chain { ping: [None, None], current: None, named: image.buffers.iter().map(|_| None).collect() };
+    let mut chain =
+        Chain { ping: [None, None], current: None, named: image.buffers.iter().map(|_| None).collect() };
     let fullscreen = image.mode == ImageMode::Fullscreen;
 
     // The base pass fills the first buffer.
@@ -302,17 +372,47 @@ fn draw_image(
         match image.mode {
             // The compose shader places itself by texture coordinate and reads the scene by position.
             ImageMode::Compose => {
-                apply(&engine.gl, &image.base, frame, &state, None, &[], background_texture, pictures, engine.white());
+                apply(
+                    &engine.gl,
+                    &image.base,
+                    frame,
+                    &state,
+                    None,
+                    &[],
+                    background_texture,
+                    pictures,
+                    engine.white(),
+                );
                 image.quad_unit.draw();
             }
             ImageMode::Fullscreen => {
                 let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, pictures, engine.white());
+                apply(
+                    &engine.gl,
+                    &image.base,
+                    frame,
+                    &flat,
+                    None,
+                    &[],
+                    background_texture,
+                    pictures,
+                    engine.white(),
+                );
                 engine.fullscreen.draw();
             }
             ImageMode::Normal => {
                 let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                apply(&engine.gl, &image.base, frame, &flat, None, &[], background_texture, pictures, engine.white());
+                apply(
+                    &engine.gl,
+                    &image.base,
+                    frame,
+                    &flat,
+                    None,
+                    &[],
+                    background_texture,
+                    pictures,
+                    engine.white(),
+                );
                 image.base_quad.draw();
             }
         }
@@ -325,7 +425,9 @@ fn draw_image(
             match step {
                 Step::Copy { source, target } => {
                     ensure_named(engine, &mut chain, image, *target, size)?;
-                    if let (Some(from), Some(to)) = (chain.named[*source].as_ref(), chain.named[*target].as_ref()) {
+                    if let (Some(from), Some(to)) =
+                        (chain.named[*source].as_ref(), chain.named[*target].as_ref())
+                    {
                         from.copy_to(to);
                     }
                 }
@@ -341,21 +443,46 @@ fn draw_image(
                         engine.gl.set_blend(Blend::None);
                     } else {
                         if chain.ping[next].is_none() {
-                            chain.ping[next] = Some(engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?);
+                            chain.ping[next] =
+                                Some(engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?);
                         }
                         chain.ping[next].as_ref().expect("just ensured").bind();
                         engine.gl.set_blend(Blend::None);
                     }
                     let previous = chain.current.and_then(|c| chain.ping[c].as_ref()).map(|t| &t.texture);
                     // A named target may be one this very pass reads: GL forbids that, so it reads white instead.
-                    let reading: Vec<Option<&Texture>> =
-                        chain.named.iter().enumerate().map(|(i, t)| if Some(i) == *target { None } else { t.as_ref().map(|t| &t.texture) }).collect();
+                    let reading: Vec<Option<&Texture>> = chain
+                        .named
+                        .iter()
+                        .enumerate()
+                        .map(|(i, t)| if Some(i) == *target { None } else { t.as_ref().map(|t| &t.texture) })
+                        .collect();
                     if to_scene && !fullscreen {
-                        apply(&engine.gl, shade, frame, &state, previous, &reading, background_texture, pictures, engine.white());
+                        apply(
+                            &engine.gl,
+                            shade,
+                            frame,
+                            &state,
+                            previous,
+                            &reading,
+                            background_texture,
+                            pictures,
+                            engine.white(),
+                        );
                         image.quad_unit.draw();
                     } else {
                         let flat = LayerState { mvp: Mat4::IDENTITY, ..copy_state(&state) };
-                        apply(&engine.gl, shade, frame, &flat, previous, &reading, background_texture, pictures, engine.white());
+                        apply(
+                            &engine.gl,
+                            shade,
+                            frame,
+                            &flat,
+                            previous,
+                            &reading,
+                            background_texture,
+                            pictures,
+                            engine.white(),
+                        );
                         engine.fullscreen.draw();
                     }
                     if to_scene {
@@ -373,7 +500,17 @@ fn draw_image(
                 // The blend shader reads the frame behind the layer and writes the mix.
                 Some(blend) if !fullscreen => {
                     engine.gl.set_blend(Blend::None);
-                    apply(&engine.gl, blend, frame, &state, Some(&result.texture), &[], background_texture, pictures, engine.white());
+                    apply(
+                        &engine.gl,
+                        blend,
+                        frame,
+                        &state,
+                        Some(&result.texture),
+                        &[],
+                        background_texture,
+                        pictures,
+                        engine.white(),
+                    );
                     image.quad_unit.draw();
                 }
                 _ => {
@@ -403,14 +540,28 @@ fn draw_image(
 }
 
 fn copy_state(state: &LayerState) -> LayerState {
-    LayerState { mvp: state.mvp, model: state.model, color: state.color, alpha: state.alpha, brightness: state.brightness, authored: state.authored }
+    LayerState {
+        mvp: state.mvp,
+        model: state.model,
+        color: state.color,
+        alpha: state.alpha,
+        brightness: state.brightness,
+        authored: state.authored,
+    }
 }
 
 /// Makes sure the layer's named buffer `slot` exists.
-fn ensure_named(engine: &mut Engine, chain: &mut Chain, image: &ImageLayer, slot: usize, size: (u32, u32)) -> Result<(), crate::gpu::GpuError> {
+fn ensure_named(
+    engine: &mut Engine,
+    chain: &mut Chain,
+    image: &ImageLayer,
+    slot: usize,
+    size: (u32, u32),
+) -> Result<(), crate::gpu::GpuError> {
     if chain.named[slot].is_none() {
         let scale = image.buffers[slot].scale.max(1.0);
-        let (w, h) = (((size.0 as f32 / scale).ceil() as u32).max(1), ((size.1 as f32 / scale).ceil() as u32).max(1));
+        let (w, h) =
+            (((size.0 as f32 / scale).ceil() as u32).max(1), ((size.1 as f32 / scale).ceil() as u32).max(1));
         chain.named[slot] = Some(engine.pool.take(w, h, TextureFormat::Rgba8)?);
     }
     Ok(())
@@ -441,27 +592,44 @@ fn apply(
                     && let Some(sprite) = sheet.frames.get(sheet.frame_at(frame.time))
                 {
                     let (w, h) = (shared.resolution[0], shared.resolution[1]);
-                    sprites[*unit as usize & 15] =
-                        Some(([sprite.width / w, sprite.skew.0 / h, sprite.skew.1 / w, sprite.height / h], [sprite.x / w, sprite.y / h]));
+                    sprites[*unit as usize & 15] = Some((
+                        [sprite.width / w, sprite.skew.0 / h, sprite.skew.1 / w, sprite.height / h],
+                        [sprite.x / w, sprite.y / h],
+                    ));
                 }
                 (shared.texture.raw(), shared.resolution)
             }
             TextureRef::Previous => (previous.unwrap_or(white).raw(), authored),
-            TextureRef::Buffer(slot) => (named.get(*slot).copied().flatten().unwrap_or(white).raw(), authored),
-            TextureRef::Background => (background.unwrap_or(white).raw(), [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]]),
+            TextureRef::Buffer(slot) => {
+                (named.get(*slot).copied().flatten().unwrap_or(white).raw(), authored)
+            }
+            TextureRef::Background => (
+                background.unwrap_or(white).raw(),
+                [frame.screen[0], frame.screen[1], frame.screen[0], frame.screen[1]],
+            ),
             TextureRef::Layer(id) => match pictures.iter().find(|(layer, ..)| layer == id) {
                 Some((_, picture, size)) => (picture.texture.raw(), [size[0], size[1], size[0], size[1]]),
                 // A layer drawn later, or hidden, has no picture yet.
                 None => (white.raw(), authored),
             },
             TextureRef::Text(surface) => match surface.texture.borrow().as_ref() {
-                Some(texture) => (texture.raw(), [texture.width as f32, texture.height as f32, texture.width as f32, texture.height as f32]),
+                Some(texture) => (
+                    texture.raw(),
+                    [
+                        texture.width as f32,
+                        texture.height as f32,
+                        texture.width as f32,
+                        texture.height as f32,
+                    ],
+                ),
                 None => (white.raw(), authored),
             },
             TextureRef::Video(video) => {
                 let video = video.borrow();
                 match (video.texture(), video.size()) {
-                    (Some(texture), Some((w, h))) => (texture.raw(), [w as f32, h as f32, w as f32, h as f32]),
+                    (Some(texture), Some((w, h))) => {
+                        (texture.raw(), [w as f32, h as f32, w as f32, h as f32])
+                    }
                     // Until its first frame a video shows nothing.
                     _ => (white.raw(), authored),
                 }
@@ -495,9 +663,16 @@ fn apply(
                 }
             }
             Feed::Resolution(unit) => set(&resolutions[*unit as usize & 15]),
-            Feed::SpriteRotation(unit) => set(&sprites[*unit as usize & 15].map_or([1.0, 0.0, 0.0, 1.0], |s| s.0)),
+            Feed::SpriteRotation(unit) => {
+                set(&sprites[*unit as usize & 15].map_or([1.0, 0.0, 0.0, 1.0], |s| s.0))
+            }
             Feed::SpriteTranslation(unit) => set(&sprites[*unit as usize & 15].map_or([0.0, 0.0], |s| s.1)),
-            Feed::Color4 => set(&[state.color[0] * state.brightness, state.color[1] * state.brightness, state.color[2] * state.brightness, state.alpha]),
+            Feed::Color4 => set(&[
+                state.color[0] * state.brightness,
+                state.color[1] * state.brightness,
+                state.color[2] * state.brightness,
+                state.alpha,
+            ]),
             Feed::Color => set(&state.color),
             Feed::Alpha => set(&[state.alpha]),
             Feed::Brightness => set(&[state.brightness]),

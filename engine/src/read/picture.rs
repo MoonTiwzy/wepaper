@@ -46,9 +46,13 @@ fn decode_png(data: &[u8]) -> Result<Picture, PictureError> {
     let pixels = (info.width * info.height) as usize;
     let rgba = match info.color_type {
         png::ColorType::Rgba => buffer,
-        png::ColorType::Rgb => buffer.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        png::ColorType::Rgb => {
+            buffer.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect()
+        }
         png::ColorType::Grayscale => buffer.iter().flat_map(|&g| [g, g, g, 255]).collect(),
-        png::ColorType::GrayscaleAlpha => buffer.chunks_exact(2).flat_map(|p| [p[0], p[0], p[0], p[1]]).collect(),
+        png::ColorType::GrayscaleAlpha => {
+            buffer.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect()
+        }
         png::ColorType::Indexed => return Err(PictureError("PNG: palette was not expanded".to_owned())),
     };
     if rgba.len() != pixels * 4 {
@@ -62,12 +66,15 @@ fn decode_jpeg(data: &[u8]) -> Result<Picture, PictureError> {
     let options = DecoderOptions::default().jpeg_set_out_colorspace(ColorSpace::RGBA);
     let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, options);
     let pixels = decoder.decode().map_err(|e| PictureError(format!("JPEG: {e}")))?;
-    let (width, height) = decoder.dimensions().ok_or_else(|| PictureError("JPEG: no dimensions".to_owned()))?;
+    let (width, height) =
+        decoder.dimensions().ok_or_else(|| PictureError("JPEG: no dimensions".to_owned()))?;
     // A grey picture comes back with one byte a pixel whatever was asked for.
     let count = width * height;
     let rgba = match pixels.len() {
         n if n == count * 4 => pixels,
-        n if n == count * 3 => pixels.chunks_exact(3).flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        n if n == count * 3 => {
+            pixels.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect()
+        }
         n if n == count => pixels.iter().flat_map(|&g| [g, g, g, 255]).collect(),
         _ => return Err(PictureError("JPEG: unexpected amount of pixel data".to_owned())),
     };

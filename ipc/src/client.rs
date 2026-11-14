@@ -22,7 +22,10 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Connection(error) if error.kind() == std::io::ErrorKind::NotFound || error.kind() == std::io::ErrorKind::ConnectionRefused => {
+            Error::Connection(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    || error.kind() == std::io::ErrorKind::ConnectionRefused =>
+            {
                 f.write_str("the daemon is not running (start it: wepaper daemon)")
             }
             Error::Connection(error) => write!(f, "connection to the daemon: {error}"),
@@ -42,7 +45,11 @@ impl From<std::io::Error> for Error {
 
 /// Where the daemon listens unless told otherwise: `$XDG_RUNTIME_DIR/wepaper.sock`.
 pub fn default_socket() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|dir| dir.is_absolute()).unwrap_or_else(std::env::temp_dir).join("wepaper.sock")
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .unwrap_or_else(std::env::temp_dir)
+        .join("wepaper.sock")
 }
 
 /// A connection to the daemon.
@@ -74,7 +81,9 @@ impl Client {
         let response = self.read()?;
         match response.get("ok").as_bool() {
             Some(true) => Ok(response.get("value").clone()),
-            Some(false) => Err(Error::Refused(response.get("error").as_str().unwrap_or("the daemon refused").to_owned())),
+            Some(false) => {
+                Err(Error::Refused(response.get("error").as_str().unwrap_or("the daemon refused").to_owned()))
+            }
             None => Err(Error::Protocol(line)),
         }
     }

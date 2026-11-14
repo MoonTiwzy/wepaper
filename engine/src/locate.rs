@@ -48,7 +48,10 @@ pub fn steam_libraries() -> Vec<PathBuf> {
 
 /// Wallpaper Engine's stock `assets` folder, when it is installed.
 pub fn assets() -> Option<PathBuf> {
-    steam_libraries().into_iter().map(|library| library.join("steamapps/common/wallpaper_engine/assets")).find(|path| path.is_dir())
+    steam_libraries()
+        .into_iter()
+        .map(|library| library.join("steamapps/common/wallpaper_engine/assets"))
+        .find(|path| path.is_dir())
 }
 
 /// The folder of a wallpaper named by a path or by a workshop id.
@@ -62,7 +65,10 @@ pub fn wallpaper(name: &str) -> Option<PathBuf> {
         return path.canonicalize().ok()?.parent().map(Path::to_owned);
     }
     if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
-        return steam_libraries().into_iter().map(|library| library.join("steamapps/workshop/content").join(APP_ID).join(name)).find(|path| path.is_dir());
+        return steam_libraries()
+            .into_iter()
+            .map(|library| library.join("steamapps/workshop/content").join(APP_ID).join(name))
+            .find(|path| path.is_dir());
     }
     None
 }
