@@ -1,8 +1,10 @@
 //! A blocking client.
 
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use wepaper_json::Value;
 
@@ -65,6 +67,27 @@ impl Client {
         Ok(Self { reader: BufReader::new(stream.try_clone()?), writer: stream })
     }
 
+    /// How long a call waits for the daemon; `None`, as a new client has it, waits for
+    /// as long as the daemon takes. A call that ran out of time fails with
+    /// [`Error::Connection`] of the kind `WouldBlock` or `TimedOut`.
+    pub fn set_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.writer.set_read_timeout(timeout)?;
+        self.writer.set_write_timeout(timeout)
+    }
+
+    /// Waits for the daemon to close the connection, as it does when it goes, for as
+    /// long as the timeout allows. Whether it did.
+    pub fn closed(&mut self) -> bool {
+        let mut rest = String::new();
+        loop {
+            match self.reader.read_line(&mut rest) {
+                Ok(0) => return true,
+                Ok(_) => rest.clear(),
+                Err(_) => return false,
+            }
+        }
+    }
+
     fn read(&mut self) -> Result<Value, Error> {
         let mut line = String::new();
         if self.reader.read_line(&mut line)? == 0 {
@@ -92,5 +115,11 @@ impl Client {
     pub fn watch(mut self) -> Result<impl Iterator<Item = Value>, Error> {
         self.call(&Request::Watch)?;
         Ok(std::iter::from_fn(move || self.read().ok()))
+    }
+}
+
+impl AsRawFd for Client {
+    fn as_raw_fd(&self) -> RawFd {
+        self.writer.as_raw_fd()
     }
 }

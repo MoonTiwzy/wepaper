@@ -58,13 +58,17 @@ pub(crate) const RENDER_PARAM_FLIP_Y: c_int = 4;
 pub(crate) const RENDER_PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 pub(crate) const RENDER_UPDATE_FRAME: u64 = 1;
 /// What `Event::data` points at for [`EVENT_END_FILE`] (`mpv_event_end_file`): only its
-/// first field is read.
+/// first fields are read.
 #[repr(C)]
 pub(crate) struct EndFile {
     /// Why playback of the file ended (`mpv_end_file_reason`).
     pub(crate) reason: c_int,
+    /// What went wrong, when the reason is an error.
+    pub(crate) error: c_int,
 }
 
+/// `MPV_END_FILE_REASON_EOF`: the file played to its end.
+pub(crate) const END_FILE_REASON_EOF: c_int = 0;
 /// `MPV_END_FILE_REASON_ERROR`: the file could not be played.
 pub(crate) const END_FILE_REASON_ERROR: c_int = 4;
 
@@ -82,6 +86,7 @@ pub(crate) struct EventProperty {
     pub(crate) format: c_int,
     pub(crate) data: *mut c_void,
 }
+pub(crate) const FORMAT_STRING: c_int = 1;
 pub(crate) const FORMAT_INT64: c_int = 4;
 pub(crate) const FORMAT_DOUBLE: c_int = 5;
 
@@ -92,10 +97,13 @@ pub(crate) struct Api {
     pub(crate) initialize: unsafe extern "C" fn(*mut Handle) -> c_int,
     pub(crate) terminate_destroy: unsafe extern "C" fn(*mut Handle),
     pub(crate) set_option_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
-    pub(crate) set_property_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
+    /// Does not wait for the player: the answer comes as an event nobody needs.
+    pub(crate) set_property_async:
+        unsafe extern "C" fn(*mut Handle, u64, *const c_char, c_int, *mut c_void) -> c_int,
     pub(crate) get_property: unsafe extern "C" fn(*mut Handle, *const c_char, c_int, *mut c_void) -> c_int,
     pub(crate) observe_property: unsafe extern "C" fn(*mut Handle, u64, *const c_char, c_int) -> c_int,
     pub(crate) command: unsafe extern "C" fn(*mut Handle, *mut *const c_char) -> c_int,
+    pub(crate) command_async: unsafe extern "C" fn(*mut Handle, u64, *mut *const c_char) -> c_int,
     pub(crate) wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut Event,
     pub(crate) error_string: unsafe extern "C" fn(c_int) -> *const c_char,
     pub(crate) render_context_create:
@@ -141,10 +149,11 @@ fn load(name: &str) -> Option<Api> {
             initialize: symbol!("mpv_initialize"),
             terminate_destroy: symbol!("mpv_terminate_destroy"),
             set_option_string: symbol!("mpv_set_option_string"),
-            set_property_string: symbol!("mpv_set_property_string"),
+            set_property_async: symbol!("mpv_set_property_async"),
             get_property: symbol!("mpv_get_property"),
             observe_property: symbol!("mpv_observe_property"),
             command: symbol!("mpv_command"),
+            command_async: symbol!("mpv_command_async"),
             wait_event: symbol!("mpv_wait_event"),
             error_string: symbol!("mpv_error_string"),
             render_context_create: symbol!("mpv_render_context_create"),
@@ -154,5 +163,38 @@ fn load(name: &str) -> Option<Api> {
             render_context_free: symbol!("mpv_render_context_free"),
             _library: library,
         })
+    }
+}
+
+/// A player to be shut down, on its way to the thread that does it, with what it
+/// needs until it is gone.
+struct Leaving<T>(&'static Api, *mut Handle, T);
+// SAFETY: a handle may be used from any thread, and this one is used by nobody else.
+unsafe impl<T: Send> Send for Leaving<T> {}
+
+impl<T> Leaving<T> {
+    fn go(self) {
+        // SAFETY: what `dismiss` was promised.
+        unsafe { (self.0.terminate_destroy)(self.1) };
+        drop(self.2);
+    }
+}
+
+/// Shuts a player down without waiting for it. libmpv's own call returns when the
+/// player's threads are gone, and a player caught in its audio output never gets
+/// there: whoever asked for a sound to stop would stand with it.
+///
+/// `needs` is what the player reads from to its last moment (the file it plays, held
+/// open under a name of ours): it is let go of once the player is gone.
+///
+/// # Safety
+/// `handle` is a live player and nothing uses it afterwards; a render context made
+/// for it is already freed.
+pub(crate) unsafe fn dismiss<T: Send + 'static>(api: &'static Api, handle: *mut Handle, needs: T) {
+    let leaving = Leaving(api, handle, needs);
+    let spawned = std::thread::Builder::new().name("wepaper-dismiss".into()).spawn(move || leaving.go());
+    if spawned.is_err() {
+        // No thread to wait on: the player stays, which is better than standing with it.
+        log::warn!("a player could not be shut down");
     }
 }

@@ -88,6 +88,7 @@ fn field<'a>(scripted: &'a Scripted) -> Field<'a> {
         Slot::LayerAlpha(_) => Field::Alpha,
         Slot::LayerColor(_) => Field::Color,
         Slot::LayerText(_) => Field::Text,
+        Slot::LayerVolume(_) => Field::Named("volume"),
         Slot::EffectVisible(_, effect) => Field::EffectVisible(effect),
         Slot::Value(_) => match scripted.effect {
             Some(effect) => Field::EffectConstant(effect, name),
@@ -127,6 +128,9 @@ impl SceneInstance {
             Field::Alpha => Slot::LayerAlpha(layer),
             Field::Color => Slot::LayerColor(layer),
             Field::Text => Slot::LayerText(layer),
+            Field::Named("volume") if matches!(self.layers.get(layer)?.kind, LayerKind::Sound(_)) => {
+                Slot::LayerVolume(layer)
+            }
             Field::EffectVisible(effect) => Slot::EffectVisible(layer, effect),
             Field::AnimationLayer(which, name) => Slot::Puppet(
                 layer,
@@ -159,6 +163,10 @@ impl SceneInstance {
             }
             Slot::LayerAlpha(index) => image(index).map_or(Datum::Null, |image| datum(&[image.alpha])),
             Slot::LayerColor(index) => image(index).map_or(Datum::Null, |image| datum(&image.color)),
+            Slot::LayerVolume(index) => match layer(index).map(|layer| &layer.kind) {
+                Some(LayerKind::Sound(sound)) => datum(&[sound.volume]),
+                _ => Datum::Null,
+            },
             Slot::LayerText(index) => image(index)
                 .and_then(|image| image.text.as_ref())
                 .map_or(Datum::Null, |text| Datum::Text(text.text.clone())),
@@ -477,6 +485,7 @@ impl SceneInstance {
             | Slot::LayerScale(layer)
             | Slot::LayerAngles(layer)
             | Slot::LayerText(layer)
+            | Slot::LayerVolume(layer)
             | Slot::EffectVisible(layer, _)
             | Slot::Puppet(layer, ..)
             | Slot::Instance(layer, _) => Some(layer),
@@ -673,6 +682,24 @@ impl Host for SceneHost<'_> {
                     Some(datum(&[image.puppet.as_ref().map_or(0, |puppet| puppet.layers.len()) as f32]))
                 }
                 _ => Some(datum(&[0.0])),
+            },
+            "play" | "pause" | "stop" | "isPlaying" => match &mut self.scene.layers.get_mut(index)?.kind {
+                LayerKind::Sound(sound) => Some(match method {
+                    "play" => {
+                        sound.play();
+                        Datum::Null
+                    }
+                    "pause" => {
+                        sound.pause();
+                        Datum::Null
+                    }
+                    "stop" => {
+                        sound.stop();
+                        Datum::Null
+                    }
+                    _ => Datum::Bool(sound.is_playing()),
+                }),
+                _ => None,
             },
             _ => {
                 let action = method.strip_prefix("animation.")?;

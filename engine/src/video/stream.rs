@@ -226,7 +226,7 @@ impl VideoStream {
             }
             let code = (api.initialize)(handle);
             if code < 0 {
-                (api.terminate_destroy)(handle);
+                mpv::dismiss(api, handle, ());
                 return Err(fail(code, "libmpv did not start"));
             }
 
@@ -246,7 +246,7 @@ impl VideoStream {
             drop(Box::from_raw(gl_box));
             gl.invalidate();
             if code < 0 {
-                (api.terminate_destroy)(handle);
+                mpv::dismiss(api, handle, ());
                 return Err(fail(code, "libmpv could not render with this OpenGL context"));
             }
             let signal = Box::into_raw(Box::new(Signal { fresh: AtomicBool::new(false), waker }));
@@ -319,11 +319,21 @@ impl VideoStream {
         (code >= 0).then_some(value)
     }
 
+    /// Sent, not waited for: the player's thread may be busy for longer than a frame.
     fn set(&self, name: &CStr, value: &str) {
-        if let Ok(value) = CString::new(value) {
-            // SAFETY: both strings are NUL-terminated and live for the call.
-            unsafe { (self.api.set_property_string)(self.handle, name.as_ptr(), value.as_ptr()) };
-        }
+        let Ok(value) = CString::new(value) else { return };
+        let mut pointer: *const std::ffi::c_char = value.as_ptr();
+        // SAFETY: the name and the value are NUL-terminated and live for the call, which
+        // copies them; a string property takes a pointer to the string's pointer.
+        unsafe {
+            (self.api.set_property_async)(
+                self.handle,
+                0,
+                name.as_ptr(),
+                mpv::FORMAT_STRING,
+                (&raw mut pointer).cast(),
+            )
+        };
     }
 
     /// Draws the newest frame into the texture if there is one. Returns whether the
@@ -532,7 +542,8 @@ impl Drop for VideoStream {
         unsafe {
             (self.api.render_context_set_update_callback)(self.render, None, std::ptr::null_mut());
             (self.api.render_context_free)(self.render);
-            (self.api.terminate_destroy)(self.handle);
+            // The player goes on a thread of its own, and the file it reads goes after it.
+            mpv::dismiss(self.api, self.handle, self.file.take());
             drop(Box::from_raw(self.signal as *mut Signal));
         }
         if let Some(target) = &self.target {

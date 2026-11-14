@@ -83,7 +83,7 @@ values over its own; a `show` without them starts it as it was left.
 | `snapshot` | `file`, `output`? | `null`; what the output shows right now is written as a PNG |
 | `watch` | | `null`, and from then on the connection carries events |
 | `reload` | | `null`; the config file is read again and what was set over the socket is forgotten |
-| `quit` | | `null`; the daemon stops |
+| `quit` | | `null`; the daemon stops (`wepaper quit` waits until it is gone, and stops one that does not answer as a process) |
 
 Without `output`, or with `"*"`, a request applies to every output.
 

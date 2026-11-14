@@ -30,6 +30,8 @@ pub(crate) enum Slot {
     EffectVisible(usize, usize),
     /// A text layer's text.
     LayerText(usize),
+    /// A sound layer's volume.
+    LayerVolume(usize),
     /// One of the scene's own values: its camera, its bloom, its background.
     Scene(SceneField),
     /// A value of one animation layer of a puppet: the scene layer, then which of its layers.
@@ -284,7 +286,7 @@ impl Bindings {
                     Slot::Value(index) => {
                         Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len()))
                     }
-                    Slot::LayerAlpha(_) | Slot::Puppet(..) => {
+                    Slot::LayerAlpha(_) | Slot::LayerVolume(_) | Slot::Puppet(..) => {
                         Change::Floats(binding.slot, value_floats(value, 1))
                     }
                     _ => Change::Floats(binding.slot, value_floats(value, 3)),

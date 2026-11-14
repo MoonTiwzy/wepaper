@@ -119,6 +119,14 @@ drawn or loaded from inside a handler.
 The control socket speaks the [protocol](ipc.md): line-delimited JSON, answered in order, with
 slow clients dropped rather than waited for.
 
+One loop means that a call which never returns takes everything with it: the wallpaper
+stands, `quit` gets no answer, a signal sets a flag nobody reads. So nothing the loop tells
+a player waits for the player (libmpv's plain calls return when the player's own thread has
+got to them, and that thread can stand in the audio output), a player is shut down on a
+thread of its own, and a second thread watches the loop from outside: a daemon told to stop
+is gone in three seconds, and one whose round takes half a minute exits with status 70 for
+whoever started it to start it again.
+
 ## Plugins
 
 The daemon stays small by leaving things out. [Plugins](plugins.md) are how they come back:

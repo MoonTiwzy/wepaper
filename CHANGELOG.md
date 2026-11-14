@@ -14,6 +14,16 @@
   volume now plays at that volume, not at full.
 - The players load none of mpv's own scripts, which were a few threads and a few megabytes
   for every video and every sound.
+- Sound layers play the way the scene says. A layer that starts silent waits for a script;
+  scripts play, pause and stop layers and ask whether one plays; a layer with several files
+  plays them in turn, a `random` one picks a file and waits between two plays; a script, a
+  user property or a timeline on a layer's volume moves it. A layer has a player only while
+  it is heard: a scene with sixty silent layers used to start sixty players at once.
+- The daemon cannot be left hanging. Nothing it tells a player waits for the player any
+  more, and a player is shut down on a thread of its own. A daemon told to stop is gone in
+  three seconds whatever it was doing, and one whose loop stands for half a minute gives up
+  with status 70, so that whoever started it can start it again. `wepaper quit` returns
+  when the daemon is gone, and stops one that does not answer as a process.
 
 ## 0.1.0
 

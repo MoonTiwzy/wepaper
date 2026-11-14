@@ -104,19 +104,25 @@ impl SceneInstance {
                     }
                 },
                 ObjectKind::Sound(sound) => {
-                    let file = sound.files.first().and_then(|file| {
-                        engine
-                            .share
-                            .on_disk(files, file)
-                            .inspect_err(|why| log::warn!("sound {file}: {why}"))
-                            .ok()
-                    });
-                    LayerKind::Sound(SoundLayer {
-                        file,
-                        looping: sound.mode != "single",
-                        volume: sound.volume.value.clamp(0.0, 1.0),
-                        player: None,
-                    })
+                    let on_disk: Vec<_> = sound
+                        .files
+                        .iter()
+                        .filter_map(|file| {
+                            engine
+                                .share
+                                .on_disk(files, file)
+                                .inspect_err(|why| log::warn!("sound {file}: {why}"))
+                                .ok()
+                        })
+                        .collect();
+                    LayerKind::Sound(SoundLayer::new(
+                        on_disk,
+                        &sound.mode,
+                        (sound.min_time, sound.max_time),
+                        sound.volume.value,
+                        sound.start_silent,
+                        object.id as u64,
+                    ))
                 }
                 ObjectKind::Particle(particles) => {
                     // The object's id as the seed: the same wallpaper plays the same.
@@ -304,6 +310,9 @@ fn bind_object(bindings: &mut Bindings, index: usize, object: &Object) {
         for (effect_index, effect) in image.effects.iter().enumerate() {
             bindings.link(&effect.visible, Slot::EffectVisible(index, effect_index));
         }
+    }
+    if let ObjectKind::Sound(sound) = &object.kind {
+        bindings.link(&sound.volume, Slot::LayerVolume(index));
     }
     if let ObjectKind::Text(text) = &object.kind {
         bindings.link(&text.text, Slot::LayerText(index));

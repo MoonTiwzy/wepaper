@@ -1,6 +1,8 @@
 //! The commands that talk to the daemon.
 
+use std::os::fd::AsRawFd;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use wepaper_ipc::{Client, Request};
 use wepaper_json::Value;
@@ -143,6 +145,9 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
         }
         return Ok(());
     }
+    if request == Request::Quit {
+        return quit(client);
+    }
     let value = client.call(&request).map_err(|e| e.to_string())?;
     if command == "status" && !json {
         println!("{}", summary(&value));
@@ -150,4 +155,87 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
         println!("{}", show(&value, json));
     }
     Ok(())
+}
+
+/// How long a daemon has to answer `quit`, and then to be gone.
+const PATIENCE: Duration = Duration::from_secs(4);
+
+/// The process that listens on the socket the client is connected to.
+fn listener(client: &Client) -> Option<libc::pid_t> {
+    // SAFETY: the kernel fills a structure of the size it is told; the descriptor is
+    // the client's open socket.
+    unsafe {
+        let mut peer: libc::ucred = std::mem::zeroed();
+        let mut size = size_of::<libc::ucred>() as libc::socklen_t;
+        let got = libc::getsockopt(
+            client.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&raw mut peer).cast(),
+            &mut size,
+        );
+        (got == 0 && peer.pid > 0).then_some(peer.pid)
+    }
+}
+
+/// Whether a line of `/proc/<pid>/stat` is that of a process still running: one that
+/// ended and waits to be collected is not.
+fn runs(stat: &str) -> bool {
+    // The state is the first word after the name, which is in brackets and may hold any character.
+    stat.rsplit_once(')').is_some_and(|(_, rest)| !rest.trim_start().starts_with(['Z', 'X']))
+}
+
+fn gone(pid: libc::pid_t, within: Duration) -> bool {
+    let until = Instant::now() + within;
+    loop {
+        if !std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| runs(&stat)) {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// `quit` returns when the daemon is gone. One that hangs does not answer, and one that
+/// answers may still hang on its way out: either is stopped as a process.
+fn quit(mut client: Client) -> Result<(), Failure> {
+    let pid = listener(&client);
+    let _ = client.set_timeout(Some(PATIENCE));
+    let left = match client.call(&Request::Quit) {
+        Ok(_) => client.closed(),
+        Err(wepaper_ipc::Error::Refused(why)) => return Err(why),
+        // No answer, or the daemon went before it gave one.
+        Err(_) => false,
+    };
+    let Some(pid) = pid else {
+        return if left { Ok(()) } else { Err("the daemon does not answer".to_owned()) };
+    };
+    if left && gone(pid, PATIENCE) {
+        return Ok(());
+    }
+    for signal in [libc::SIGTERM, libc::SIGKILL] {
+        // SAFETY: a signal to a process of this user; one that is gone is an error nothing follows from.
+        unsafe { libc::kill(pid, signal) };
+        if gone(pid, PATIENCE) {
+            eprintln!("wepaper: the daemon did not stop when asked: stopped it (pid {pid})");
+            return Ok(());
+        }
+    }
+    Err(format!("the daemon (pid {pid}) does not stop"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_process_that_ended_but_was_not_collected_does_not_run() {
+        assert!(runs("4242 (wepaper) S 1 4242 4242 0 -1 4194304 1 0"));
+        assert!(runs("4242 (we) paper) R 1 4242"));
+        assert!(!runs("4242 (wepaper) Z 1 4242 4242 0 -1 4194304 1 0"));
+        assert!(!runs("4242 (a) (b)) X 1"));
+        assert!(!runs(""));
+    }
 }

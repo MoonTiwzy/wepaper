@@ -14,6 +14,7 @@ mod puppet;
 #[cfg(feature = "script")]
 mod scripts;
 mod shade;
+mod sound;
 mod text;
 mod tree;
 
@@ -131,14 +132,7 @@ pub(crate) enum LayerKind {
     Group,
 }
 
-/// A sound layer: the file it plays and, while sound is on, the player.
-pub(crate) struct SoundLayer {
-    pub(crate) file: Option<std::path::PathBuf>,
-    pub(crate) looping: bool,
-    /// The layer's own volume, 0 to 1.
-    pub(crate) volume: f32,
-    pub(crate) player: Option<crate::audio::Sound>,
-}
+pub(crate) use sound::{Player, SoundLayer};
 
 /// One object of the scene, as it plays.
 pub(crate) struct Layer {
@@ -338,6 +332,11 @@ impl SceneInstance {
                             image.color = three;
                         }
                     }
+                    Slot::LayerVolume(layer) => {
+                        if let LayerKind::Sound(sound) = &mut self.layers[layer].kind {
+                            sound.volume = three[0].clamp(0.0, 1.0);
+                        }
+                    }
                     Slot::Puppet(layer, which, field) => {
                         if let Some(animation) = self.animation_layer(layer, which) {
                             match field {
@@ -401,9 +400,9 @@ impl SceneInstance {
         for video in &self.videos {
             video.set_paused(paused);
         }
-        for layer in &self.layers {
-            if let LayerKind::Sound(SoundLayer { player: Some(player), .. }) = &layer.kind {
-                player.set_paused(paused);
+        for layer in &mut self.layers {
+            if let LayerKind::Sound(sound) = &mut layer.kind {
+                sound.hold(paused);
             }
         }
     }
@@ -430,23 +429,17 @@ impl SceneInstance {
     /// Off, nothing is decoded: there are no players at all.
     pub fn set_sound(&mut self, on: bool, volume: f32) {
         self.sound = (on, volume);
+        self.play_sounds();
+    }
+
+    /// Gives every sound layer the player it is to have now, or none: run every frame,
+    /// after the scripts, which play and stop layers.
+    pub(crate) fn play_sounds(&mut self) {
+        let (on, volume) = self.sound;
         for layer in &mut self.layers {
-            let visible = layer.visible;
-            let LayerKind::Sound(sound) = &mut layer.kind else { continue };
-            let level = volume * sound.volume;
-            match (&sound.player, on && visible) {
-                (Some(player), true) => player.set_volume(level),
-                (Some(_), false) => sound.player = None,
-                (None, true) => {
-                    sound.player = sound
-                        .file
-                        .as_ref()
-                        .and_then(|file| crate::audio::Sound::play(file, sound.looping, level));
-                    if let Some(player) = &sound.player {
-                        player.set_paused(self.paused);
-                    }
-                }
-                (None, false) => {}
+            let audible = on && layer.visible;
+            if let LayerKind::Sound(sound) = &mut layer.kind {
+                sound.tick(self.last_time, sound::Hearing { audible, volume, paused: self.paused });
             }
         }
     }

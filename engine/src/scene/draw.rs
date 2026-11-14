@@ -113,6 +113,7 @@ impl SceneInstance {
         self.run_scripts(engine, input, dt, &passed);
         #[cfg(not(feature = "script"))]
         let _ = passed;
+        self.play_sounds();
         self.update_transforms();
         // Puppets play on: this frame's bones go into the value table shaders read.
         let stretch = (input.time - before).max(0.0) as f32;

@@ -9,6 +9,7 @@ mod plugins;
 mod server;
 mod settings;
 mod sound;
+mod watch;
 mod wayland;
 
 use std::collections::HashMap;
@@ -128,6 +129,8 @@ struct Daemon {
     sounding: Vec<sound::Playing>,
     /// The compiled shader plugins, by plugin id, in the order they run.
     shaders: Vec<(String, wepaper_engine::post::PostPass)>,
+    /// What ends the daemon when its loop cannot.
+    watch: watch::Watch,
     quit: bool,
 }
 
@@ -226,6 +229,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         plugins: plugins::Plugins::new(found, socket),
         sounding: Vec::new(),
         shaders,
+        watch: watch::Watch::start(&STOP),
         quit: false,
     };
     daemon.apply_sound();
@@ -238,6 +242,8 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     }
     daemon.plugins.announce(&plugins::Happening { event: "started", ..Default::default() });
     let result = daemon.run(&mut queue);
+    // Stopping takes freeing every wallpaper, player and plugin: none of them holds it up.
+    daemon.watch.leaving();
     daemon.plugins.announce(&plugins::Happening { event: "stopping", ..Default::default() });
     // Wallpapers and surfaces go while the context is still there to free them with,
     // and so does everything else that holds what the context made: fields are
@@ -253,6 +259,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
 
 impl Daemon {
     fn run(&mut self, queue: &mut EventQueue<Display>) -> Result<(), Failure> {
+        self.watch.working();
         while !self.quit && !STOP.load(Ordering::Relaxed) {
             queue
                 .dispatch_pending(&mut self.display)
@@ -280,8 +287,10 @@ impl Daemon {
                 .collect();
             let timeout = wake
                 .map_or(1000, |at| at.saturating_duration_since(Instant::now()).as_millis().min(1000) as i32);
+            self.watch.resting();
             // SAFETY: `fds` is a live array of `fds.len()` pollfd structures.
             let ready = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, timeout) };
+            self.watch.working();
             if ready > 0 && fds[0].revents != 0 {
                 guard.read().map_err(|e| format!("the compositor went away: {e}"))?;
             } else {

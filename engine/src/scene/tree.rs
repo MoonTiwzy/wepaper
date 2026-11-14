@@ -76,6 +76,8 @@ impl SceneInstance {
                 LayerKind::Sound(sound) => {
                     node.insert("kind", Value::from("sound"));
                     node.insert("volume", Value::from(sound.volume));
+                    node.insert("playing", Value::from(sound.is_playing()));
+                    node.insert("heard", Value::from(sound.sounding()));
                 }
                 LayerKind::Particles(_) => node.insert("kind", Value::from("particles")),
                 LayerKind::Group => node.insert("kind", Value::from("group")),

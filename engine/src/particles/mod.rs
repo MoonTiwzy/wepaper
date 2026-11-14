@@ -163,6 +163,7 @@ mod noise;
 mod operator;
 mod particle;
 mod rng;
+pub(crate) use rng::Rng;
 mod sim;
 mod value;
 mod vertices;
