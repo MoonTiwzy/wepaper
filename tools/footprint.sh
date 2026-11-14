@@ -7,10 +7,13 @@
 # folder), left to settle, and its process is measured for a while:
 #   load_ms   until its log says it plays (a line containing "playing")
 #   vram_mb   video memory of the process (nvidia-smi)
-#   pss_mb    proportional set size
+#   pss_mb    proportional set size: a library shared with other processes counts by
+#             share, so this moves with what else has the graphics driver loaded
+#   own_mb    memory of its own that cannot be dropped: private dirty pages and swap
 #   cpu_pct   CPU time over the window, in percent of one core
 #   threads
-# The command's output is its log. One line per wallpaper is appended to <out.tsv>.
+# The command's output is its log. One line per wallpaper is appended to <out.tsv>, with
+# own_mb as its last column.
 set -uo pipefail
 label=$1 out=$2; shift 2
 wallpapers=()
@@ -19,7 +22,7 @@ shift
 here=$(cd "$(dirname "$0")" && pwd)
 settle=${SETTLE:-6} window=${WINDOW:-10}
 log=$(mktemp)
-[[ -s $out ]] || printf 'engine\twallpaper\tload_ms\tvram_mb\tpss_mb\tcpu_pct\tthreads\n' >"$out"
+[[ -s $out ]] || printf 'engine\twallpaper\tload_ms\tvram_mb\tpss_mb\tcpu_pct\tthreads\town_mb\n' >"$out"
 for wallpaper in "${wallpapers[@]}"; do
     : >"$log"
     start=$(date +%s%N)
@@ -36,7 +39,7 @@ for wallpaper in "${wallpapers[@]}"; do
         tr '\0' '\n' <"/proc/$candidate/environ" 2>/dev/null | /usr/bin/grep -qx "WALLPAPER=$wallpaper" && pid=$candidate
     done
     if [[ -z $pid ]]; then
-        printf '%s\t%s\t%s\t-\t-\t-\t-\n' "$label" "$(basename "$wallpaper")" "$load" >>"$out"
+        printf '%s\t%s\t%s\t-\t-\t-\t-\t-\n' "$label" "$(basename "$wallpaper")" "$load" >>"$out"
     else
         ticks0=$(awk '{print $14 + $15}' "/proc/$pid/stat")
         sleep "$window"
@@ -44,8 +47,9 @@ for wallpaper in "${wallpapers[@]}"; do
         cpu=$(awk -v d=$((ticks1 - ticks0)) -v hz="$(getconf CLK_TCK)" -v w="$window" 'BEGIN {printf "%.1f", d * 100 / hz / w}')
         vram=$(nvidia-smi | awk -v pid="$pid" '$5 == pid {gsub("MiB", "", $(NF-1)); print $(NF-1)}' | head -1)
         pss=$(awk '/^Pss:/ {s += $2} END {printf "%.0f", s / 1024}' "/proc/$pid/smaps" 2>/dev/null)
+        own=$(awk '/^Private_Dirty:|^Swap:/ {s += $2} END {printf "%.0f", s / 1024}' "/proc/$pid/smaps_rollup" 2>/dev/null)
         threads=$(/usr/bin/ls "/proc/$pid/task" 2>/dev/null | wc -l)
-        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$(basename "$wallpaper")" "$load" "${vram:--}" "${pss:--}" "$cpu" "$threads" >>"$out"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$label" "$(basename "$wallpaper")" "$load" "${vram:--}" "${pss:--}" "$cpu" "$threads" "${own:--}" >>"$out"
     fi
     # Everything of this run goes, whatever it started.
     for p in $(pgrep -u "$(id -u)" . 2>/dev/null); do

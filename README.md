@@ -33,15 +33,15 @@ underneath.
 <!-- footprint:start -->
 | wallpaper | video memory, MiB | memory, MB | CPU, % of a core | start, ms |
 |---|---|---|---|---|
-| a picture with one effect | 84 → **65** | 125 → **31** | 2.3 → **2.5** | 300 → **89** |
-| puppets, nine effect chains | 574 → **510** | 409 → **47** | 6.2 → **4.2** | 842 → **427** |
-| 168 layers, a scripted console | 2838 → **112** | 2509 → **53** | 94.0 → **11.1** | 559 → **152** |
-| 4K scene, 65 layers, 600 scripts | 482 → **392** | 514 → **62** | 12.0 → **11.7** | 1245 → **600** |
-| scene with a 4K video, sound, particles | 124 → **98** | 381 → **151** | 42.6 → **18.1** | 433 → **174** |
-| video, 720p 30 fps | 84 → **46** | 199 → **95** | 8.8 → **8.5** | 323 → **174** |
-| video, 4K 60 fps | 127 → **74** | 274 → **141** | 61.4 → **28.5** | 344 → **152** |
+| a picture with one effect | 84 → **65** | 210 → **76** | 3.0 → **2.5** | 321 → **87** |
+| puppets, nine effect chains | 574 → **478** | 497 → **91** | 4.4 → **4.3** | 873 → **432** |
+| 168 layers, a scripted console | 2930 → **112** | 2654 → **99** | 93.9 → **11.6** | 958 → **174** |
+| 4K scene, 65 layers, 600 scripts | 482 → **392** | 602 → **107** | 18.8 → **11.6** | 1211 → **624** |
+| scene with a 4K video, sound, particles | 108 → **98** | 476 → **221** | 39.1 → **18.9** | 432 → **173** |
+| video, 720p 30 fps | 84 → **46** | 290 → **166** | 12.8 → **6.7** | 344 → **174** |
+| video, 4K 60 fps | 113 → **74** | 365 → **212** | 56.5 → **31.9** | 345 → **174** |
 
-Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 3.5 times less memory, 1.5 times less CPU and a start 2.3 times faster; on the heaviest one, 25 times less video memory and 47 times less memory.
+Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 2.7 times less memory, 1.6 times less CPU and a start 2.5 times faster; on the heaviest one, 26 times less video memory and 27 times less memory.
 <!-- footprint:end -->
 
 Measured, not estimated: how and on what is in [docs/performance.md](docs/performance.md).

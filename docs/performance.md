@@ -5,23 +5,23 @@ What a playing wallpaper costs, measured, and how to measure it yourself.
 ## The numbers
 
 <!-- footprint:start -->
-| wallpaper | video memory, MiB | memory, MB | CPU, % of a core | start, ms |
-|---|---|---|---|---|
-| a picture with one effect | 84 → **65** | 125 → **31** | 2.3 → **2.5** | 300 → **89** |
-| a picture and three particle systems | 95 → **87** | 142 → **40** | 3.6 → **2.9** | 341 → **149** |
-| four pictures and particles | 143 → **125** | 169 → **42** | 4.4 → **3.7** | 387 → **130** |
-| puppets, nine effect chains | 574 → **510** | 409 → **47** | 6.2 → **4.2** | 842 → **427** |
-| 80 layers, effects on half | 269 → **152** | 233 → **49** | 10.4 → **7.1** | 664 → **196** |
-| 168 layers, a scripted console | 2838 → **112** | 2509 → **53** | 94.0 → **11.1** | 559 → **152** |
-| 190 layers, three video textures, scripts | 128 → **86** | 289 → **147** | 33.0 → **12.6** | 475 → **215** |
-| 4K scene, 65 layers, 600 scripts | 482 → **392** | 514 → **62** | 12.0 → **11.7** | 1245 → **600** |
-| scene around a 4K video | 113 → **90** | 294 → **141** | 52.2 → **29.7** | 343 → **174** |
-| scene with a 4K video, sound, particles | 124 → **98** | 381 → **151** | 42.6 → **18.1** | 433 → **174** |
-| video, 720p 30 fps | 84 → **46** | 199 → **95** | 8.8 → **8.5** | 323 → **174** |
-| video, 4K 60 fps | 127 → **74** | 274 → **141** | 61.4 → **28.5** | 344 → **152** |
-| video, 4K 120 fps | 127 → **74** | 402 → **139** | 51.8 → **28.4** | 367 → **152** |
+| wallpaper | video memory, MiB | memory, MB | of it, its own | CPU, % of a core | start, ms |
+|---|---|---|---|---|---|
+| a picture with one effect | 84 → **65** | 210 → **76** | 93 → **26** | 3.0 → **2.5** | 321 → **87** |
+| a picture and three particle systems | 95 → **87** | 228 → **85** | 108 → **35** | 4.0 → **2.9** | 411 → **150** |
+| four pictures and particles | 143 → **125** | 253 → **85** | 133 → **34** | 3.2 → **3.5** | 386 → **131** |
+| puppets, nine effect chains | 574 → **478** | 497 → **91** | 330 → **39** | 4.4 → **4.3** | 873 → **432** |
+| 80 layers, effects on half | 269 → **152** | 320 → **94** | 192 → **42** | 10.0 → **6.8** | 663 → **195** |
+| 168 layers, a scripted console | 2930 → **112** | 2654 → **99** | 2542 → **47** | 93.9 → **11.6** | 958 → **174** |
+| 190 layers, three video textures, scripts | 136 → **86** | 384 → **219** | 249 → **132** | 40.0 → **14.5** | 472 → **216** |
+| 4K scene, 65 layers, 600 scripts | 482 → **392** | 602 → **107** | 455 → **55** | 18.8 → **11.6** | 1211 → **624** |
+| scene around a 4K video | 99 → **90** | 387 → **213** | 238 → **126** | 49.1 → **30.3** | 324 → **173** |
+| scene with a 4K video, sound, particles | 108 → **98** | 476 → **221** | 295 → **134** | 39.1 → **18.9** | 432 → **173** |
+| video, 720p 30 fps | 84 → **46** | 290 → **166** | 164 → **80** | 12.8 → **6.7** | 344 → **174** |
+| video, 4K 60 fps | 113 → **74** | 365 → **212** | 239 → **125** | 56.5 → **31.9** | 345 → **174** |
+| video, 4K 120 fps | 127 → **74** | 492 → **211** | 366 → **125** | 53.7 → **27.3** | 389 → **152** |
 
-Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 3.5 times less memory, 1.5 times less CPU and a start 2.3 times faster; on the heaviest one, 25 times less video memory and 47 times less memory.
+Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 2.7 times less memory, 1.6 times less CPU and a start 2.5 times faster; on the heaviest one, 26 times less video memory and 27 times less memory.
 <!-- footprint:end -->
 
 "Previous renderer" is what WE Linux ran before wepaper existed, started the way WE Linux
@@ -43,7 +43,15 @@ wallpapers, one after the other.
 | start | milliseconds from launching the process to the wallpaper playing |
 | video memory | what `nvidia-smi` charges the process, in MiB. An empty OpenGL context with one 1440p surface is about 34 of them |
 | memory | proportional set size (`Pss` in `/proc/<pid>/smaps`), in MB: memory shared with other processes is counted by share |
+| its own | the part of it that is the process's alone and cannot be dropped (`Private_Dirty`): its heap, the driver's buffers, decoded frames |
 | CPU | CPU time of the process over the ten seconds, in percent of one core |
+
+The memory column moves with the rest of the system. What is in it besides the process's own
+is code: the program and, mostly, the graphics driver's libraries, which the kernel keeps
+once for every program that has them and charges by share. The table was measured with
+nothing else holding the driver's libraries in memory, so each renderer pays for them in
+full: the worst case. On a desktop where other programs have them loaded, the first row
+read 125 → **31**. The column "its own" does not move.
 
 Video scenes and video wallpapers decode on the CPU by default, at the monitor's size: that is
 where their CPU goes, and it is what keeps their video memory small. `video_hardware` moves
