@@ -15,7 +15,8 @@
 - The log says every wallpaper the daemon was asked to show and why one was not shown. Its
   lines carry the time of day, and a wallpaper shown says how long it took to load.
 - The Nix package builds and installs the web wallpaper plugin: on NixOS web wallpapers had
-  nothing to draw them.
+  nothing to draw them. A plugin's program is looked for beside the daemon before the PATH:
+  run from a package's own folder, the plugin was there and was not found.
 
 ## 0.2.0
 

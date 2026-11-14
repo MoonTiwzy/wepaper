@@ -118,12 +118,24 @@ impl Manifest {
 
     /// The program of `exec` with paths relative to the plugin's folder resolved.
     pub fn program(&self) -> PathBuf {
+        let beside = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_owned));
+        self.program_beside(beside.as_deref())
+    }
+
+    /// The same, told where the daemon's own program is. A bare name is first looked
+    /// for there: a plugin's program is installed next to the daemon, and that folder
+    /// need not be on the PATH (a package run from its store path is not).
+    fn program_beside(&self, beside: Option<&Path>) -> PathBuf {
         let first = self.exec.split_whitespace().next().unwrap_or("");
         if first.starts_with("./") || first.starts_with("../") {
-            self.dir.join(first)
-        } else {
-            PathBuf::from(first)
+            return self.dir.join(first);
         }
+        if !first.contains('/')
+            && let Some(sibling) = beside.map(|dir| dir.join(first)).filter(|file| file.is_file())
+        {
+            return sibling;
+        }
+        PathBuf::from(first)
     }
 }
 
@@ -419,6 +431,24 @@ mod tests {
 
     fn manifest(json: &str, dir: &Path) -> Result<Manifest, String> {
         Manifest::parse(&wepaper_json::parse(json).unwrap(), dir)
+    }
+
+    #[test]
+    fn a_plugins_program_is_found_beside_the_daemon_before_the_path() {
+        let dir = temp("beside");
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("wepaper-web"), "").unwrap();
+        let json = r#"{ "id": "web", "kind": "renderer", "handles": ["web"], "exec": "wepaper-web --flag" }"#;
+        let plugin = manifest(json, &dir).unwrap();
+        // Installed next to the daemon: that one, wherever the PATH points.
+        assert_eq!(plugin.program_beside(Some(&bin)), bin.join("wepaper-web"));
+        // Not there: by its name, for the PATH to find.
+        assert_eq!(plugin.program_beside(Some(&dir)), PathBuf::from("wepaper-web"));
+        assert_eq!(plugin.program_beside(None), PathBuf::from("wepaper-web"));
+        // A path of the plugin's own stays the plugin's.
+        let own = manifest(r#"{ "id": "own", "kind": "hook", "exec": "./run.sh" }"#, &dir).unwrap();
+        assert_eq!(own.program_beside(Some(&bin)), dir.join("./run.sh"));
     }
 
     #[test]
