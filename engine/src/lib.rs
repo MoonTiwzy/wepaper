@@ -378,8 +378,19 @@ impl Engine {
                 if self.open(&target)?.1.kind == Kind::Preset {
                     return Err(LoadError("a preset of a preset".to_owned()));
                 }
-                let mut merged: Vec<(String, Value)> =
-                    project.preset.members().map(|(name, value)| (name.to_owned(), value.clone())).collect();
+                // A file a preset names is the preset's own, beside it.
+                let own = |value: &Value| {
+                    value
+                        .as_str()
+                        .map(|file| wallpaper.join(file))
+                        .filter(|file| file.is_file())
+                        .map(|file| Value::from(file.to_string_lossy().into_owned()))
+                };
+                let mut merged: Vec<(String, Value)> = project
+                    .preset
+                    .members()
+                    .map(|(name, value)| (name.to_owned(), own(value).unwrap_or_else(|| value.clone())))
+                    .collect();
                 merged.extend(values.iter().cloned());
                 self.load(&target, viewport, &merged)
             }

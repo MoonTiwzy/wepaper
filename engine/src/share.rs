@@ -128,8 +128,44 @@ impl Share {
         white
     }
 
-    /// The texture a material calls `name`, loaded once however many ask.
+    /// A picture or a video of the user's own, by its place on the disk: what a
+    /// wallpaper shows where it lets the user put a picture in.
+    fn user_texture(&mut self, path: &std::path::Path) -> Result<Loaded, String> {
+        let name = path.display();
+        let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if matches!(extension.as_str(), "mp4" | "webm" | "mkv" | "mov" | "avi" | "m4v" | "gif") {
+            return self.videos.open(path, false).map(Loaded::Video).map_err(|e| format!("{name}: {e}"));
+        }
+        let key = fnv(fnv(FNV_SEED, path.to_string_lossy().as_bytes()), b"user");
+        if let Some(texture) = self.textures.get(&key).and_then(Weak::upgrade) {
+            return Ok(Loaded::Picture(texture));
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("{name}: {e}"))?;
+        let picture = picture::decode(&bytes).map_err(|e| format!("{name}: {e}"))?;
+        let texture = Texture::from_levels(
+            &self.gl,
+            TextureFormat::Rgba8,
+            &[(picture.width, picture.height, &picture.rgba)],
+            Sampling { clamp: true, nearest: false },
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
+        let (width, height) = (picture.width as f32, picture.height as f32);
+        let texture = Rc::new(SharedTexture {
+            texture,
+            resolution: [width, height, width, height],
+            sprites: None,
+            format_code: 0,
+        });
+        self.textures.insert(key, Rc::downgrade(&texture));
+        Ok(Loaded::Picture(texture))
+    }
+
+    /// The texture a material calls `name`, loaded once however many ask. A name
+    /// that is a file's whole path is the user's own picture.
     pub fn texture(&mut self, files: &Files, name: &str) -> Result<Loaded, String> {
+        if std::path::Path::new(name).is_absolute() {
+            return self.user_texture(std::path::Path::new(name));
+        }
         let path = texture_path(files, name)
             .ok_or_else(|| format!("texture {name} is not in the wallpaper or the assets"))?;
         let located = files.locate(&path).expect("just found");

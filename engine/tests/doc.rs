@@ -255,3 +255,16 @@ fn a_bind_to_a_slot_that_cannot_be_is_dropped() {
     let slots: Vec<usize> = effect.passes[0].binds.iter().map(|bind| bind.slot).collect();
     assert_eq!(slots, [0, 15], "a number from a document never sizes anything");
 }
+
+#[test]
+fn a_material_names_the_properties_whose_pictures_take_its_slots() {
+    let doc = wepaper_json::parse(
+        r#"{ "passes": [{ "shader": "genericimage2", "textures": ["customimage"], "usertextures": ["customimage", null, "mask"] }] }"#,
+    )
+    .unwrap();
+    let material = wepaper_engine::doc::MaterialDoc::parse(&doc);
+    assert_eq!(
+        material.passes[0].user_textures,
+        [Some("customimage".to_owned()), None, Some("mask".to_owned())]
+    );
+}

@@ -44,6 +44,8 @@ pub struct MaterialPass {
     pub blending: Blending,
     /// Textures by slot; `None` leaves the slot to its default.
     pub textures: Vec<Option<String>>,
+    /// By slot, the user property whose picture takes the slot when the user gave one.
+    pub user_textures: Vec<Option<String>>,
     /// Shader combos the material sets.
     pub combos: BTreeMap<String, i32>,
     /// Shader constants by their material name.
@@ -97,6 +99,7 @@ impl MaterialPass {
                 "translucent"
             })),
             textures: texture_slots(doc.get("textures")),
+            user_textures: texture_slots(doc.get("usertextures")),
             combos: combos(doc.get("combos")),
             constants: doc
                 .get("constantshadervalues")

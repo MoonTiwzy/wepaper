@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- A wallpaper shows the user's own picture or video where it lets one be put in
+  (`usertextures` of a material, a `scenetexture` property), and a preset's files are
+  found beside the preset: a console wallpaper with a video of the user's showed a red
+  square and no background.
+
 ## 0.2.0
 
 - 3D scenes. A scene with a perspective camera is seen through it, or through its camera

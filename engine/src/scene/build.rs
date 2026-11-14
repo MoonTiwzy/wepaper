@@ -450,6 +450,26 @@ pub(super) fn choices(textures: &[Option<String>]) -> Vec<TextureChoice> {
     textures.iter().map(|t| t.clone().map_or(TextureChoice::Default, TextureChoice::Named)).collect()
 }
 
+/// A pass's textures with the user's own pictures in the slots that take one: a
+/// property the user gave a file for wins over what the material names.
+fn user_choices(pass: &MaterialPass, bindings: &Bindings) -> Vec<TextureChoice> {
+    let mut textures = choices(&pass.textures);
+    for (slot, property) in pass.user_textures.iter().enumerate() {
+        let file = property
+            .as_ref()
+            .and_then(|name| bindings.properties.get(name))
+            .and_then(Value::as_str)
+            .filter(|file| std::path::Path::new(file).is_file());
+        if let Some(file) = file {
+            if textures.len() <= slot {
+                textures.resize(slot + 1, TextureChoice::Default);
+            }
+            textures[slot] = TextureChoice::Named(file.to_owned());
+        }
+    }
+    textures
+}
+
 /// A material's constants. A constant may follow a user property (`{"user": ..., "value": ...}`)
 /// as a layer's own values do.
 pub(super) fn constants(pass: &MaterialPass) -> Vec<(String, Dyn<Value>)> {
@@ -478,7 +498,7 @@ fn build_image(
         files,
         &PassInput {
             shader: &pass.shader,
-            textures: &choices(&pass.textures),
+            textures: &user_choices(pass, bindings),
             combos: &pass.combos,
             constants: &constants(pass),
             buffers: &[],
