@@ -75,9 +75,16 @@ impl SceneInstance {
         for video in &self.videos {
             video.stream.borrow_mut().poll();
         }
-        self.update_transforms();
         let dt = (input.time - self.last_time).clamp(0.0, 0.25) as f32;
         self.last_time = input.time;
+        if !self.bindings.animations.is_empty() {
+            let mut changes = Vec::new();
+            self.bindings.animate(dt, &mut changes);
+            for change in changes {
+                self.apply(change);
+            }
+        }
+        self.update_transforms();
         // The parallax camera trails the pointer.
         if let Some(parallax) = &self.parallax {
             let ease = if parallax.delay > 0.0 { (dt / parallax.delay).min(1.0) } else { 1.0 };

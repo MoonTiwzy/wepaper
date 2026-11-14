@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use wepaper_json::Value;
 
-use crate::doc::{Dyn, FromDoc, UserLink};
+use crate::doc::{Animation, AsFloats, Dyn, FromDoc, UserLink};
 
 use super::shade::value_floats;
 
@@ -43,9 +43,26 @@ pub(crate) struct Binding {
     pub(crate) slot: Slot,
 }
 
+/// A keyframe animation playing on a slot.
+#[derive(Debug, Clone)]
+pub(crate) struct Playing {
+    pub(crate) animation: Animation,
+    pub(crate) slot: Slot,
+    /// The value written in the document: what the curves offset when they are
+    /// relative, and what the components without a curve keep.
+    pub(crate) base: Vec<f32>,
+    /// How many frames it has played.
+    pub(crate) played: f32,
+    pub(crate) running: bool,
+    /// Its value has to reach the slot even though it is not running.
+    pub(crate) stale: bool,
+}
+
 /// The table of driven values and what drives them.
 #[derive(Default)]
 pub(crate) struct Bindings {
+    /// The keyframe animations.
+    pub(crate) animations: Vec<Playing>,
     /// The driven shader constants.
     pub(crate) values: Vec<Vec<f32>>,
     /// The links from user properties.
@@ -70,9 +87,44 @@ impl Bindings {
     }
 
     /// Registers whatever drives `value` as a writer of `slot`.
-    pub(crate) fn link<T>(&mut self, value: &Dyn<T>, slot: Slot) {
+    pub(crate) fn link<T: AsFloats>(&mut self, value: &Dyn<T>, slot: Slot) {
         if let Some(link) = &value.user {
             self.links.push(Binding { link: link.clone(), slot });
+        }
+        if let Some(animation) = &value.animation {
+            let base = match slot {
+                Slot::Value(index) => self.values.get(index).cloned().unwrap_or_default(),
+                _ => value.value.as_floats(),
+            };
+            let running = !animation.start_paused;
+            self.animations.push(Playing { animation: animation.clone(), slot, base, played: 0.0, running, stale: true });
+        }
+    }
+
+    /// Plays the animations on by `seconds` and returns what they changed.
+    pub(crate) fn animate(&mut self, seconds: f32, changes: &mut Vec<Change>) {
+        let mut sample = Vec::new();
+        for playing in &mut self.animations {
+            if !playing.running && !playing.stale {
+                continue;
+            }
+            if playing.running && !playing.stale {
+                playing.played += seconds * playing.animation.fps;
+            }
+            playing.stale = false;
+            playing.animation.sample(playing.animation.frame_at(playing.played), &mut sample);
+            let mut value = playing.base.clone();
+            value.resize(value.len().max(sample.len()), 0.0);
+            for (component, curve) in value.iter_mut().zip(&sample) {
+                *component = if playing.animation.relative { *component + curve } else { *curve };
+            }
+            if playing.animation.finished(playing.played) {
+                playing.running = false;
+            }
+            changes.push(match playing.slot {
+                Slot::LayerVisible(_) | Slot::EffectVisible(..) | Slot::Bloom => Change::Flag(playing.slot, value.first().is_some_and(|v| *v > 0.5)),
+                slot => Change::Floats(slot, value),
+            });
         }
     }
 
@@ -130,6 +182,47 @@ mod tests {
         let changes = bindings.changes("tint", &Value::from("1 0.5 0"));
         assert_eq!(changes, [Change::Floats(Slot::Value(slot), vec![1.0, 0.5, 0.0]), Change::Floats(Slot::LayerColor(4), vec![1.0, 0.5, 0.0])]);
         assert!(bindings.changes("unknown", &Value::from(1)).is_empty());
+    }
+
+    #[test]
+    fn animation_drives_its_slot_and_stops_at_the_end() {
+        let doc = wepaper_json::parse(
+            r#"{"value":"10 20 0","animation":{"relative":true,"options":{"fps":10,"length":10,"mode":"single"},
+                "c0":[{"frame":0,"value":0},{"frame":10,"value":5}],"c1":[{"frame":0,"value":1},{"frame":10,"value":1}]}}"#,
+        )
+        .unwrap();
+        let origin: Dyn<[f32; 3]> = Dyn::read(&doc, [0.0; 3]);
+        let mut bindings = Bindings::default();
+        bindings.link(&origin, Slot::LayerOrigin(2));
+        let mut changes = Vec::new();
+        // The first frame shows where the animation starts, whatever time has passed.
+        bindings.animate(0.3, &mut changes);
+        assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![10.0, 21.0, 0.0])]);
+        changes.clear();
+        bindings.animate(0.5, &mut changes);
+        assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![12.5, 21.0, 0.0])]);
+        changes.clear();
+        bindings.animate(5.0, &mut changes);
+        assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![15.0, 21.0, 0.0])]);
+        changes.clear();
+        bindings.animate(1.0, &mut changes);
+        assert!(changes.is_empty(), "a finished animation changes nothing more");
+    }
+
+    #[test]
+    fn paused_animation_holds_its_first_frame() {
+        let doc = wepaper_json::parse(
+            r#"{"value":1,"animation":{"options":{"fps":60,"length":60,"mode":"single","startpaused":true,"name":"show"},
+                "c0":[{"frame":0,"value":0},{"frame":60,"value":1}]}}"#,
+        )
+        .unwrap();
+        let alpha: Dyn<f32> = Dyn::read(&doc, 1.0);
+        let mut bindings = Bindings::default();
+        bindings.link(&alpha, Slot::LayerAlpha(0));
+        let mut changes = Vec::new();
+        bindings.animate(0.5, &mut changes);
+        bindings.animate(0.5, &mut changes);
+        assert_eq!(changes, [Change::Floats(Slot::LayerAlpha(0), vec![0.0])]);
     }
 
     #[test]

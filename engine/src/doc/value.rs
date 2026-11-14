@@ -2,6 +2,8 @@
 
 use wepaper_json::Value;
 
+use super::Animation;
+
 /// A link from a value to a user property.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UserLink {
@@ -30,7 +32,7 @@ pub struct Dyn<T> {
     /// The script that computes it.
     pub script: Option<Script>,
     /// The keyframe animation that plays on it.
-    pub animation: Option<Value>,
+    pub animation: Option<Animation>,
 }
 
 impl<T> Dyn<T> {
@@ -64,7 +66,7 @@ impl<T: FromDoc> Dyn<T> {
             .get("script")
             .as_str()
             .map(|source| Script { source: source.to_owned(), properties: doc.get("scriptproperties").clone() });
-        let animation = Some(doc.get("animation")).filter(|a| !a.is_null()).cloned();
+        let animation = Animation::read(doc.get("animation"));
         Self { value: T::from_doc(doc.get("value")).unwrap_or(default), user, script, animation }
     }
 }
@@ -72,6 +74,48 @@ impl<T: FromDoc> Dyn<T> {
 /// The numbers in a string such as `"0.5 1 -2"`.
 pub fn floats(text: &str) -> Vec<f32> {
     text.split([' ', ',', '\t']).filter(|part| !part.is_empty()).map(|part| part.parse().unwrap_or(0.0)).collect()
+}
+
+/// A value as the numbers an animation or a shader works with.
+pub trait AsFloats {
+    /// The value's components; empty when it is not a number.
+    fn as_floats(&self) -> Vec<f32>;
+}
+
+impl AsFloats for f32 {
+    fn as_floats(&self) -> Vec<f32> {
+        vec![*self]
+    }
+}
+
+impl AsFloats for bool {
+    fn as_floats(&self) -> Vec<f32> {
+        vec![f32::from(u8::from(*self))]
+    }
+}
+
+impl AsFloats for String {
+    fn as_floats(&self) -> Vec<f32> {
+        Vec::new()
+    }
+}
+
+impl<const N: usize> AsFloats for [f32; N] {
+    fn as_floats(&self) -> Vec<f32> {
+        self.to_vec()
+    }
+}
+
+impl AsFloats for Value {
+    fn as_floats(&self) -> Vec<f32> {
+        match self {
+            Value::String(s) => floats(s),
+            Value::Number(n) => vec![*n as f32],
+            Value::Bool(b) => b.as_floats(),
+            Value::Array(items) => items.iter().filter_map(f32::from_doc).collect(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// A type a document value converts to, as loosely as Wallpaper Engine reads it.
