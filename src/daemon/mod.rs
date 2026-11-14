@@ -509,6 +509,16 @@ impl Daemon {
             self.last_upkeep = now;
             self.optimising = self.engine.videos().optimise();
             self.plugins.upkeep();
+            // A wallpaper that gave up (a video that cannot be played) is said to have:
+            // the output's `error` names it instead of the tree calling it playing.
+            for slot in self.slots.values_mut() {
+                if let Some(why) = slot.wallpaper.as_ref().and_then(Wallpaper::failure)
+                    && slot.error.is_none()
+                {
+                    slot.error = Some(why.to_owned());
+                    log::error!("{why}");
+                }
+            }
             // A renderer plugin that died leaves its output empty, and says so.
             for slot in self.slots.values_mut() {
                 if slot.renderer.as_mut().is_some_and(|renderer| !renderer.alive()) {

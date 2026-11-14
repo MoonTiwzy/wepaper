@@ -182,6 +182,15 @@ impl Wallpaper {
         matches!(self, Wallpaper::Scene(scene) if scene.wants_audio())
     }
 
+    /// Why the wallpaper stopped showing anything, when it did: a video that cannot be
+    /// played. `None` while it plays.
+    pub fn failure(&self) -> Option<&'static str> {
+        match self {
+            Wallpaper::Video(video) if video.failed() => Some("the video cannot be played"),
+            _ => None,
+        }
+    }
+
     /// Whether the wallpaper has scripts that show what the system's media player
     /// is on, so that somebody has to follow it.
     pub fn wants_media(&self) -> bool {

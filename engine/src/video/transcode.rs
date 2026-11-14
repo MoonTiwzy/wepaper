@@ -8,6 +8,8 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
 use std::time::UNIX_EPOCH;
 
@@ -47,10 +49,40 @@ pub fn cached_path(dir: &Path, source: &Path, limits: Limits) -> PathBuf {
     dir.join(format!("{key:016x}-w{}-f{:.0}-e2.mp4", limits.max_width, limits.max_fps))
 }
 
-/// A re-encode running in the background.
+/// A re-encode running in the background. Dropping it stops the encoder: a copy
+/// nobody is going to play is not worth a core.
 pub(crate) struct Job {
     pub(crate) target: PathBuf,
     done: Receiver<bool>,
+    /// The encoder's process, and whether it has ended (its number may be reused then).
+    encoder: u32,
+    ended: Arc<AtomicBool>,
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        if !self.ended.load(Ordering::Acquire) {
+            // SAFETY: a signal to the child this job started and whose end was not seen yet.
+            unsafe { libc::kill(self.encoder as libc::pid_t, libc::SIGTERM) };
+        }
+    }
+}
+
+/// Removes the partial copies a daemon that was killed left in the cache: files
+/// named after a process that is no longer there.
+fn clear_abandoned(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // `<key>.<pid>.part`
+        let Some(owner) = name.strip_suffix(".part").and_then(|rest| rest.rsplit('.').next()) else {
+            continue;
+        };
+        if owner.parse::<u32>().is_ok_and(|pid| !Path::new(&format!("/proc/{pid}")).exists()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 impl Job {
@@ -108,6 +140,7 @@ pub(crate) fn arguments(source: &Path, part: &Path, limits: Limits) -> Vec<Strin
 /// Starts re-encoding `source` into `target`. `None` when ffmpeg cannot be started.
 pub(crate) fn start(source: &Path, target: &Path, limits: Limits) -> Option<Job> {
     std::fs::create_dir_all(target.parent()?).ok()?;
+    clear_abandoned(target.parent()?);
     // Unique to this process: two daemons never write the same partial file.
     let part = target.with_extension(format!("{}.part", std::process::id()));
     let mut command = Command::new("ffmpeg");
@@ -131,24 +164,49 @@ pub(crate) fn start(source: &Path, target: &Path, limits: Limits) -> Option<Job>
         .ok()?;
     let (sender, done) = channel();
     let (target_path, name) = (target.to_owned(), source.display().to_string());
+    let encoder = child.id();
+    let ended = Arc::new(AtomicBool::new(false));
+    let seen = ended.clone();
     std::thread::Builder::new()
         .name("wepaper-transcode".to_owned())
         .spawn(move || {
-            let ok = child.wait().is_ok_and(|status| status.success())
-                && std::fs::rename(&part, &target_path).is_ok();
+            let finished = child.wait();
+            seen.store(true, Ordering::Release);
+            // Stopped by a signal: the job was dropped, and nobody waits for the copy.
+            let stopped = finished.as_ref().is_ok_and(|status| status.code().is_none());
+            let ok =
+                finished.is_ok_and(|status| status.success()) && std::fs::rename(&part, &target_path).is_ok();
             if !ok {
                 let _ = std::fs::remove_file(&part);
-                log::warn!("{name} could not be re-encoded; the original keeps playing");
+                if !stopped {
+                    log::warn!("{name} could not be re-encoded; the original keeps playing");
+                }
             }
             let _ = sender.send(ok);
         })
         .ok()?;
-    Some(Job { target: target.to_owned(), done })
+    Some(Job { target: target.to_owned(), done, encoder, ended })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn partial_copies_of_a_process_that_is_gone_are_cleared() {
+        let dir = std::env::temp_dir().join(format!("wepaper-test-parts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let abandoned = dir.join("0123-w2560-f60-e2.4000000000.part");
+        let ours = dir.join(format!("0123-w2560-f60-e2.{}.part", std::process::id()));
+        let copy = dir.join("0123-w2560-f60-e2.mp4");
+        for file in [&abandoned, &ours, &copy] {
+            std::fs::write(file, b"x").unwrap();
+        }
+        clear_abandoned(&dir);
+        assert!(!abandoned.exists(), "left by a process that no longer runs");
+        assert!(ours.exists() && copy.exists(), "a running process's file and finished copies stay");
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn cache_name_depends_on_caps() {

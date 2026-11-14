@@ -78,6 +78,8 @@ impl VideoHub {
         let Some(dir) = self.cache.clone() else { return 0 };
         let limits = self.limits;
         let mut running = 0;
+        // A video nothing plays any more is forgotten, and its re-encode with it.
+        self.streams.retain(|_, playing| playing.stream.strong_count() > 0);
         for (source, playing) in &mut self.streams {
             let Some(stream) = playing.stream.upgrade() else { continue };
             if let Some(job) = &playing.job {

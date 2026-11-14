@@ -64,6 +64,11 @@ impl VideoInstance {
         &self.project
     }
 
+    /// Whether the video ended for good: the file cannot be played.
+    pub fn failed(&self) -> bool {
+        self.hold.stream.borrow().ended()
+    }
+
     /// Changes how the video fills an output of another shape.
     pub fn set_fill(&mut self, fill: Fill) {
         self.fill = fill;
