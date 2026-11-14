@@ -74,6 +74,12 @@ impl VideoInstance {
         self.fill = fill;
     }
 
+    /// Sets how loud the video is, 0 to 100. Shown on several outputs it is one
+    /// video, as loud as it was set last.
+    pub fn set_volume(&mut self, volume: f32) {
+        self.hold.stream.borrow().set_volume(volume);
+    }
+
     /// Sets how fast the video plays: 1 as it was made. Shown on several outputs it
     /// is one video, at the speed set last.
     pub fn set_rate(&mut self, rate: f32) {

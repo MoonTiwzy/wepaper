@@ -206,10 +206,12 @@ impl Wallpaper {
     }
 
     /// Switches the wallpaper's own sound on or off and sets its volume (0 to 100).
-    /// A video's sound follows the engine's video settings instead.
+    /// Whether a video's track is decoded at all follows the engine's video settings;
+    /// how loud this video is, is set here.
     pub fn set_sound(&mut self, on: bool, volume: f32) {
-        if let Wallpaper::Scene(scene) = self {
-            scene.set_sound(on, volume);
+        match self {
+            Wallpaper::Scene(scene) => scene.set_sound(on, volume),
+            Wallpaper::Video(video) => video.set_volume(if on { volume } else { 0.0 }),
         }
     }
 

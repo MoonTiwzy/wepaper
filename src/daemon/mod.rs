@@ -740,7 +740,10 @@ impl Daemon {
         for (id, slot) in &mut self.slots {
             let on = audio && heard.contains(id);
             let volume = volume * slot.shown.look.volume;
-            if let Some(wallpaper) = &mut slot.wallpaper {
+            // A video on several outputs is one video: the output it is heard on sets it.
+            if let Some(wallpaper) = &mut slot.wallpaper
+                && (wallpaper.animates() || heard.contains(id))
+            {
                 wallpaper.set_sound(on, volume);
             }
             if let Some(renderer) = &mut slot.renderer {

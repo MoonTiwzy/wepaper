@@ -7,6 +7,8 @@
   found beside the preset: a console wallpaper with a video of the user's showed a red
   square and no background.
 
+- An output's share of the volume (`look/volume`) reaches a video wallpaper too.
+
 ## 0.2.0
 
 - 3D scenes. A scene with a perspective camera is seen through it, or through its camera
