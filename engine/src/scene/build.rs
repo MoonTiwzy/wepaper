@@ -49,10 +49,16 @@ impl SceneInstance {
         let mut skipped = Vec::new();
         let index_of: HashMap<i64, usize> =
             scene.objects.iter().enumerate().map(|(index, object)| (object.id, index)).collect();
-        let mut scene_size = scene.general.orthogonal.filter(|s| s[0] > 0.0 && s[1] > 0.0);
-        if scene.general.orthogonal.is_none() {
-            skipped.push("the scene uses a perspective camera, which is drawn flat".to_owned());
-        }
+        // A 3D scene has no size of its own: its flat layers measure against a screen.
+        let mut scene_size = match scene.general.orthogonal {
+            Some(size) => Some(size).filter(|s| s[0] > 0.0 && s[1] > 0.0),
+            None => Some([1920.0, 1080.0]),
+        };
+        // Lit passes are compiled for the lights there are, so they are counted first.
+        bindings.lights =
+            scene.objects.iter().filter(|object| matches!(object.kind, ObjectKind::Light(_))).count();
+        let mut lights = super::lights::Lights::default();
+        let mut camera_layer: Option<super::camera::CameraLayer> = None;
 
         let general = &scene.general;
         bindings.link(&general.zoom, Slot::Scene(SceneField::Zoom));
@@ -66,6 +72,8 @@ impl SceneInstance {
         bindings.link(&general.shake_amplitude, Slot::Scene(SceneField::ShakeAmplitude));
         bindings.link(&general.shake_roughness, Slot::Scene(SceneField::ShakeRoughness));
         bindings.link(&general.shake_speed, Slot::Scene(SceneField::ShakeSpeed));
+        bindings.link(&general.ambient, Slot::Scene(SceneField::Ambient));
+        bindings.link(&general.skylight, Slot::Scene(SceneField::Skylight));
         // The bloom is built when the scene can ever bloom: now, or when a property says so.
         let bloom = (scene.general.bloom.value || scene.general.bloom.user.is_some())
             .then(|| build_bloom(engine, files, &mut bindings, &scene))
@@ -142,6 +150,39 @@ impl SceneInstance {
                         }
                     }
                 }
+                ObjectKind::Model(model) => {
+                    match super::model::ModelLayer::build(
+                        engine,
+                        files,
+                        &mut bindings,
+                        model,
+                        index,
+                        &mut skipped,
+                    ) {
+                        Ok(layer) => LayerKind::Model(Box::new(layer)),
+                        Err(why) => {
+                            log::warn!("model {} ({}) is skipped: {why}", object.name, object.id);
+                            skipped.push(format!("layer {}: {why}", object.name));
+                            LayerKind::Group
+                        }
+                    }
+                }
+                // A light draws nothing itself: it is a place the lit passes read.
+                ObjectKind::Light(light) => {
+                    lights.add(&mut bindings, index, light);
+                    LayerKind::Group
+                }
+                // The camera of a 3D scene: the one called `default`, else the first.
+                ObjectKind::Camera(camera) => {
+                    if camera_layer.is_none() || camera.name == "default" {
+                        camera_layer.get_or_insert(super::camera::CameraLayer {
+                            index,
+                            fov: camera.fov,
+                            zoom: camera.zoom,
+                        });
+                    }
+                    LayerKind::Group
+                }
                 ObjectKind::Unsupported(what) => {
                     skipped.push(format!("layer {}: {what} objects are not drawn", object.name));
                     LayerKind::Group
@@ -149,10 +190,19 @@ impl SceneInstance {
                 _ => LayerKind::Group,
             };
             bind_object(&mut bindings, index, object);
+            let parent = object.parent.and_then(|id| index_of.get(&id).copied());
+            // An attachment names a point of the parent's model, which is built by now.
+            let attachment = object.attachment.as_deref().and_then(|name| {
+                match &layers.get(parent?).map(|layer: &Layer| &layer.kind) {
+                    Some(LayerKind::Model(model)) => model.attachment(name),
+                    _ => None,
+                }
+            });
             layers.push(Layer {
                 id: object.id,
                 name: object.name.clone(),
-                parent: object.parent.and_then(|id| index_of.get(&id).copied()),
+                parent,
+                attachment,
                 visible: object.visible.value,
                 origin: object.origin.value,
                 scale: object.scale.value,
@@ -164,6 +214,7 @@ impl SceneInstance {
             });
         }
 
+        bindings.settle_followers();
         let mut instance = Self {
             order: (0..layers.len()).collect(),
             layers,
@@ -180,6 +231,7 @@ impl SceneInstance {
             project,
             bloom,
             provides: std::collections::HashSet::new(),
+            reflects: std::collections::HashSet::new(),
             videos: Vec::new(),
             parallax: super::Parallax {
                 enabled: scene.general.parallax.value,
@@ -198,7 +250,23 @@ impl SceneInstance {
             wants_audio: false,
             paused: false,
             sound: (false, 0.0),
+            perspective: scene.general.orthogonal.is_none().then_some(super::camera::Perspective {
+                eye: scene.eye,
+                center: scene.center,
+                up: scene.up,
+                fov: scene.general.fov.value,
+                near: scene.general.near,
+                far: scene.general.far,
+            }),
+            camera_layer: None,
+            attached: false,
+            view: None,
+            lights,
+            ambient: scene.general.ambient.value,
+            skylight: scene.general.skylight.value,
         };
+        instance.camera_layer = camera_layer.filter(|_| instance.perspective.is_some());
+        instance.attached = instance.layers.iter().any(|layer| layer.attachment.is_some());
         instance.hold_videos();
         let (sound, volume) = (engine.share.videos.options.audio, engine.share.videos.options.volume);
         instance.set_sound(sound, volume);
@@ -247,12 +315,24 @@ impl SceneInstance {
                     }
                 }
                 LayerKind::Particles(particles) => particles.parts.iter().for_each(|part| note(&part.shade)),
+                LayerKind::Model(model) => model.passes().for_each(&mut note),
                 _ => {}
             }
         }
         self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
         self.wants_audio = wants_audio;
         self.provides = provides;
+        // Reflections are lit surfaces of 3D scenes: models, and flat layers with a normal map.
+        self.reflects = self
+            .layers
+            .iter()
+            .filter(|layer| match &layer.kind {
+                LayerKind::Model(model) => model.passes().any(|shade| shade.wants_reflection),
+                LayerKind::Image(image) => image.base.wants_reflection,
+                _ => false,
+            })
+            .map(|layer| layer.id)
+            .collect();
     }
 }
 
@@ -324,7 +404,17 @@ fn bind_object(bindings: &mut Bindings, index: usize, object: &Object) {
     }
 }
 
-fn read_doc(files: &Files, path: &str) -> Result<Value, String> {
+/// How a pass of `blending` is drawn over what is there.
+pub(super) fn blend(blending: Blending) -> Blend {
+    match blending {
+        Blending::Translucent => Blend::Alpha,
+        Blending::Additive => Blend::Additive,
+        Blending::Premultiplied => Blend::Premultiplied,
+        Blending::Normal | Blending::Opaque => Blend::None,
+    }
+}
+
+pub(super) fn read_doc(files: &Files, path: &str) -> Result<Value, String> {
     let text = files.read_text(path).map_err(|e| e.to_string())?;
     wepaper_json::parse(&text).map_err(|e| format!("{path}: {e}"))
 }
@@ -333,8 +423,10 @@ pub(super) fn choices(textures: &[Option<String>]) -> Vec<TextureChoice> {
     textures.iter().map(|t| t.clone().map_or(TextureChoice::Default, TextureChoice::Named)).collect()
 }
 
+/// A material's constants. A constant may follow a user property (`{"user": ..., "value": ...}`)
+/// as a layer's own values do.
 pub(super) fn constants(pass: &MaterialPass) -> Vec<(String, Dyn<Value>)> {
-    pass.constants.iter().map(|(name, value)| (name.clone(), Dyn::constant(value.clone()))).collect()
+    pass.constants.iter().map(|(name, value)| (name.clone(), Dyn::read(value, Value::Null))).collect()
 }
 
 fn build_image(
@@ -426,12 +518,7 @@ fn build_image(
         alpha: image.alpha.value,
         color: image.color.value,
         brightness: image.brightness.value,
-        blend: match pass.blending {
-            Blending::Translucent => Blend::Alpha,
-            Blending::Additive => Blend::Additive,
-            Blending::Premultiplied => Blend::Premultiplied,
-            Blending::Normal | Blending::Opaque => Blend::None,
-        },
+        blend: blend(pass.blending),
         base,
         effects,
         buffers,

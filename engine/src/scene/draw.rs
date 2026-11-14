@@ -1,6 +1,6 @@
 //! Drawing a frame.
 
-use crate::gpu::{Blend, Gl, Target, Texture, TextureFormat};
+use crate::gpu::{Blend, Depth, Gl, Target, Texture, TextureFormat};
 use crate::math::Mat4;
 use crate::{Engine, Fill};
 
@@ -16,12 +16,12 @@ const MAX_BUFFER_SIDE: f32 = 8192.0;
 const EYE_DISTANCE: f32 = 1000.0;
 
 /// What is the same for every pass of a frame.
-struct Frame<'a> {
+pub(super) struct Frame<'a> {
     time: f32,
     daytime: f32,
     pointer: [f32; 2],
-    screen: [f32; 2],
-    view_projection: Mat4,
+    pub(super) screen: [f32; 2],
+    pub(super) view_projection: Mat4,
     values: &'a [Vec<f32>],
     /// The pointer as the parallax sees it.
     eased_pointer: [f32; 2],
@@ -31,36 +31,45 @@ struct Frame<'a> {
     audio: &'a crate::audio::Spectrum,
     /// Where spectrum bands are gathered before they go to a uniform.
     scratch: std::cell::RefCell<Vec<f32>>,
+    /// Where the camera is, and its right, up and the way it looks.
+    eye: [f32; 3],
+    axes: [[f32; 3]; 3],
+    /// The scene's light from above and from below, and its lights.
+    ambient: [f32; 3],
+    skylight: [f32; 3],
+    lights: &'a super::lights::Lights,
+    /// The scene behind the first layer that reflects it, with its smaller levels.
+    reflection: std::cell::RefCell<Option<Target>>,
 }
 
 /// What is the same for every pass of a layer.
-struct LayerState {
-    mvp: Mat4,
-    model: Mat4,
-    color: [f32; 3],
-    alpha: f32,
-    brightness: f32,
+pub(super) struct LayerState {
+    pub(super) mvp: Mat4,
+    pub(super) model: Mat4,
+    pub(super) color: [f32; 3],
+    pub(super) alpha: f32,
+    pub(super) brightness: f32,
     /// The size shaders are told the layer's buffers have: the authored one.
-    authored: [f32; 2],
+    pub(super) authored: [f32; 2],
     /// `g_RenderVar0` and `g_RenderVar1`, for particles.
-    vars: [[f32; 4]; 2],
+    pub(super) vars: [[f32; 4]; 2],
 }
 
 /// Where the frame is drawn: a framebuffer (or the current surface) and its size.
 #[derive(Clone, Copy)]
-struct Canvas {
+pub(super) struct Canvas {
     framebuffer: Option<glow::Framebuffer>,
     size: (u32, u32),
 }
 
 impl Canvas {
-    fn bind(&self, gl: &Gl) {
+    pub(super) fn bind(&self, gl: &Gl) {
         gl.bind_framebuffer(self.framebuffer, self.size);
     }
 }
 
 /// Finished pictures of layers: the layer's id, the buffer, and the size shaders are told it has.
-type Pictures = Vec<(i64, Target, [f32; 2])>;
+pub(super) type Pictures = Vec<(i64, Target, [f32; 2])>;
 
 /// The buffers a layer holds while its chain runs.
 struct Chain {
@@ -82,14 +91,23 @@ impl SceneInstance {
     ) {
         self.viewport = crate::Viewport { width: size.0.max(1), height: size.1.max(1) };
         let size = (self.viewport.width, self.viewport.height);
-        // A scene that blooms is drawn into a buffer first: the bloom reads the finished frame.
-        let staged = match self.bloom.as_ref().filter(|bloom| bloom.enabled) {
-            Some(_) => engine
+        // A scene that blooms is drawn into a buffer first: the bloom reads the finished
+        // frame. A 3D scene is too: it needs a depth buffer, and the surface has none.
+        let deep = self.perspective.is_some();
+        let staged = if deep {
+            engine
+                .pool
+                .take_with_depth(size.0, size.1, TextureFormat::Rgba8)
+                .inspect_err(|e| log::warn!("3D scene: {e}"))
+                .ok()
+        } else if self.bloom.as_ref().is_some_and(|bloom| bloom.enabled) {
+            engine
                 .pool
                 .take(size.0, size.1, TextureFormat::Rgba8)
                 .inspect_err(|e| log::warn!("bloom: {e}"))
-                .ok(),
-            None => None,
+                .ok()
+        } else {
+            None
         };
         let canvas =
             Canvas { framebuffer: staged.as_ref().map_or(to, |target| Some(target.framebuffer())), size };
@@ -118,12 +136,25 @@ impl SceneInstance {
         // Puppets play on: this frame's bones go into the value table shaders read.
         let stretch = (input.time - before).max(0.0) as f32;
         for layer in &mut self.layers {
-            if let LayerKind::Image(image) = &mut layer.kind
-                && let Some(puppet) = &mut image.puppet
-                && layer.shown
-            {
-                puppet.update(stretch, &mut self.bindings.values);
+            if !layer.shown {
+                continue;
             }
+            match &mut layer.kind {
+                LayerKind::Image(image) => {
+                    if let Some(puppet) = &mut image.puppet {
+                        puppet.update(stretch, &mut self.bindings.values);
+                    }
+                }
+                LayerKind::Model(model) => model.update(stretch, &mut self.bindings.values),
+                _ => {}
+            }
+        }
+        // What hangs from a bone follows the pose of this frame.
+        if self.attached {
+            self.update_transforms();
+        }
+        if self.lights.count() > 0 {
+            self.lights.update(&self.layers, &self.bindings.values);
         }
         // The parallax camera trails the pointer.
         if self.parallax.enabled {
@@ -133,7 +164,17 @@ impl SceneInstance {
                 self.eased_pointer[axis] += (input.pointer[axis] - self.eased_pointer[axis]) * ease;
             }
         }
-        self.view_projection = self.camera(input.time as f32);
+        // A camera object takes the camera where it is this frame.
+        if let (Some(camera), Some(rig)) = (&mut self.perspective, self.camera_layer)
+            && let Some(layer) = self.layers.get(rig.index)
+        {
+            *camera = rig.place(&layer.world, camera.near, camera.far);
+        }
+        self.view = self.perspective.map(|camera| self.perspective_view(&camera, input.time as f32));
+        self.view_projection = match &self.view {
+            Some(view) => view.view_projection,
+            None => self.camera(input.time as f32),
+        };
         // A copy: the frame borrows it while the engine is being drawn with.
         let spectrum = engine.listener.spectrum().clone();
         let frame = Frame {
@@ -144,8 +185,9 @@ impl SceneInstance {
             view_projection: self.view_projection,
             values: &self.bindings.values,
             eased_pointer: self.eased_pointer,
-            // The pointer counts from the top left; the scene's y points up.
-            parallax: Some(self.parallax).filter(|p| p.enabled).map(|p| {
+            // The pointer counts from the top left; the scene's y points up. A 3D scene's
+            // camera moves itself.
+            parallax: Some(self.parallax).filter(|p| p.enabled && !deep).map(|p| {
                 let pointer = [
                     (0.5 - self.eased_pointer[0]) * self.scene_size[0],
                     (self.eased_pointer[1] - 0.5) * self.scene_size[1],
@@ -155,9 +197,24 @@ impl SceneInstance {
             scene_center: [self.scene_size[0] / 2.0, self.scene_size[1] / 2.0],
             audio: &spectrum,
             scratch: std::cell::RefCell::new(Vec::with_capacity(64)),
+            // A flat scene is seen head on, from in front of its centre.
+            eye: self
+                .view
+                .map_or([self.scene_size[0] / 2.0, self.scene_size[1] / 2.0, EYE_DISTANCE], |view| view.eye),
+            axes: self.view.map_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], |view| {
+                [view.right, view.up, view.forward.map(|n| -n)]
+            }),
+            ambient: self.ambient,
+            skylight: self.skylight,
+            lights: &self.lights,
+            reflection: std::cell::RefCell::new(None),
         };
         canvas.bind(&engine.gl);
-        engine.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
+        if deep && staged.is_some() {
+            engine.gl.clear_with_depth([self.clear[0], self.clear[1], self.clear[2], 1.0]);
+        } else {
+            engine.clear([self.clear[0], self.clear[1], self.clear[2], 1.0]);
+        }
         // How many output pixels one scene unit covers: layer buffers are sized by it.
         let density = (frame.view_projection.0[0] * frame.screen[0] / 2.0)
             .abs()
@@ -199,9 +256,24 @@ impl SceneInstance {
             if !layer.shown {
                 continue;
             }
+            if deep {
+                // Flat things in a 3D scene are hidden by what is nearer, and hide nothing.
+                engine.gl.set_depth(Depth { test: true, write: false });
+                engine.gl.set_cull(false);
+            }
+            if !self.reflects.is_empty() && self.reflects.contains(&layer.id) {
+                reflect(engine, &frame, canvas);
+            }
             match &layer.kind {
                 LayerKind::Image(image) => {
                     let keep = self.provides.contains(&layer.id);
+                    let density = match &self.view {
+                        Some(view) => view.pixels_per_unit(
+                            [layer.world.0[12], layer.world.0[13], layer.world.0[14]],
+                            frame.screen[1],
+                        ),
+                        None => density,
+                    };
                     draw_image(
                         engine,
                         &frame,
@@ -217,10 +289,25 @@ impl SceneInstance {
                 LayerKind::Particles(particles) => {
                     draw_particles(engine, &frame, layer, particles, canvas, &pictures);
                 }
+                LayerKind::Model(model) => {
+                    model.draw(
+                        engine,
+                        &frame,
+                        &layer.world,
+                        canvas,
+                        background.as_ref().map(|t| &t.texture),
+                        &pictures,
+                    );
+                }
                 LayerKind::Sound(_) | LayerKind::Group => {}
             }
         }
-        if let (Some(staged), Some(bloom)) = (&staged, &self.bloom) {
+        if deep {
+            // What comes after, and other scenes after this one, draw flat again.
+            engine.gl.set_depth(Depth::default());
+            engine.gl.set_cull(false);
+        }
+        if let (Some(staged), Some(bloom)) = (&staged, self.bloom.as_ref().filter(|bloom| bloom.enabled)) {
             let flat = LayerState {
                 mvp: Mat4::IDENTITY,
                 model: Mat4::IDENTITY,
@@ -270,9 +357,15 @@ impl SceneInstance {
                 // No memory for the bloom's buffers: the frame without it.
                 staged.blit(to, size);
             }
+        } else if let Some(staged) = &staged {
+            staged.blit(to, size);
         }
-        for target in
-            background.into_iter().chain(pictures.into_iter().map(|(_, target, _)| target)).chain(staged)
+        let reflection = frame.reflection.into_inner();
+        for target in background
+            .into_iter()
+            .chain(pictures.into_iter().map(|(_, target, _)| target))
+            .chain(staged)
+            .chain(reflection)
         {
             engine.pool.give(target);
         }
@@ -301,8 +394,16 @@ impl SceneInstance {
                 .mul(&Mat4::rotation(layer.angles))
                 .mul(&Mat4::scaling(layer.scale));
             // Parents come before their children in a scene; one that does not is ignored.
-            let parent =
-                layer.parent.filter(|&p| p < index).map(|p| (self.layers[p].world, self.layers[p].shown));
+            let parent = layer.parent.filter(|&p| p < index).map(|p| {
+                let parent = &self.layers[p];
+                let world = match (layer.attachment, &parent.kind) {
+                    (Some(at), LayerKind::Model(model)) => {
+                        model.places.get(at).map_or(parent.world, |place| parent.world.mul(place))
+                    }
+                    _ => parent.world,
+                };
+                (world, parent.shown)
+            });
             let (world, shown) = match parent {
                 Some((parent_world, parent_shown)) => {
                     (parent_world.mul(&local), parent_shown && layer.visible)
@@ -357,6 +458,28 @@ fn placed(frame: &Frame<'_>, layer: &Layer) -> Mat4 {
             Mat4::translation([shift[0], shift[1], 0.0]).mul(&layer.world)
         }
         _ => layer.world,
+    }
+}
+
+/// Copies the scene drawn so far for the reflections of this frame, once: at half its
+/// size, with every smaller level made from it, so a rough surface reads a blurred one.
+fn reflect(engine: &mut Engine, frame: &Frame<'_>, canvas: Canvas) {
+    if frame.reflection.borrow().is_some() {
+        return;
+    }
+    let (width, height) = ((canvas.size.0 / 2).max(1), (canvas.size.1 / 2).max(1));
+    match engine.pool.take_mipmapped(width, height, TextureFormat::Rgba8) {
+        Ok(copy) => {
+            engine.gl.copy_framebuffer(
+                canvas.framebuffer,
+                canvas.size,
+                Some(copy.framebuffer()),
+                (width, height),
+            );
+            copy.generate_mipmaps();
+            *frame.reflection.borrow_mut() = Some(copy);
+        }
+        Err(error) => log::warn!("reflections: {error}"),
     }
 }
 
@@ -738,7 +861,7 @@ fn ensure_named(
 
 /// Binds a pass's program and textures and sets every uniform it has.
 #[allow(clippy::too_many_arguments)]
-fn apply(
+pub(super) fn apply(
     gl: &Gl,
     shade: &Shade,
     frame: &Frame<'_>,
@@ -752,6 +875,8 @@ fn apply(
     shade.program.bind();
     // Per texture unit: the resolution shaders are told, and the sprite frame showing.
     let mut resolutions = [[1.0f32; 4]; 16];
+    let mut levels = [0.0f32; 16];
+    let reflection = frame.reflection.borrow();
     let mut sprites: [Option<([f32; 4], [f32; 2])>; 16] = [None; 16];
     for (uniform, unit, source) in &shade.samplers {
         let authored = [state.authored[0], state.authored[1], state.authored[0], state.authored[1]];
@@ -803,6 +928,14 @@ fn apply(
                     _ => (white.raw(), authored),
                 }
             }
+            TextureRef::Reflection => match reflection.as_ref() {
+                Some(copy) => {
+                    levels[*unit as usize & 15] = copy.levels() as f32;
+                    let (w, h) = (copy.width() as f32, copy.height() as f32);
+                    (copy.texture.raw(), [w, h, w, h])
+                }
+                None => (white.raw(), authored),
+            },
         };
         resolutions[*unit as usize & 15] = resolution;
         gl.bind_texture(*unit, texture);
@@ -824,7 +957,14 @@ fn apply(
             Feed::MvpInverse => set(&state.mvp.inverse().0),
             Feed::Model => set(&state.model.0),
             Feed::ModelInverse => set(&state.model.inverse().0),
-            Feed::Eye => set(&[frame.scene_center[0], frame.scene_center[1], EYE_DISTANCE]),
+            Feed::Eye => set(&frame.eye),
+            Feed::Axis(axis) => set(&frame.axes[*axis % 3]),
+            Feed::Ambient => set(&frame.ambient),
+            Feed::Skylight => set(&frame.skylight),
+            Feed::NormalModel => set(&state.model.normal_matrix()),
+            Feed::LightColors => set(frame.lights.color_radius.as_flattened()),
+            Feed::LightPlaces => set(frame.lights.position_exponent.as_flattened()),
+            Feed::MipLevels(unit) => set(&[levels[*unit as usize & 15]]),
             Feed::RenderVar(index) => set(&state.vars[*index & 1]),
             Feed::ViewProjection => set(&frame.view_projection.0),
             Feed::Identity => {

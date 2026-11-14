@@ -29,6 +29,9 @@ pub(crate) enum TextureRef {
     Text(Rc<super::text::TextSurface>),
     /// The finished picture of another layer, by its id.
     Layer(i64),
+    /// A copy of the scene as drawn so far with every smaller level of it, for
+    /// reflections that blur by how rough a surface is.
+    Reflection,
 }
 
 /// What a texture slot is asked to hold, before it is resolved.
@@ -65,6 +68,20 @@ pub(crate) enum Feed {
     ModelInverse,
     /// Where the camera is, in scene space.
     Eye,
+    /// The camera's right (0), up (1) and backward (2), in scene space.
+    Axis(usize),
+    /// The scene's light from above.
+    Ambient,
+    /// The scene's light from below.
+    Skylight,
+    /// What turns the model's normals into the scene's.
+    NormalModel,
+    /// The colour and reach of every light.
+    LightColors,
+    /// Where every light is.
+    LightPlaces,
+    /// How many levels the texture of a unit has: what reflections blur by.
+    MipLevels(u32),
     /// `g_RenderVar0` and `g_RenderVar1`: what a particle renderer tells its shader.
     RenderVar(usize),
     ViewProjection,
@@ -93,6 +110,8 @@ pub(crate) struct Shade {
     pub(crate) wants_background: bool,
     /// The pass reads the audio spectrum.
     pub(crate) wants_audio: bool,
+    /// The pass reads a blurred copy of the scene behind it.
+    pub(crate) wants_reflection: bool,
 }
 
 impl Shade {
@@ -203,7 +222,7 @@ fn builtin(name: &str) -> Option<Feed> {
             "Resolution" => Some(Feed::Resolution(unit)),
             "Rotation" => Some(Feed::SpriteRotation(unit)),
             "Translation" => Some(Feed::SpriteTranslation(unit)),
-            "MipMapInfo" => Some(Feed::Const(vec![0.0])),
+            "MipMapInfo" => Some(Feed::MipLevels(unit)),
             _ => None,
         };
     }
@@ -217,13 +236,12 @@ fn builtin(name: &str) -> Option<Feed> {
         "g_ModelMatrix" | "g_AltModelMatrix" => Feed::Model,
         "g_ViewProjectionMatrix" | "g_AltViewProjectionMatrix" => Feed::ViewProjection,
         "g_ModelMatrixInverse" => Feed::ModelInverse,
-        "g_EffectTextureProjectionMatrix"
-        | "g_EffectTextureProjectionMatrixInverse"
-        | "g_NormalModelMatrix" => Feed::Identity,
-        // A flat scene is seen head on: the screen's axes are the scene's.
-        "g_OrientationRight" | "g_ViewRight" => Feed::Const(vec![1.0, 0.0, 0.0]),
-        "g_OrientationUp" | "g_ViewUp" => Feed::Const(vec![0.0, 1.0, 0.0]),
-        "g_OrientationForward" => Feed::Const(vec![0.0, 0.0, 1.0]),
+        "g_EffectTextureProjectionMatrix" | "g_EffectTextureProjectionMatrixInverse" => Feed::Identity,
+        "g_NormalModelMatrix" => Feed::NormalModel,
+        // The camera's axes: a flat scene is seen head on, so they are the scene's.
+        "g_OrientationRight" | "g_ViewRight" => Feed::Axis(0),
+        "g_OrientationUp" | "g_ViewUp" => Feed::Axis(1),
+        "g_OrientationForward" => Feed::Axis(2),
         "g_RenderVar0" => Feed::RenderVar(0),
         "g_RenderVar1" => Feed::RenderVar(1),
         "g_Time" => Feed::Time,
@@ -238,7 +256,11 @@ fn builtin(name: &str) -> Option<Feed> {
         "g_Alpha" | "g_UserAlpha" => Feed::Alpha,
         "g_Brightness" => Feed::Brightness,
         "g_EyePosition" => Feed::Eye,
-        "g_LightAmbientColor" => Feed::Const(vec![1.0, 1.0, 1.0]),
+        "g_LightAmbientColor" => Feed::Ambient,
+        "g_LightSkylightColor" => Feed::Skylight,
+        // The lights the lighting of `glsl/lighting.rs` declares.
+        "g_LightsColorRadius" | "g_LightsColorRadius[0]" => Feed::LightColors,
+        "g_LightsPositionExponent" | "g_LightsPositionExponent[0]" => Feed::LightPlaces,
         _ => return None,
     })
 }
@@ -269,6 +291,9 @@ impl Shade {
                     if name == "_rt_FullFrameBuffer" {
                         *wants_background = true;
                         return Some(TextureRef::Background);
+                    }
+                    if name == "_rt_MipMappedFrameBuffer" {
+                        return Some(TextureRef::Reflection);
                     }
                     if let Some(rest) = name.strip_prefix("_rt_imageLayerComposite_") {
                         // `<id>_a`: the picture of layer <id> after its effects.
@@ -330,6 +355,11 @@ impl Shade {
         }
         // Shaders written before `g_Color4` take tint and alpha separately; both work.
         combos.entry("VERSION".to_owned()).or_insert(1);
+        // A lit pass is written for the lights the scene has; an unlit one, or a scene
+        // without lights, gets none.
+        if bindings.lights > 0 && combos.get("LIGHTING").is_some_and(|on| *on != 0) {
+            combos.insert("WEPAPER_LIGHTS".to_owned(), bindings.lights as i32);
+        }
 
         let program = share.program(&pair, &combos).map_err(|e| format!("shader {}: {e}", input.shader))?;
 
@@ -383,6 +413,7 @@ impl Shade {
             };
             feeds.push((uniform.clone(), feed));
         }
-        Ok(Self { program, samplers, feeds, constants, wants_background, wants_audio })
+        let wants_reflection = samplers.iter().any(|(_, _, source)| matches!(source, TextureRef::Reflection));
+        Ok(Self { program, samplers, feeds, constants, wants_background, wants_audio, wants_reflection })
     }
 }

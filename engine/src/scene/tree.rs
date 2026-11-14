@@ -73,6 +73,10 @@ impl SceneInstance {
                         .collect();
                     node.insert("effects", Value::Object(effects));
                 }
+                LayerKind::Model(model) => {
+                    node.insert("kind", Value::from("model"));
+                    node.insert("constants", constants(model.passes(), &self.bindings.values));
+                }
                 LayerKind::Sound(sound) => {
                     node.insert("kind", Value::from("sound"));
                     node.insert("volume", Value::from(sound.volume));
@@ -150,6 +154,8 @@ impl SceneInstance {
             SceneField::ShakeAmplitude => Value::from(self.shake.amplitude),
             SceneField::ShakeRoughness => Value::from(self.shake.roughness),
             SceneField::ShakeSpeed => Value::from(self.shake.speed),
+            SceneField::Ambient => vector(&self.ambient),
+            SceneField::Skylight => vector(&self.skylight),
         }
     }
 

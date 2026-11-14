@@ -8,12 +8,16 @@
 
 mod bindings;
 mod build;
+mod camera;
 mod draw;
+mod lights;
+mod model;
 mod particles;
 mod puppet;
 #[cfg(feature = "script")]
 mod scripts;
 mod shade;
+mod skeleton;
 mod sound;
 mod text;
 mod tree;
@@ -128,6 +132,8 @@ pub(crate) enum LayerKind {
     Particles(Box<particles::ParticleLayer>),
     /// A sound, playing while the engine's sound is on.
     Sound(SoundLayer),
+    /// A 3D model.
+    Model(Box<model::ModelLayer>),
     /// Nothing drawn (yet): keeps the hierarchy and its transforms.
     Group,
 }
@@ -139,6 +145,8 @@ pub(crate) struct Layer {
     pub(crate) id: i64,
     pub(crate) name: String,
     pub(crate) parent: Option<usize>,
+    /// The attachment point of the parent's model the layer hangs from.
+    pub(crate) attachment: Option<usize>,
     pub(crate) visible: bool,
     pub(crate) origin: [f32; 3],
     pub(crate) scale: [f32; 3],
@@ -149,6 +157,26 @@ pub(crate) struct Layer {
     /// Whether it and every parent are visible.
     pub(crate) shown: bool,
     pub(crate) kind: LayerKind,
+}
+
+impl Layer {
+    /// The skeleton of the puppet or model the layer is, when it is one.
+    pub(crate) fn skeleton(&self) -> Option<&skeleton::Skeleton> {
+        match &self.kind {
+            LayerKind::Image(image) => image.puppet.as_ref().map(|puppet| &puppet.skeleton),
+            LayerKind::Model(model) => Some(&model.skeleton),
+            _ => None,
+        }
+    }
+
+    /// The same, to change.
+    pub(crate) fn skeleton_mut(&mut self) -> Option<&mut skeleton::Skeleton> {
+        match &mut self.kind {
+            LayerKind::Image(image) => image.puppet.as_mut().map(|puppet| &mut puppet.skeleton),
+            LayerKind::Model(model) => Some(&mut model.skeleton),
+            _ => None,
+        }
+    }
 }
 
 /// The passes of the scene's bloom, in the order they run.
@@ -229,6 +257,8 @@ pub struct SceneInstance {
     bloom: Option<Bloom>,
     /// The ids of layers whose finished picture another layer reads.
     provides: std::collections::HashSet<i64>,
+    /// The ids of layers with a pass that reflects the scene behind it.
+    reflects: std::collections::HashSet<i64>,
     /// The videos the scene's layers show, held for as long as it plays.
     videos: Vec<crate::video::VideoHold>,
     /// The camera follows the pointer, shifting layers by their depth.
@@ -244,6 +274,19 @@ pub struct SceneInstance {
     paused: bool,
     /// Whether sound is on, and how loud (0 to 100), as last told.
     sound: (bool, f32),
+    /// The camera of a 3D scene; `None` for a flat one.
+    perspective: Option<camera::Perspective>,
+    /// Whether a layer hangs from an attachment point of a model.
+    attached: bool,
+    /// The camera object a 3D scene is seen through, when it has one.
+    camera_layer: Option<camera::CameraLayer>,
+    /// That camera as it was for the last frame.
+    view: Option<camera::View>,
+    /// The scene's lights; empty in most scenes.
+    lights: lights::Lights,
+    /// The light that reaches what faces up, and what faces down.
+    ambient: [f32; 3],
+    skylight: [f32; 3],
 }
 
 impl SceneInstance {
@@ -317,6 +360,8 @@ impl SceneInstance {
                         SceneField::ShakeAmplitude => self.shake.amplitude = three[0],
                         SceneField::ShakeRoughness => self.shake.roughness = three[0],
                         SceneField::ShakeSpeed => self.shake.speed = three[0],
+                        SceneField::Ambient => self.ambient = three,
+                        SceneField::Skylight => self.skylight = three,
                         SceneField::Bloom | SceneField::Parallax | SceneField::Shake => {}
                     },
                     Slot::LayerOrigin(layer) => self.layers[layer].origin = three,
@@ -385,12 +430,9 @@ impl SceneInstance {
         }
     }
 
-    /// The animation layer `which` of the puppet that layer `layer` is.
-    fn animation_layer(&mut self, layer: usize, which: usize) -> Option<&mut puppet::AnimationLayer> {
-        match &mut self.layers.get_mut(layer)?.kind {
-            LayerKind::Image(image) => image.puppet.as_mut()?.layers.get_mut(which),
-            _ => None,
-        }
+    /// The animation layer `which` of the puppet or model that layer `layer` is.
+    fn animation_layer(&mut self, layer: usize, which: usize) -> Option<&mut skeleton::AnimationLayer> {
+        self.layers.get_mut(layer)?.skeleton_mut()?.layers.get_mut(which)
     }
 
     /// Pauses or resumes the scene's videos and sounds. A video shared with another
