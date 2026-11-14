@@ -414,6 +414,10 @@ impl Daemon {
             if self.settings.video_max_width > 0 { self.settings.video_max_width } else { widest };
         self.engine.videos().options.max_width = max_width;
         self.engine.videos().options.hardware_decode = self.settings.video_hardware;
+        // A video starts as loud as this output has it: turned down to nothing, it is
+        // not heard for the moment it takes to say so once it plays.
+        let share = self.slots.get(&id).map_or(1.0, |slot| slot.shown.look.volume);
+        self.engine.videos().options.volume = self.settings.volume * share;
         // Under a frame cap, a video's extra frames would be decoded for nothing.
         self.engine.videos().limits =
             wepaper_engine::video::Limits { max_width, max_fps: self.settings.fps as f32 };

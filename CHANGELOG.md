@@ -7,7 +7,8 @@
   found beside the preset: a console wallpaper with a video of the user's showed a red
   square and no background.
 
-- An output's share of the volume (`look/volume`) reaches a video wallpaper too.
+- An output's share of the volume (`look/volume`) reaches a video wallpaper too. A video
+  starts at that volume: one turned down to nothing was heard for a moment first.
 
 ## 0.2.0
 
