@@ -50,6 +50,8 @@ extern "C" fn on_signal(_: libc::c_int) {
 /// What plays on one output.
 struct Slot {
     wallpaper: Option<Wallpaper>,
+    /// The title of what is shown, for a wallpaper a plugin draws.
+    title: String,
     shown: Shown,
     paused: bool,
     /// The wallpaper's own time: it stands still while paused.
@@ -88,6 +90,7 @@ impl Slot {
             stale: true,
             waiting: false,
             error: None,
+            title: String::new(),
             renderer: None,
             staging: None,
             frames: (now, 0, 0),
@@ -427,6 +430,7 @@ impl Daemon {
                 slot.clock = 0.0;
                 slot.stale = true;
                 slot.error = None;
+                slot.title = project.title.clone();
                 match made {
                     Ok(mut wallpaper) => {
                         for (path, value) in &shown.edits {

@@ -66,7 +66,7 @@ impl Daemon {
                     obj! {
                         "path" => folder.to_string_lossy().into_owned(),
                         "kind" => plugin.clone(),
-                        "title" => "",
+                        "title" => &slot.title,
                         "state" => "playing",
                         "plugin" => plugin,
                         "properties" => Value::Object(slot.shown.properties.iter().map(|(k, v)| (k.clone(), v.clone())).collect()),

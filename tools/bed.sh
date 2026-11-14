@@ -4,7 +4,9 @@
 #
 #   tools/bed.sh up [render node] [WxH]   start it (default /dev/dri/renderD128, 2560x1440)
 #   tools/bed.sh run <command...>         run a command inside it
-#   tools/bed.sh shot <file.png>          a screenshot of its first output
+#   tools/bed.sh shot <file.png> [output] a screenshot of an output (all of them without a name);
+#                                         gives up after ten seconds: an output nothing draws on
+#                                         never delivers a frame
 #   tools/bed.sh down                     stop it
 #
 # Needs the headless host of ~/.cache/noshare-cover/bed (a cage that speaks what a
@@ -30,11 +32,11 @@ up)
     [[ -S $nest/wayland-1 ]] && echo "nest up: $nest/wayland-1" || { echo "the nested Hyprland did not start"; tail -5 "$host/hyprland.log"; exit 1; }
     ;;
 run) shift; inside "$@" ;;
-shot) inside grim "${2:?file}" ;;
+shot) inside timeout 10 grim ${3:+-o "$3"} "${2:?file}" ;;
 down)
     [[ -f $host/hyprland.pid ]] && kill "$(<"$host/hyprland.pid")" 2>/dev/null
     sleep 0.3
     NSC_BED_RT=$host "$bed" down
     ;;
-*) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+*) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac
