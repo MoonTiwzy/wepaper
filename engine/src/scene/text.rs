@@ -32,7 +32,8 @@ pub(crate) struct TextStyleSpec {
     pub(crate) horizontal: i8,
     /// -1 bottom, 0 centre, 1 top.
     pub(crate) vertical: i8,
-    /// Space kept free around the text, in scene units.
+    /// Space kept free around the text, in scene units: room for the layer's effects
+    /// to reach into. A layer without effects has none.
     pub(crate) padding: f32,
     /// Wrap lines at this width, in scene units; 0 for the width of the box.
     pub(crate) max_width: f32,
@@ -43,11 +44,37 @@ pub(crate) struct TextState {
     pub(crate) text: String,
     pub(crate) font: Rc<FontVec>,
     pub(crate) style: TextStyleSpec,
-    /// The box the text is laid out in, in scene units.
+    /// The box the text is laid out in, in scene units: what the text takes, and the
+    /// padding around it.
     pub(crate) size: [f32; 2],
     pub(crate) surface: Rc<TextSurface>,
     /// The text changed since the texture was made.
     pub(crate) dirty: bool,
+}
+
+impl TextState {
+    /// The box `text` needs in this layer's style.
+    pub(crate) fn fit(font: &FontVec, text: &str, style: &TextStyleSpec) -> [f32; 2] {
+        let [width, height] = measure(font, text, style);
+        [width + 2.0 * style.padding, height + 2.0 * style.padding]
+    }
+
+    /// Fits the box to the text as it is now; whether the box changed.
+    pub(crate) fn refit(&mut self) -> bool {
+        let size = Self::fit(&self.font, &self.text, &self.style);
+        let changed = size != self.size;
+        self.size = size;
+        changed
+    }
+
+    /// Where the box's centre is from the layer's origin. The origin is where the
+    /// text is aligned to: the left edge of left-aligned text, the middle of centred
+    /// text, the top of text aligned to the top. So text that changes grows away
+    /// from that edge, and padding (which is around the text) does not move it.
+    pub(crate) fn offset(&self) -> [f32; 2] {
+        let text = [self.size[0] - 2.0 * self.style.padding, self.size[1] - 2.0 * self.style.padding];
+        [-f32::from(self.style.horizontal) * text[0] / 2.0, -f32::from(self.style.vertical) * text[1] / 2.0]
+    }
 }
 
 /// One line of text: its glyphs with their offsets from the line's start, and its width.
@@ -98,6 +125,23 @@ fn lines<F: Font>(font: &impl ScaleFont<F>, text: &str, wrap_at: Option<f32>) ->
     out
 }
 
+/// The scale a font is drawn at for a style, at `density` pixels a scene unit.
+fn scale_of(font: &FontVec, style: &TextStyleSpec, density: f32) -> PxScale {
+    // The size is that of the em square; the rasteriser wants the height from ascent to descent.
+    let em = (style.point_size * POINT * density).max(1.0);
+    PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0))
+}
+
+/// How much room `text` takes, in scene units: the width of its widest line and
+/// the height of its lines.
+pub(crate) fn measure(font: &FontVec, text: &str, style: &TextStyleSpec) -> [f32; 2] {
+    let scaled = font.as_scaled(scale_of(font, style, 1.0));
+    let lines = lines(&scaled, text, (style.max_width > 0.0).then_some(style.max_width));
+    let width = lines.iter().map(|line| line.width).fold(0.0, f32::max);
+    let height = (scaled.height() + scaled.line_gap()) * lines.len().max(1) as f32;
+    [width.ceil().max(1.0), height.ceil().max(1.0)]
+}
+
 /// Coverage of `text` laid out in a box of `size` scene units, at `density` pixels a
 /// unit: (width, height, one byte a pixel, rows top to bottom).
 pub(crate) fn rasterize(
@@ -113,9 +157,7 @@ pub(crate) fn rasterize(
     let mut pixels = vec![0u8; (width * height) as usize];
     let padding = style.padding * density;
     let inner = ((width as f32 - 2.0 * padding).max(1.0), (height as f32 - 2.0 * padding).max(1.0));
-    // The size is that of the em square; the rasteriser wants the height from ascent to descent.
-    let em = (style.point_size * POINT * density).max(1.0);
-    let scale = PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0));
+    let scale = scale_of(font, style, density);
     let scaled = font.as_scaled(scale);
     // Lines break where the text says, and at a width only when the layer sets one.
     let lines = lines(&scaled, text, (style.max_width > 0.0).then_some(style.max_width * density));

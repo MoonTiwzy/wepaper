@@ -101,11 +101,21 @@ struct Shared {
 pub struct Gl(Rc<Shared>);
 
 impl Gl {
+    /// Tells GL that rows of pixels follow each other without padding. This is set
+    /// before every upload and readback and not once: libmpv, drawing in this
+    /// context, puts the alignment back to 4, which shears every texture whose rows
+    /// are not a multiple of four bytes (text, greyscale pictures).
+    pub(super) fn tight_rows(&self) {
+        // SAFETY: plain state on the current context.
+        unsafe {
+            self.raw().pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+            self.raw().pixel_store_i32(glow::PACK_ALIGNMENT, 1);
+        }
+    }
+
     pub(super) fn new(raw: glow::Context, compatibility: bool, loader: Loader) -> Self {
         // SAFETY: the context `raw` was loaded from is current (the caller made it so).
         let caps = unsafe {
-            raw.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
-            raw.pixel_store_i32(glow::PACK_ALIGNMENT, 1);
             let extensions = raw.supported_extensions();
             let vendor = raw.get_parameter_string(glow::VENDOR);
             Caps {

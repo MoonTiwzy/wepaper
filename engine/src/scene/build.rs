@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use wepaper_json::Value;
 
 use crate::doc::{
-    Alignment, Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object,
+    Blending, Dyn, EffectDoc, EffectUse, ImageObject, MaterialDoc, MaterialPass, ModelDoc, Object,
     ObjectKind, Project, Scene, TextObject,
 };
 use crate::glsl::Combos;
@@ -385,7 +385,12 @@ fn build_image(
         image.size.or(model.size).or(picture_size).unwrap_or(scene_size)
     };
 
-    let (quad, quad_unit, base_quad) = quads(engine, size, image.alignment, extent)?;
+    // The origin sits on the picture where the alignment says: the centre, an edge, a corner.
+    let center = [
+        -f32::from(image.alignment.horizontal) * size[0] / 2.0,
+        -f32::from(image.alignment.vertical) * size[1] / 2.0,
+    ];
+    let (quad, quad_unit, base_quad) = quads(engine, size, center, extent)?;
     let (effects, buffers) = build_effects(engine, files, bindings, &image.effects);
     // A puppet: the picture goes on a mesh that bones bend.
     let puppet = model.puppet.as_deref().and_then(|path| {
@@ -396,10 +401,7 @@ fn build_image(
         match made {
             Ok(mut puppet) => {
                 // The mesh is measured from the picture's centre; the layer's origin may sit elsewhere.
-                puppet.offset = [
-                    -f32::from(image.alignment.horizontal) * size[0] / 2.0,
-                    -f32::from(image.alignment.vertical) * size[1] / 2.0,
-                ];
+                puppet.offset = center;
                 Some(puppet)
             }
             Err(why) => {
@@ -459,15 +461,15 @@ fn blend_pass(engine: &mut Engine, files: &Files, bindings: &mut Bindings, mode:
 
 /// The three quads a layer is drawn with: in layer space over the picture, in layer
 /// space over a whole buffer, and in clip space over the picture.
-fn quads(
+pub(super) fn quads(
     engine: &Engine,
     size: [f32; 2],
-    alignment: Alignment,
+    center: [f32; 2],
     extent: [f32; 2],
 ) -> Result<(Mesh, Mesh, Mesh), String> {
-    // Where the origin sits on the layer.
+    // Where the picture's centre is from the layer's origin.
     let (w, h) = (size[0], size[1]);
-    let (ax, ay) = (-f32::from(alignment.horizontal) * w / 2.0, -f32::from(alignment.vertical) * h / 2.0);
+    let [ax, ay] = center;
     let (x0, x1, y0, y1) = (ax - w / 2.0, ax + w / 2.0, ay - h / 2.0, ay + h / 2.0);
     let [u, v] = extent;
     let mesh = |corners: &[[f32; 5]; 4]| Mesh::quad(&engine.gl, corners).map_err(|e| e.to_string());
@@ -546,11 +548,13 @@ fn build_text(
         point_size: text.point_size.value,
         horizontal: side(&text.horizontal_align, "left", "right"),
         vertical: side(&text.vertical_align, "bottom", "top"),
-        padding: text.padding,
+        // Padding is room for effects; Wallpaper Engine gives a layer without them none.
+        padding: if text.effects.is_empty() { 0.0 } else { text.padding },
         max_width: if text.limit_width { text.max_width.value } else { 0.0 },
     };
-    // A text layer without a box gets one that holds a few lines of its size.
-    let size = text.size.unwrap_or([style.point_size * 24.0, style.point_size * 4.0]);
+    // The box is as large as the text. The scene's own number for it is the same
+    // to a pixel or two for the text it was saved with, and stale for any other.
+    let size = TextState::fit(&font, &text.text.value, &style);
     let surface = std::rc::Rc::new(TextSurface::default());
     let base = Shade::compile(
         &mut engine.share,
@@ -565,7 +569,8 @@ fn build_text(
         },
         bindings,
     )?;
-    let (quad, quad_unit, base_quad) = quads(engine, size, Alignment::default(), [1.0, 1.0])?;
+    let state = TextState { text: text.text.value.clone(), font, style, size, surface, dirty: true };
+    let (quad, quad_unit, base_quad) = quads(engine, size, state.offset(), [1.0, 1.0])?;
     let (effects, buffers) = build_effects(engine, files, bindings, &text.effects);
     Ok(ImageLayer {
         mode: ImageMode::Normal,
@@ -580,7 +585,7 @@ fn build_text(
         quad,
         quad_unit,
         base_quad,
-        text: Some(TextState { text: text.text.value.clone(), font, style, size, surface, dirty: true }),
+        text: Some(state),
         blend_pass: blend_pass(engine, files, bindings, text.blend_mode),
         puppet: None,
     })

@@ -101,8 +101,9 @@ impl Texture {
         }
         let (internal, upload, kind) = format.gl();
         let mut bytes = 0;
+        gl.tight_rows();
         // SAFETY: the context is current; every slice handed to GL is checked to hold
-        // what the call reads, and unpack alignment is 1.
+        // what the call reads, and rows were just declared tight.
         let raw = unsafe {
             let raw = gl.raw().create_texture().map_err(GpuError)?;
             gl.bind_texture(15, raw);
@@ -199,6 +200,7 @@ impl Texture {
             return Err(GpuError("pixel data does not match the texture".to_owned()));
         }
         self.gl.bind_texture(15, self.raw);
+        self.gl.tight_rows();
         // SAFETY: the slice holds a full level, checked above.
         unsafe {
             self.gl.raw().tex_sub_image_2d(

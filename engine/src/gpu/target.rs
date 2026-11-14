@@ -84,7 +84,8 @@ impl Target {
         let (width, height) = (self.width() as usize, self.height() as usize);
         let mut pixels = vec![0u8; width * height * 4];
         self.bind();
-        // SAFETY: the buffer holds width * height RGBA pixels and pack alignment is 1.
+        self.gl.tight_rows();
+        // SAFETY: the buffer holds width * height RGBA pixels and rows were just declared tight.
         unsafe {
             self.gl.raw().read_pixels(
                 0,

@@ -273,7 +273,14 @@ impl Bindings {
                     slot if slot.is_flag() => {
                         Change::Flag(slot, holds(value, binding.link.condition.as_deref()))
                     }
-                    Slot::LayerText(_) => Change::Text(binding.slot, String::from_doc(value)?),
+                    // A switch as text is nothing when off, as scenes are saved with it.
+                    Slot::LayerText(_) => Change::Text(
+                        binding.slot,
+                        match value {
+                            Value::Bool(on) => if *on { "1" } else { "" }.to_owned(),
+                            other => String::from_doc(other)?,
+                        },
+                    ),
                     Slot::Value(index) => {
                         Change::Floats(binding.slot, value_floats(value, self.values.get(index)?.len()))
                     }

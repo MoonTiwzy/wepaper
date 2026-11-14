@@ -162,7 +162,18 @@ impl SceneInstance {
             if let LayerKind::Image(image) = &mut layer.kind
                 && let Some(text) = &mut image.text
                 && layer.shown
+                && text.dirty
             {
+                // Other text takes another box: the layer is as large as its text.
+                if text.refit() {
+                    match super::build::quads(engine, text.size, text.offset(), [1.0, 1.0]) {
+                        Ok((quad, quad_unit, base_quad)) => {
+                            (image.quad, image.quad_unit, image.base_quad) = (quad, quad_unit, base_quad);
+                            image.size = text.size;
+                        }
+                        Err(error) => log::warn!("text layer {}: {error}", layer.name),
+                    }
+                }
                 let reach = density * layer.world.0[0].abs().max(layer.world.0[5].abs());
                 text.refresh(&engine.gl, reach.min(2.0));
             }
