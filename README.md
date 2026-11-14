@@ -39,7 +39,7 @@ Measured, not estimated: how and on what is in [docs/performance.md](docs/perfor
 
 | | |
 |---|---|
-| **Scenes** | image layers with their materials and blend modes, effect chains, compose and fullscreen layers, text, particles, puppet warp, sprite sheets, video textures, sound, camera parallax and shake, audio-reactive shaders, SceneScript, user properties |
+| **Scenes** | image layers with their materials and blend modes, effect chains, compose and fullscreen layers, text, particles, puppet warp, sprite sheets, video textures, sound, camera parallax and shake, bloom, keyframe animations, audio-reactive shaders, SceneScript, user properties |
 | **Videos** | any video libmpv plays, with cover / contain / stretch, sound, and a frame drawn only when the video has a new one |
 | **Web** | pages with Wallpaper Engine's JavaScript API, through the bundled [`web` plugin](plugins/web) |
 | **Presets** | a preset plays its wallpaper with its values |
@@ -105,8 +105,11 @@ outputs/<name>/      size, scale, paused, fill, fps
 outputs/<name>/wallpaper/
     path, kind, title
     properties/<name>                        the user properties
-    layers/<id>/                             visible, origin, scale, angles, alpha, color, text
+    scene/                                   zoom, clear, bloom, parallax..., shake...
+    layers/<id>/                             visible, origin, scale, angles, alpha, color, text, volume
+    layers/<id>/constants/<name>             the constants of the layer's shader
     layers/<id>/effects/<n>/visible
+    layers/<id>/effects/<n>/constants/<name> an effect's strength, speed, colours
 plugins/<id>/        enabled, params/<name>
 memory/              textures, buffers, video
 ```
@@ -116,9 +119,13 @@ wepaper get config                          # a whole branch, as JSON
 wepaper list outputs/DP-1/wallpaper/layers
 wepaper set outputs/DP-1/wallpaper/layers/426/alpha 0.5
 wepaper set 'outputs/*/wallpaper/layers/426/effects/0/visible' false
-wepaper reset outputs/DP-1/wallpaper/properties
+wepaper set outputs/DP-1/wallpaper/layers/13/effects/0/constants/speed 0.3
+wepaper reset outputs/DP-1/wallpaper        # the wallpaper back to its own values
 wepaper watch                               # events, one JSON object a line
 ```
+
+What is changed inside a wallpaper is remembered for that wallpaper and comes back the next
+time it is shown, on any monitor and after a restart. `reset` forgets it.
 
 The same verbs are the protocol: one JSON object per line over
 `$XDG_RUNTIME_DIR/wepaper.sock`, answered in order. From Rust there is the
@@ -225,7 +232,7 @@ flowchart LR
   without a restart.
 - **Nothing runs until it is needed.** No audio capture unless a visible wallpaper reads the
   spectrum, no sound decoding while muted, no frame when a video has no new one, no effect
-  buffers for a paused output.
+  buffers for a paused output, no script interpreter for a scene without scripts.
 - **Values change in place.** A user property, a layer's opacity, an effect's switch: a write
   into the running scene. Nothing reloads.
 

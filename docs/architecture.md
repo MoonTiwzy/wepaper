@@ -26,7 +26,10 @@ doc/    JSON documents become typed values project, scene, material, effect, mod
 glsl/   the shader dialect becomes GLSL    includes, combos, annotations, repairs
 gpu/    OpenGL                             the context, cached state, textures, programs, the buffer pool
 share   the cache                          textures, programs, shader sources, fonts, videos
-scene/  a scene becomes layers and passes  building, bindings, the tree, drawing
+scene/  a scene becomes layers and passes  building, bindings, the tree, drawing; text, particle
+                                           and puppet layers; the scene as the host of its scripts
+particles/  particle systems               documents, the simulation, the vertices that draw them
+script/     SceneScript                    a QuickJS runtime, the prelude, the host it runs against
 video/  libmpv                             streams shared per file, cheaper copies, the video wallpaper
 audio/  sound in and out                   sound layers; the spectrum of what the system plays
 post    output shaders                     fragment shaders run over the finished frame
@@ -68,9 +71,20 @@ from, how it blends. Drawing a frame walks the layers.
   next layer starts.
 - Compose and fullscreen layers read a copy of the frame so far.
 
-**bindings.** Whatever can change a value (a user property now; scripts and animations through
-the same table) is a binding from a source to a slot. Setting a property writes into the
-running scene; nothing is rebuilt and nothing reloads.
+**bindings.** Whatever can change a value is a binding from a source to a slot: a user
+property, a keyframe animation, a script. Setting a property writes into the running scene;
+nothing is rebuilt and nothing reloads. Each frame the animations move first, then the scripts
+run (timers, the cursor's events, every `update`), and what they return goes into the same
+slots.
+
+**particles** and **script** know nothing of scenes. A particle system is simulated on the
+CPU in flat arrays and hands back vertices for Wallpaper Engine's own particle shaders; the
+scene gives it a place, a pointer and its property values. The script runtime holds one
+JavaScript context per scene that has scripts and talks to a `Host` trait; the scene is the
+host. Both are tested without a GPU.
+
+**Puppets.** A puppet layer's effects run on the flat picture, as they were painted for it;
+the mesh and its bones bend what comes out of them on the way into the frame.
 
 **tree.** The same slots, addressed by path, are the wallpaper's branch of the control tree:
 what `wepaper get` reads and `wepaper set` writes.
@@ -114,11 +128,13 @@ else with it.
 
 ## Testing
 
-- **Unit tests** for everything pure: JSON, LZ4, archives, textures, documents, the shader
-  translator and its repairs, bindings, the protocol, the server, settings, plugins.
+- **Unit tests** for everything pure: JSON, LZ4, archives, textures, puppets, documents, the
+  shader translator and its repairs, bindings, keyframe animations, particles, scripts, the
+  protocol, the server, settings, plugins.
 - **Headless GPU tests**: a context without a display, real programs and targets.
 - **Corpus tests** against a real library, when `WEPAPER_TEST_ASSETS` and
-  `WEPAPER_TEST_WORKSHOP` are set: every archive, every texture, every scene.
+  `WEPAPER_TEST_WORKSHOP` are set: every archive, texture, scene, puppet, particle system and
+  script.
 - **Golden comparison** (`tools/golden.sh`): every scene rendered headless and compared with
   reference frames.
 - **The bed** (`tools/bed.sh`): a compositor nobody sees, to run the daemon in.
