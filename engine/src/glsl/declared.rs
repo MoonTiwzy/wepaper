@@ -68,7 +68,12 @@ impl Declared {
             let (Some(kind), Some(name)) = (words.next(), words.next()) else { continue };
             let name = name.split('[').next().unwrap_or(name).to_owned();
             if kind.starts_with("sampler") {
-                let Some(slot) = name.strip_prefix("g_Texture").and_then(|n| n.parse().ok()) else {
+                // Texture units are few: a slot beyond them is not a slot.
+                let Some(slot) = name
+                    .strip_prefix("g_Texture")
+                    .and_then(|n| n.parse().ok())
+                    .filter(|slot| *slot < crate::glsl::TEXTURE_SLOTS)
+                else {
                     continue;
                 };
                 declared.samplers.push(SamplerDecl {

@@ -130,6 +130,33 @@ impl Map {
         self.entries.iter_mut().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
+    /// A map from members in the order they were written, as a parser meets them.
+    /// A key written twice keeps its first place and its last value. Unlike
+    /// inserting one by one, this takes time in proportion to the members, so that
+    /// a document with a great many of them cannot hold a reader up.
+    pub fn from_members(members: Vec<(String, Value)>) -> Self {
+        // Few members: looking back over them is cheaper than a table.
+        if members.len() <= 16 {
+            let mut map = Self::default();
+            for (key, value) in members {
+                map.insert(key, value);
+            }
+            return map;
+        }
+        let mut places: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut entries: Vec<(String, Value)> = Vec::with_capacity(members.len());
+        for (key, value) in members {
+            match places.get(&key) {
+                Some(&at) => entries[at].1 = value,
+                None => {
+                    places.insert(key.clone(), entries.len());
+                    entries.push((key, value));
+                }
+            }
+        }
+        Self { entries }
+    }
+
     /// Sets `key`, replacing the value it had and keeping its position.
     pub fn insert(&mut self, key: impl Into<String>, value: Value) {
         let key = key.into();

@@ -19,6 +19,11 @@ struct Client {
     received: Vec<u8>,
     unsent: Vec<u8>,
     watching: bool,
+    /// The client finished writing: nothing more is read from it, and it goes once
+    /// what it is owed is written.
+    closed: bool,
+    /// Requests of the client that are not answered yet.
+    owed: usize,
     gone: bool,
 }
 
@@ -55,8 +60,9 @@ impl Server {
 
     /// The descriptors to wait on: the listener and every client.
     pub fn fds(&self) -> Vec<RawFd> {
+        // A client that finished writing reads as ready for ever: it is not waited on.
         std::iter::once(self.listener.as_raw_fd())
-            .chain(self.clients.iter().flatten().map(|c| c.stream.as_raw_fd()))
+            .chain(self.clients.iter().flatten().filter(|c| !c.closed).map(|c| c.stream.as_raw_fd()))
             .collect()
     }
 
@@ -67,8 +73,15 @@ impl Server {
             if stream.set_nonblocking(true).is_err() {
                 continue;
             }
-            let client =
-                Client { stream, received: Vec::new(), unsent: Vec::new(), watching: false, gone: false };
+            let client = Client {
+                stream,
+                received: Vec::new(),
+                unsent: Vec::new(),
+                watching: false,
+                closed: false,
+                owed: 0,
+                gone: false,
+            };
             match self.clients.iter_mut().position(|slot| slot.is_none()) {
                 Some(free) => self.clients[free] = Some(client),
                 None => self.clients.push(Some(client)),
@@ -78,13 +91,18 @@ impl Server {
         for (index, slot) in self.clients.iter_mut().enumerate() {
             let Some(client) = slot else { continue };
             let mut buffer = [0u8; 4096];
-            loop {
+            // One pass takes a bounded amount from one client: a client that never stops
+            // writing waits its turn like the others, and cannot grow the daemon.
+            let mut taken = 0;
+            while !client.closed && taken <= MAX_LINE {
                 match client.stream.read(&mut buffer) {
-                    Ok(0) => {
-                        client.gone = true;
-                        break;
+                    // The client is done writing; it may still be waiting for answers
+                    // (`echo request | socat` works this way).
+                    Ok(0) => client.closed = true,
+                    Ok(count) => {
+                        taken += count;
+                        client.received.extend_from_slice(&buffer[..count]);
                     }
-                    Ok(count) => client.received.extend_from_slice(&buffer[..count]),
                     Err(error) if error.kind() == ErrorKind::WouldBlock => break,
                     Err(error) if error.kind() == ErrorKind::Interrupted => {}
                     Err(_) => {
@@ -107,8 +125,10 @@ impl Server {
                 let request = wepaper_json::parse(text)
                     .map_err(|e| format!("not JSON: {e}"))
                     .and_then(|message| Request::parse(&message));
+                client.owed += 1;
                 incoming.push(Incoming { client: index, request });
             }
+            // What is left is the start of a line: longer than a line can be, it is not one.
             if client.received.len() > MAX_LINE {
                 client.gone = true;
             }
@@ -120,6 +140,7 @@ impl Server {
     /// Sends `message` to one client as a line.
     pub fn answer(&mut self, client: usize, message: &Value) {
         if let Some(Some(client)) = self.clients.get_mut(client) {
+            client.owed = client.owed.saturating_sub(1);
             client.unsent.extend_from_slice(message.to_json().as_bytes());
             client.unsent.push(b'\n');
         }
@@ -176,8 +197,9 @@ impl Server {
 
     fn sweep(&mut self) {
         for slot in &mut self.clients {
-            // A client that left is kept until what it is owed is written, or cannot be.
-            if slot.as_ref().is_some_and(|c| c.gone) {
+            // A client that finished writing is kept until what it is owed is written,
+            // or cannot be.
+            if slot.as_ref().is_some_and(|c| c.gone || (c.closed && c.owed == 0 && c.unsent.is_empty())) {
                 *slot = None;
             }
         }
@@ -267,6 +289,41 @@ mod tests {
         let mut other = UnixStream::connect(&path).unwrap();
         other.write_all(b"{\"cmd\":\"version\"}\n").unwrap();
         assert_eq!(receive(&mut server)[0].request, Ok(Request::Version));
+    }
+
+    #[test]
+    fn a_client_that_stops_writing_still_gets_its_answer() {
+        // `echo request | socat - UNIX-CONNECT:...`: the request and the end of the
+        // client's writing arrive together.
+        let (mut server, path) = server("half-closed");
+        let mut client = UnixStream::connect(&path).unwrap();
+        client.write_all(b"{\"cmd\":\"version\"}\n").unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let incoming = receive(&mut server);
+        assert_eq!(incoming.len(), 1);
+        server.answer(incoming[0].client, &wepaper_ipc::ok(Value::from("here")));
+        server.flush();
+        let mut answer = String::new();
+        BufReader::new(&client).read_line(&mut answer).unwrap();
+        assert_eq!(answer.trim(), r#"{"ok":true,"value":"here"}"#);
+        // Answered and done writing: the daemon lets go of it.
+        assert!(server.clients.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn a_line_without_an_end_does_not_grow_for_ever() {
+        let (mut server, path) = server("endless");
+        let mut client = UnixStream::connect(&path).unwrap();
+        client.set_nonblocking(true).unwrap();
+        let chunk = vec![b'x'; 64 * 1024];
+        // Far more than a line may hold, written as fast as the socket takes it.
+        for _ in 0..200 {
+            let _ = client.write(&chunk);
+            server.receive();
+            let held = server.clients.iter().flatten().map(|c| c.received.len()).max().unwrap_or(0);
+            assert!(held <= 2 * MAX_LINE + chunk.len(), "the daemon held {held} bytes of one line");
+        }
+        assert!(server.clients.iter().all(Option::is_none), "a client that sends no line is dropped");
     }
 
     #[test]

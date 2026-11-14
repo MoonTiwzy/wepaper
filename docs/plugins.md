@@ -34,6 +34,7 @@ what was found; a manifest that cannot be read is reported in the daemon's log a
 |---|---|
 | `started`, `stopping` | the daemon comes up, goes down |
 | `shown` | a wallpaper is on an output |
+| `hidden` | an output's wallpaper was taken off |
 | `paused`, `resumed` | an output was frozen, plays again |
 
 | variable | |

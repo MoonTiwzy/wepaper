@@ -188,13 +188,24 @@ impl Daemon {
             }
             Request::Hide { output } => self.targets(output.as_deref()).map(|ids| {
                 for id in ids {
-                    if let Some(slot) = self.slots.get_mut(&id) {
-                        slot.wallpaper = None;
-                        slot.renderer = None;
-                        slot.shown = Shown::default();
-                        slot.error = None;
-                        slot.stale = true;
-                    }
+                    let Some(slot) = self.slots.get_mut(&id) else { continue };
+                    slot.wallpaper = None;
+                    slot.renderer = None;
+                    slot.shown = Shown::default();
+                    slot.error = None;
+                    slot.stale = true;
+                    // The surface would keep its last frame: a new one has nothing on
+                    // it, and what is under the wallpaper shows.
+                    let name = self.display.heads.iter_mut().find(|head| head.id == id).and_then(|head| {
+                        head.sheet = None;
+                        head.name.clone()
+                    });
+                    self.display.cover(id, self.settings.layer, self.settings.passthrough);
+                    self.plugins.announce(&Happening {
+                        event: "hidden",
+                        output: name.unwrap_or_default(),
+                        ..Happening::default()
+                    });
                 }
                 self.state.last = Shown::default();
                 self.engine.trim();
@@ -277,21 +288,32 @@ impl Daemon {
         let properties = properties.map_or(remembered.properties, |named| named.into_iter().collect());
         let shown =
             Shown { wallpaper: Some(folder.clone()), properties, edits: remembered.edits, fill: None };
+        // An output that cannot show it keeps what it had; the others are not undone
+        // for it, and what they show now is what is remembered.
+        let mut failure = None;
+        let mut any = false;
         for id in ids {
-            self.load(id, &shown)?;
-            if let Some(slot) = self.slots.get_mut(&id) {
-                slot.shown = Shown { fill: slot.shown.fill, ..shown.clone() };
+            match self.load(id, &shown) {
+                Ok(()) => {
+                    any = true;
+                    if let Some(slot) = self.slots.get_mut(&id) {
+                        slot.shown = Shown { fill: slot.shown.fill, ..shown.clone() };
+                    }
+                }
+                Err(why) => failure = failure.or(Some(why)),
             }
         }
-        if named {
-            self.remember(&shown);
+        if any {
+            if named {
+                self.remember(&shown);
+            }
+            if output.is_none_or(|name| name == "*") {
+                self.state.last = shown;
+            }
+            self.save_state();
+            self.notify("shown", Value::from(folder.to_string_lossy().into_owned()));
         }
-        if output.is_none_or(|name| name == "*") {
-            self.state.last = shown;
-        }
-        self.save_state();
-        self.notify("shown", Value::from(folder.to_string_lossy().into_owned()));
-        Ok(())
+        failure.map_or(Ok(()), Err)
     }
 
     /// Keeps a wallpaper's values for the next time it is shown.
@@ -406,11 +428,17 @@ impl Daemon {
             ["outputs", name, "wallpaper", rest @ ..] if !rest.is_empty() => {
                 let ids = self.targets(Some(name))?;
                 let mut changed = false;
+                let mut failure = None;
                 let mut remembered = Vec::new();
                 for id in ids {
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     let Some(wallpaper) = &mut slot.wallpaper else { continue };
-                    wallpaper.edit(rest, value)?;
+                    // With `*`, an output whose wallpaper has no such value does not
+                    // undo the change on those that have.
+                    if let Err(why) = wallpaper.edit(rest, value) {
+                        failure = failure.or(Some(why));
+                        continue;
+                    }
                     slot.stale = true;
                     changed = true;
                     match rest {
@@ -421,14 +449,17 @@ impl Daemon {
                     };
                     remembered.push(slot.shown.clone());
                 }
-                if !changed {
-                    return Err("no wallpaper is shown there".to_owned());
-                }
                 for shown in &remembered {
                     self.remember(shown);
                 }
-                self.save_state();
-                Ok(())
+                if changed {
+                    self.save_state();
+                }
+                match failure {
+                    Some(why) => Err(why),
+                    None if !changed => Err("no wallpaper is shown there".to_owned()),
+                    None => Ok(()),
+                }
             }
             _ => Err(format!("\"{}\" cannot be set", path.join("/"))),
         }

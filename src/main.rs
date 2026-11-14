@@ -28,9 +28,6 @@ The daemon:
 }
 
 fn main() {
-    // Output piped into `head` ends with the pipe, quietly, as a command line tool's should.
-    // SAFETY: restores a signal's default action before anything else runs.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     let mut args = lexopt::Parser::from_env();
     let mut verbosity = log::LevelFilter::Warn;
     let command = loop {
@@ -56,6 +53,13 @@ fn main() {
         }
     };
     logger::init(verbosity);
+    if command != "daemon" {
+        // Output piped into `head` ends with the pipe, quietly, as a command line
+        // tool's should. Not the daemon: a plugin that died must cost it a failed
+        // write, not its life.
+        // SAFETY: restores a signal's default action; nothing else runs yet.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    }
     let result = match command.as_str() {
         "daemon" => daemon::run(args),
         "render" => cli::render::run(args),

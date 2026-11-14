@@ -150,3 +150,21 @@ fn what_a_person_types_is_a_number_or_nothing() {
     assert_eq!(typed_flag(&Value::from("banana")), None);
     assert_eq!(typed_flag(&Value::Null), None);
 }
+
+#[test]
+fn a_bind_to_a_slot_that_cannot_be_is_dropped() {
+    use wepaper_engine::doc::EffectDoc;
+    let effect = EffectDoc::parse(
+        &wepaper_json::parse(
+            r#"{"passes": [{"material": "m.json", "bind": [
+                {"name": "previous", "index": 0},
+                {"name": "_rt_a", "index": 1e30},
+                {"name": "_rt_b", "index": 4294967295},
+                {"name": "_rt_c", "index": "1e30 -1e30 nan"},
+                {"name": "_rt_d", "index": 15}]}]}"#,
+        )
+        .unwrap(),
+    );
+    let slots: Vec<usize> = effect.passes[0].binds.iter().map(|bind| bind.slot).collect();
+    assert_eq!(slots, [0, 15], "a number from a document never sizes anything");
+}

@@ -75,8 +75,9 @@ gets a copy in the cache that is cheaper to decode; playback moves to it without
 
 ## Web
 
-Through the `web` plugin, on WebKitGTK: `wallpaperPropertyListener`, audio listeners, pause,
-frame cap, volume. Media integration and file properties are stubs. See
+Through the `web` plugin, on WebKitGTK: `wallpaperPropertyListener`, pause,
+frame cap, volume. The plugin takes an audio spectrum for pages that listen for one, but
+the daemon does not send it yet; media integration and file properties are stubs. See
 [plugins/web](../plugins/web/README.md).
 
 ## Application wallpapers

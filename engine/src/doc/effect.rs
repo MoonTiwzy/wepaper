@@ -67,7 +67,10 @@ impl EffectDoc {
                     .filter_map(|bind| {
                         Some(EffectBind {
                             name: text(bind, "name")?,
-                            slot: i32::from_doc(bind.get("index"))?.max(0) as usize,
+                            // A slot beyond the texture slots there are is no bind at all.
+                            slot: i32::from_doc(bind.get("index"))
+                                .map(|slot| slot.max(0) as usize)
+                                .filter(|slot| *slot < crate::glsl::TEXTURE_SLOTS)?,
                         })
                     })
                     .collect(),

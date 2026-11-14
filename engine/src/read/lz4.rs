@@ -17,7 +17,9 @@ impl std::error::Error for Corrupt {}
 
 /// Decompresses one LZ4 block that unpacks to exactly `size` bytes.
 pub fn decompress(block: &[u8], size: usize) -> Result<Vec<u8>, Corrupt> {
-    let mut out: Vec<u8> = Vec::with_capacity(size);
+    // A block cannot unpack to more than 255 times its length: room is set aside
+    // for what it can hold, not for what a header claims.
+    let mut out: Vec<u8> = Vec::with_capacity(size.min(block.len().saturating_mul(255)));
     let mut at = 0;
     // Reads a length that continues in following bytes while they are 255.
     let extend = |at: &mut usize, mut length: usize| -> Result<usize, Corrupt> {

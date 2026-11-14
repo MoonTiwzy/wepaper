@@ -21,13 +21,21 @@ allowed. There need not be one: every setting has a default.
 
 ## What wins
 
+When the daemon starts, and again on `wepaper reload`, a setting is the first of these that
+names it:
+
 1. `wepaper daemon --set key=value` (for that run)
 2. what was set over the socket (`wepaper set config/...`), remembered in the state file
 3. the config file
 4. the defaults
 
-`wepaper reload` reads the file again and forgets (2). `wepaper reset config/<key>` forgets it
-for one key.
+While the daemon runs, `wepaper set config/<key>` changes the setting at once, whatever it
+started from, `--set` included: that is how a program that starts the daemon with its own
+settings keeps changing them. `wepaper reload` reads the file again and forgets (2).
+`wepaper reset config/<key>` forgets it for one key.
+
+`video_hardware`, `video_max_width` and `texture_max_side` are read when a wallpaper is
+loaded: a change shows with the next `show`.
 
 ## Files
 

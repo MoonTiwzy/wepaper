@@ -632,7 +632,7 @@ fn build_effect(
         let mut combos: Combos = base.combos.clone();
         let mut values = constants(base);
         if let Some(overrides) = overrides {
-            for (slot, texture) in overrides.textures.iter().enumerate() {
+            for (slot, texture) in overrides.textures.iter().enumerate().take(crate::glsl::TEXTURE_SLOTS) {
                 if let Some(name) = texture {
                     if textures.len() <= slot {
                         textures.resize(slot + 1, TextureChoice::Default);
@@ -648,7 +648,9 @@ fn build_effect(
                 }
             }
         }
-        for bind in &pass.binds {
+        // A bind names a texture slot; one beyond the slots there are is ignored (a
+        // number from a document must never size anything).
+        for bind in pass.binds.iter().filter(|bind| bind.slot < crate::glsl::TEXTURE_SLOTS) {
             if textures.len() <= bind.slot {
                 textures.resize(bind.slot + 1, TextureChoice::Default);
             }

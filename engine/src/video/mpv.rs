@@ -57,6 +57,17 @@ pub(crate) const RENDER_PARAM_OPENGL_FBO: c_int = 3;
 pub(crate) const RENDER_PARAM_FLIP_Y: c_int = 4;
 pub(crate) const RENDER_PARAM_BLOCK_FOR_TARGET_TIME: c_int = 12;
 pub(crate) const RENDER_UPDATE_FRAME: u64 = 1;
+/// What `Event::data` points at for [`EVENT_END_FILE`] (`mpv_event_end_file`): only its
+/// first field is read.
+#[repr(C)]
+pub(crate) struct EndFile {
+    /// Why playback of the file ended (`mpv_end_file_reason`).
+    pub(crate) reason: c_int,
+}
+
+/// `MPV_END_FILE_REASON_ERROR`: the file could not be played.
+pub(crate) const END_FILE_REASON_ERROR: c_int = 4;
+
 pub(crate) const EVENT_NONE: c_int = 0;
 pub(crate) const EVENT_SHUTDOWN: c_int = 1;
 pub(crate) const EVENT_END_FILE: c_int = 7;

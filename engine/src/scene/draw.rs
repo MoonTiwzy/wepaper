@@ -8,6 +8,10 @@ use super::particles::ParticleLayer;
 use super::shade::{Feed, Shade, TextureRef};
 use super::{FrameInput, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, Step};
 
+/// The largest side of a layer's own buffers, in pixels. A document can say a layer
+/// is any size; its buffers stay what a GPU can be asked for.
+const MAX_BUFFER_SIDE: f32 = 8192.0;
+
 /// How far in front of a flat scene its camera is said to be.
 const EYE_DISTANCE: f32 = 1000.0;
 
@@ -459,7 +463,13 @@ fn draw_image(
     let scale = reach.min(1.0);
     let size = match image.mode {
         ImageMode::Fullscreen => scene.size,
-        _ => (((image.size[0] * scale).ceil() as u32).max(1), ((image.size[1] * scale).ceil() as u32).max(1)),
+        _ => {
+            // Both sides shrink together when one is over the limit: a layer keeps its shape.
+            let longest = image.size[0].max(image.size[1]) * scale;
+            let scale = if longest > MAX_BUFFER_SIDE { scale * MAX_BUFFER_SIDE / longest } else { scale };
+            let side = |units: f32| ((units * scale).ceil() as u32).clamp(1, MAX_BUFFER_SIDE as u32);
+            (side(image.size[0]), side(image.size[1]))
+        }
     };
     let mut chain =
         Chain { ping: [None, None], current: None, named: image.buffers.iter().map(|_| None).collect() };

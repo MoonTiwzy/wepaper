@@ -128,7 +128,7 @@ fn lines<F: Font>(font: &impl ScaleFont<F>, text: &str, wrap_at: Option<f32>) ->
 /// The scale a font is drawn at for a style, at `density` pixels a scene unit.
 fn scale_of(font: &FontVec, style: &TextStyleSpec, density: f32) -> PxScale {
     // The size is that of the em square; the rasteriser wants the height from ascent to descent.
-    let em = (style.point_size * POINT * density).max(1.0);
+    let em = (style.point_size * POINT * density).clamp(1.0, MAX_SIDE as f32);
     PxScale::from(em * font.height_unscaled() / font.units_per_em().unwrap_or(1000.0))
 }
 

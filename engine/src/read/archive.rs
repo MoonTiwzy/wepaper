@@ -55,6 +55,11 @@ impl Archive {
         let mut index = HashMap::with_capacity(entries.len());
         for (i, entry) in entries.iter_mut().enumerate() {
             entry.offset += consumed;
+            // A table that points past the end of the file is not to be believed, and
+            // must not decide how much memory a read asks for.
+            if entry.offset.checked_add(entry.length).is_none_or(|end| end > meta.len()) {
+                return Err(invalid("package table points outside the file"));
+            }
             index.insert(normalize(&entry.name).1, i);
         }
         let modified =

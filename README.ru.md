@@ -168,8 +168,9 @@ $ echo '{"cmd":"get","path":"memory"}' | socat - UNIX-CONNECT:$XDG_RUNTIME_DIR/w
 }
 ```
 
-То, что задано через сокет, главнее файла до `wepaper reload`; `--set ключ=значение` в командной
-строке демона главнее обоих. Подробнее: [docs/configuration.md](docs/configuration.md).
+То, что задано через сокет, главнее файла до `wepaper reload`. `--set ключ=значение` в командной
+строке демона задаёт значение, с которого настройка стартует, что бы ни говорили файл и прошлые
+запуски. Подробнее: [docs/configuration.md](docs/configuration.md).
 
 ## Плагины
 

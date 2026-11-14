@@ -102,3 +102,33 @@ fn single_precision_numbers_are_written_as_typed() {
     assert_eq!(Value::from(1.5f32).to_json(), "1.5");
     assert_eq!(Value::from(f32::MAX).as_f32(), Some(f32::MAX), "and read back as the same single");
 }
+
+#[test]
+fn a_key_written_twice_keeps_its_place_and_its_last_value() {
+    for members in [3, 400] {
+        let mut text = String::from("{");
+        for index in 0..members {
+            text.push_str(&format!("\"k{index}\": {index}, "));
+        }
+        text.push_str("\"k1\": \"again\"}");
+        let value = parse(&text).unwrap();
+        let keys: Vec<&str> = value.members().map(|(key, _)| key).collect();
+        assert_eq!(keys.len(), members, "{members} members");
+        assert_eq!(keys[1], "k1");
+        assert_eq!(value.get("k1").as_str(), Some("again"));
+        assert_eq!(value.get("k2").as_f64(), Some(2.0));
+    }
+}
+
+#[test]
+fn an_object_of_very_many_members_parses_in_time() {
+    let mut text = String::from("{");
+    for index in 0..200_000 {
+        text.push_str(&format!("\"key{index}\": {index},"));
+    }
+    text.push('}');
+    let started = std::time::Instant::now();
+    let value = parse(&text).unwrap();
+    assert_eq!(value.members().count(), 200_000);
+    assert!(started.elapsed().as_secs() < 5, "took {:?}", started.elapsed());
+}

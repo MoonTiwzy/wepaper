@@ -35,11 +35,19 @@ pub fn decode(data: &[u8]) -> Result<Picture, PictureError> {
     }
 }
 
+/// The largest side of a picture that is decoded: no GPU takes a larger texture, and
+/// a header is not allowed to ask for gigabytes.
+const MAX_SIDE: u32 = 16384;
+
 fn decode_png(data: &[u8]) -> Result<Picture, PictureError> {
     let fail = |e: png::DecodingError| PictureError(format!("PNG: {e}"));
     let mut decoder = png::Decoder::new(data);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut reader = decoder.read_info().map_err(fail)?;
+    let (width, height) = (reader.info().width, reader.info().height);
+    if width > MAX_SIDE || height > MAX_SIDE {
+        return Err(PictureError(format!("PNG: {width}x{height} is larger than any texture")));
+    }
     let mut buffer = vec![0; reader.output_buffer_size()];
     let info = reader.next_frame(&mut buffer).map_err(fail)?;
     buffer.truncate(info.buffer_size());

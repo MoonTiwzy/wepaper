@@ -99,13 +99,13 @@ impl Parser<'_> {
 
     fn object(&mut self, depth: usize) -> Result<Value, Error> {
         self.at += 1;
-        let mut map = Map::new();
+        let mut members = Vec::new();
         loop {
             self.skip_blank();
             match self.peek() {
                 Some(b'}') => {
                     self.at += 1;
-                    return Ok(Value::Object(map));
+                    return Ok(Value::Object(Map::from_members(members)));
                 }
                 Some(b'"') => {}
                 Some(_) => return Err(self.error("expected a key in quotes or '}'")),
@@ -119,7 +119,7 @@ impl Parser<'_> {
             self.at += 1;
             self.skip_blank();
             let value = self.value(depth + 1)?;
-            map.insert(key, value);
+            members.push((key, value));
             self.skip_blank();
             match self.peek() {
                 Some(b',') => self.at += 1,

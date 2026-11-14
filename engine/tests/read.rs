@@ -93,11 +93,10 @@ fn truncated_archive_is_an_error() {
         std::fs::write(&path, &bytes[..cut]).unwrap();
         assert!(Archive::open(&path).is_err(), "a package cut at {cut} bytes opened");
     }
-    // An entry that points past the end of the file: opens, the read fails.
+    // An entry that points past the end of the file: the table is not believed.
     let path = dir.join("short.pkg");
     std::fs::write(&path, &bytes[..bytes.len() - 2]).unwrap();
-    let pkg = Archive::open(&path).unwrap();
-    assert!(pkg.read("b").unwrap().is_err());
+    assert!(Archive::open(&path).is_err());
 }
 
 #[test]
@@ -237,4 +236,57 @@ fn truncated_tex_is_an_error() {
     let tex = TextureFile::parse(&bytes[..bytes.len() - 1]);
     assert!(tex.is_err() || tex.unwrap().pixels(&bytes[..bytes.len() - 1], 0, 0).is_err());
     assert!(TextureFile::parse(b"not a texture at all, just some text").is_err());
+}
+
+#[test]
+fn an_archive_whose_table_points_outside_the_file_is_refused() {
+    // One entry that claims four gigabytes: believing it would mean asking for them.
+    let dir = temp("oversized");
+    let mut bytes = Vec::new();
+    u32le(&mut bytes, 8);
+    bytes.extend_from_slice(b"PKGV0019");
+    u32le(&mut bytes, 1);
+    u32le(&mut bytes, 5);
+    bytes.extend_from_slice(b"a.tex");
+    u32le(&mut bytes, 0);
+    u32le(&mut bytes, u32::MAX);
+    bytes.extend_from_slice(b"short");
+    let path = dir.join("scene.pkg");
+    std::fs::write(&path, bytes).unwrap();
+    let error = Archive::open(&path).err().expect("refused").to_string();
+    assert!(error.contains("outside the file"), "{error}");
+}
+
+#[test]
+fn lz4_does_not_set_room_aside_for_a_size_no_block_could_reach() {
+    // Two bytes cannot unpack to exabytes, whatever a header says.
+    assert!(lz4::decompress(&[0x10, b'a'], usize::MAX / 2).is_err());
+}
+
+#[test]
+fn a_png_larger_than_any_texture_is_refused_before_it_is_decoded() {
+    fn crc(bytes: &[u8]) -> u32 {
+        let mut crc = !0u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+            }
+        }
+        !crc
+    }
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = b"IHDR".to_vec();
+    header.extend_from_slice(&60_000u32.to_be_bytes());
+    header.extend_from_slice(&60_000u32.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(&header);
+    png.extend_from_slice(&crc(&header).to_be_bytes());
+    // The start of the pixel data: where a decoder stops reading the header.
+    png.extend_from_slice(&0u32.to_be_bytes());
+    png.extend_from_slice(b"IDAT");
+    png.extend_from_slice(&crc(b"IDAT").to_be_bytes());
+    let error = wepaper_engine::read::picture::decode(&png).err().expect("refused").to_string();
+    assert!(error.contains("larger than any texture"), "{error}");
 }

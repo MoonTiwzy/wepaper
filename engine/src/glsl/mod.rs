@@ -18,5 +18,9 @@ mod repair;
 mod source;
 
 pub use declared::{ComboDecl, Declared, SamplerDecl, UniformDecl};
+
+/// How many texture slots a pass can have: `g_Texture0` to `g_Texture15`. A document
+/// or a shader that names a slot beyond these names nothing.
+pub const TEXTURE_SLOTS: usize = 16;
 pub use repair::repair;
 pub use source::{Combos, Source, Stage};

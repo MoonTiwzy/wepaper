@@ -232,9 +232,15 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     daemon.plugins.announce(&plugins::Happening { event: "started", ..Default::default() });
     let result = daemon.run(&mut queue);
     daemon.plugins.announce(&plugins::Happening { event: "stopping", ..Default::default() });
-    // Wallpapers and surfaces go while the context is still there to free them with.
+    // Wallpapers and surfaces go while the context is still there to free them with,
+    // and so does everything else that holds what the context made: fields are
+    // dropped in the order they are declared, and the context is declared first.
     daemon.slots.clear();
     daemon.display.heads.clear();
+    let Daemon { engine, shaders, context, .. } = daemon;
+    drop(shaders);
+    drop(engine);
+    drop(context);
     result
 }
 

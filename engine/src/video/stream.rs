@@ -292,8 +292,14 @@ impl VideoStream {
                         self.restart_at_zero = false;
                         self.set(c"start", "none");
                     }
-                    mpv::EVENT_SHUTDOWN | mpv::EVENT_END_FILE => {
-                        self.ended = event.event_id == mpv::EVENT_SHUTDOWN || event.error < 0
+                    mpv::EVENT_SHUTDOWN => self.ended = true,
+                    // Why a file ended is in the event's data; a file that loops only
+                    // ends when it cannot be played.
+                    mpv::EVENT_END_FILE => {
+                        let end = event.data.cast::<mpv::EndFile>();
+                        if !end.is_null() && (*end).reason == mpv::END_FILE_REASON_ERROR {
+                            self.ended = true;
+                        }
                     }
                     _ => {}
                 }

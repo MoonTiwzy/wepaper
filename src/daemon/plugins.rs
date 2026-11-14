@@ -13,6 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -205,15 +206,29 @@ struct Running {
 pub struct Renderer {
     child: Child,
     pub plugin: String,
+    /// It stopped reading its input, and that was said once.
+    deaf: bool,
 }
 
 impl Renderer {
     /// Sends the process one message. False when it is gone.
+    ///
+    /// The pipe does not block: a process that stopped reading loses the message
+    /// (and is told so in the log once) and never holds the daemon up.
     pub fn send(&mut self, message: &Value) -> bool {
         let Some(pipe) = self.child.stdin.as_mut() else { return false };
         let mut line = message.to_json();
         line.push('\n');
-        pipe.write_all(line.as_bytes()).is_ok()
+        match pipe.write_all(line.as_bytes()) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if !std::mem::replace(&mut self.deaf, true) {
+                    log::warn!("plugin {}: it does not read what it is told", self.plugin);
+                }
+                true
+            }
+            Err(_) => false,
+        }
     }
 
     /// Whether the process is still there.
@@ -357,7 +372,14 @@ impl Plugins {
             .stdout(Stdio::null())
             .spawn()
             .map_err(|e| format!("{} could not be started: {e}", manifest.program().display()))?;
-        Ok(Renderer { child, plugin: manifest.id.clone() })
+        if let Some(pipe) = &child.stdin {
+            // SAFETY: sets a flag on a descriptor this process owns.
+            unsafe {
+                let flags = libc::fcntl(pipe.as_raw_fd(), libc::F_GETFL);
+                libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK);
+            }
+        }
+        Ok(Renderer { child, plugin: manifest.id.clone(), deaf: false })
     }
 }
 
@@ -369,7 +391,16 @@ impl Drop for Plugins {
                 let _ = child.wait();
             }
         }
+        // Hooks get a moment to finish; one that does not is not waited for forever.
+        for _ in 0..20 {
+            self.hooks.retain_mut(|hook| matches!(hook.try_wait(), Ok(None)));
+            if self.hooks.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
         for mut hook in self.hooks.drain(..) {
+            let _ = hook.kill();
             let _ = hook.wait();
         }
     }

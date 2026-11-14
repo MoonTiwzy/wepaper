@@ -169,8 +169,9 @@ is optional, and every key is also a node under `config/`:
 }
 ```
 
-What is set over the socket wins over the file until `wepaper reload`; `--set key=value`
-on the daemon's command line wins over both. See
+What is set over the socket wins over the file until `wepaper reload`. `--set key=value` on
+the daemon's command line is what a setting starts from, whatever the file and earlier runs
+say. See
 [docs/configuration.md](docs/configuration.md).
 
 ## Plugins
