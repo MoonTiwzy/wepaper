@@ -31,6 +31,9 @@
         volume: 1,
         // Whether the document has loaded: nothing is delivered to the page before.
         loaded: false,
+        // The page is drawn for a device, in a window nobody sees: the browser shows
+        // it no frames, so its animation frames are run from a timer instead.
+        unseen: false,
     };
 
     function post(message) {
@@ -137,11 +140,25 @@
     let nextFrame = 1;
     let pumping = false;
     let lastFrame = -Infinity;
+    // When the timer that stands in for the browser's frames last ran.
+    let lastTimed = -Infinity;
 
     function pump() {
         if (!pumping && !state.paused && frames.size > 0) {
             pumping = true;
-            native.requestFrame(tick);
+            if (state.unseen) {
+                // A window nobody sees is never painted, and a page that is not
+                // painted gets no animation frames. A timer gives them, at the cap
+                // (or sixty a second without one).
+                const interval = 1000 / (state.limit > 0 ? state.limit : 60);
+                const wait = Math.max(0, lastTimed + interval - performance.now());
+                native.setTimeout(function () {
+                    lastTimed = performance.now();
+                    tick(lastTimed);
+                }, wait);
+            } else {
+                native.requestFrame(tick);
+            }
         }
     }
 
@@ -150,7 +167,8 @@
         if (state.paused) {
             return;
         }
-        if (state.limit > 0) {
+        // The stand-in timer runs at the cap already.
+        if (state.limit > 0 && !state.unseen) {
             const interval = 1000 / state.limit;
             const elapsed = now - lastFrame;
             // Two milliseconds of slack: display frames do not arrive on an exact grid.
@@ -526,6 +544,7 @@
                 state.limit = message.limit;
                 state.volume = message.volume;
                 state.paused = message.paused;
+                state.unseen = message.unseen === true;
                 // The page's scripts may have run already and started their sound at
                 // the volume nobody had told yet.
                 applyVolume();

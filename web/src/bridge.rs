@@ -30,6 +30,9 @@ pub struct PageState {
     pub paused: bool,
     /// Loudness, 0 to 100.
     pub volume: u8,
+    /// The page is drawn for a device, in a window nobody sees: the browser shows it
+    /// no frames, and its animation frames run from a timer.
+    pub unseen: bool,
 }
 
 /// The script to run at document start: the bridge, primed with `state`.
@@ -46,6 +49,7 @@ pub fn init(state: &PageState) -> String {
         "limit" => state.limit,
         "paused" => state.paused,
         "volume" => gain(state.volume),
+        "unseen" => state.unseen,
     })
 }
 
@@ -196,6 +200,7 @@ mod tests {
             limit: 30,
             paused: true,
             volume: 40,
+            unseen: false,
         };
         let script = document_start_script(&state);
         let (source, init) = script.rsplit_once('\n').unwrap();

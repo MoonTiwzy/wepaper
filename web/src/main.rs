@@ -124,6 +124,7 @@ fn run(args: Args) -> Result<u8, Fatal> {
             limit: args.fps.unwrap_or(0),
             paused: false,
             volume: args.volume,
+            unseen: args.frames.is_some(),
         }),
         refresh,
         main_loop: glib::MainLoop::new(None, false),

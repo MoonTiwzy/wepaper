@@ -32,7 +32,9 @@ The page lives in a window as large as the device that nobody sees (fully transp
 background layer of `--output`, or of any output without it). `--fps` times a second (30 without
 it) WebKit is asked for a picture of the page, and the picture is written to the descriptor as raw
 RGB: three bytes a pixel, rows from the top, `WIDTH * HEIGHT * 3` bytes a frame. No frames are
-written while paused. When the descriptor's reader is gone the plugin exits.
+written while paused. When the descriptor's reader is gone the plugin exits. A page that is never
+painted gets no animation frames from the browser, so the bridge runs the page's
+`requestAnimationFrame` callbacks from a timer at `--fps`.
 
 ## stdin: commands from the daemon
 

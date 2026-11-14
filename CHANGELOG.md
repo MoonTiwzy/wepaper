@@ -21,7 +21,9 @@
   `pause`, remembered), described in the config file or under `devices/` in the control
   tree. For panels on coolers and keyboards, light strips, streams: [docs/devices.md](docs/devices.md).
   Web wallpapers play on a device too: the web plugin draws the page at the device's size
-  without a window anybody sees and writes the frames to the device's program.
+  without a window anybody sees and writes the frames to the device's program. Such a
+  page gets its animation frames from a timer: the browser gives none to a page it never
+  paints.
 
 - A wallpaper shows the user's own picture or video where it lets one be put in
   (`usertextures` of a material, a `scenetexture` property), and a preset's files are
