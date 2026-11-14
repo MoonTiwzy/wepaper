@@ -520,6 +520,31 @@ fn draw_image(
         chain.ping[0] = Some(first);
         chain.current = Some(0);
 
+        // The step after which each named buffer is not looked at again: it goes back
+        // to the pool there, for the next effect to borrow, not at the end of the layer.
+        let mut last_use = vec![usize::MAX; chain.named.len()];
+        for (index, step) in steps.iter().enumerate() {
+            let mut used = |slot: usize| {
+                if let Some(last) = last_use.get_mut(slot) {
+                    *last = index;
+                }
+            };
+            match step {
+                Step::Copy { source, target } => {
+                    used(*source);
+                    used(*target);
+                }
+                Step::Draw { shade, target } => {
+                    target.iter().copied().for_each(&mut used);
+                    for (_, _, source) in &shade.samplers {
+                        if let TextureRef::Buffer(slot) = source {
+                            used(*slot);
+                        }
+                    }
+                }
+            }
+        }
+
         let mut landed = false;
         for (index, step) in steps.iter().enumerate() {
             let last = index + 1 == steps.len();
@@ -591,6 +616,13 @@ fn draw_image(
                     } else if target.is_none() {
                         chain.current = Some(next);
                     }
+                }
+            }
+            for (slot, last) in last_use.iter().enumerate() {
+                if *last == index
+                    && let Some(done) = chain.named[slot].take()
+                {
+                    engine.pool.give(done);
                 }
             }
         }
