@@ -189,6 +189,7 @@ fn the_lighting_a_shader_requires_is_written_in_for_it() {
     assert!(lit.contains("uniform vec4 g_LightsColorRadius[WEPAPER_LIGHTS];"));
     assert!(lit.contains("uniform vec4 g_LightsPositionExponent[WEPAPER_LIGHTS];"));
     assert!(lit.contains("ComputePBRLightShadow(") && lit.contains("ComputePBRLightShadowInfinite("));
+    assert!(lit.contains("isnan("), "a light that is not a number gives none, as HLSL's max() makes it");
     // Anything else a shader requires is not known: it stays a comment.
     let other = Source::load(Stage::Fragment, "#require SomethingElse\nvoid main() {}\n", &include);
     assert!(other.text.contains("// #require SomethingElse"));

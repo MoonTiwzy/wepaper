@@ -17,6 +17,11 @@
 //! The light itself is the stock shaders' own physically based light
 //! (`ComputePBRLightShadow` and `ComputePBRLightShadowInfinite` of `common_pbr_2.h`,
 //! which every shader that requires the lighting includes first), without shadows.
+//!
+//! At a roughness of 0 that light divides 0 by 0 where a reflection is exact. The
+//! shaders then take `max(light, emission)`: HLSL's `max` passes the number over the
+//! NaN, GLSL's need not, and a glowing surface would show a black hole. A light that
+//! is not a number is taken as none.
 
 /// The text that stands where a shader says `#require LightingV1`.
 pub(super) const LIGHTING_V1: &str = "\
@@ -36,16 +41,21 @@ vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewVector
 	{
 		vec4 colorRadius = g_LightsColorRadius[l];
 		vec4 positionExponent = g_LightsPositionExponent[l];
+		vec3 one;
 		if (colorRadius.w > 0.0)
 		{
-			light += ComputePBRLightShadow(normal, positionExponent.xyz - worldPos, viewVector, albedo,
+			one = ComputePBRLightShadow(normal, positionExponent.xyz - worldPos, viewVector, albedo,
 				colorRadius.rgb, colorRadius.w, positionExponent.w, specularTint, baseReflectance, roughness,
 				metallic, 1.0);
 		}
 		else
 		{
-			light += ComputePBRLightShadowInfinite(normal, positionExponent.xyz, viewVector, albedo,
+			one = ComputePBRLightShadowInfinite(normal, positionExponent.xyz, viewVector, albedo,
 				colorRadius.rgb, specularTint, baseReflectance, roughness, metallic, 1.0);
+		}
+		if (!any(isnan(one)))
+		{
+			light += one;
 		}
 	}
 #endif
