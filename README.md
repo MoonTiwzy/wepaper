@@ -4,7 +4,7 @@
 
 **Wallpaper Engine wallpapers as your Wayland desktop background.**<br>
 Scenes, videos and web wallpapers from the Steam Workshop, on every monitor,<br>
-at a fraction of the memory.
+fast and light on the machine.
 
 [![CI](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml/badge.svg)](https://github.com/MoonTiwzy/wepaper/actions/workflows/ci.yml)
 [![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-3b9cff)](LICENSE)
@@ -28,23 +28,13 @@ Engine already put on your disk and plays them itself. Looking for a window to b
 subscribe with? That is [WE Linux](https://github.com/MoonTiwzy/we-linux), which runs wepaper
 underneath.
 
-## The numbers
+## Fast and light
 
-<!-- footprint:start -->
-| wallpaper | video memory, MiB | memory, MB | CPU, % of a core | start, ms |
-|---|---|---|---|---|
-| a picture with one effect | 84 → **65** | 210 → **76** | 3.0 → **2.5** | 321 → **87** |
-| puppets, nine effect chains | 574 → **478** | 497 → **91** | 4.4 → **4.3** | 873 → **432** |
-| 168 layers, a scripted console | 2930 → **112** | 2654 → **99** | 93.9 → **11.6** | 958 → **174** |
-| 4K scene, 65 layers, 600 scripts | 482 → **392** | 602 → **107** | 18.8 → **11.6** | 1211 → **624** |
-| scene with a 4K video, sound, particles | 108 → **98** | 476 → **221** | 39.1 → **18.9** | 432 → **173** |
-| video, 720p 30 fps | 84 → **46** | 290 → **166** | 12.8 → **6.7** | 344 → **174** |
-| video, 4K 60 fps | 113 → **74** | 365 → **212** | 56.5 → **31.9** | 345 → **174** |
-
-Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 2.7 times less memory, 1.6 times less CPU and a start 2.5 times faster; on the heaviest one, 26 times less video memory and 27 times less memory.
-<!-- footprint:end -->
-
-Measured, not estimated: how and on what is in [docs/performance.md](docs/performance.md).
+wepaper starts in a fraction of a second, takes little memory and video memory, and leaves the
+CPU alone: one process and one OpenGL context for every monitor, and nothing running that the
+wallpaper on screen does not use. Where that comes from is in
+[How it stays small](#how-it-stays-small); the measurements, for those who want them, are in
+[docs/performance.md](docs/performance.md).
 
 ## What it plays
 

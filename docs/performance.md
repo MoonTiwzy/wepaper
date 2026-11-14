@@ -4,29 +4,23 @@ What a playing wallpaper costs, measured, and how to measure it yourself.
 
 ## The numbers
 
-<!-- footprint:start -->
 | wallpaper | video memory, MiB | memory, MB | of it, its own | CPU, % of a core | start, ms |
 |---|---|---|---|---|---|
-| a picture with one effect | 84 → **65** | 210 → **76** | 93 → **26** | 3.0 → **2.5** | 321 → **87** |
-| a picture and three particle systems | 95 → **87** | 228 → **85** | 108 → **35** | 4.0 → **2.9** | 411 → **150** |
-| four pictures and particles | 143 → **125** | 253 → **85** | 133 → **34** | 3.2 → **3.5** | 386 → **131** |
-| puppets, nine effect chains | 574 → **478** | 497 → **91** | 330 → **39** | 4.4 → **4.3** | 873 → **432** |
-| 80 layers, effects on half | 269 → **152** | 320 → **94** | 192 → **42** | 10.0 → **6.8** | 663 → **195** |
-| 168 layers, a scripted console | 2930 → **112** | 2654 → **99** | 2542 → **47** | 93.9 → **11.6** | 958 → **174** |
-| 190 layers, three video textures, scripts | 136 → **86** | 384 → **219** | 249 → **132** | 40.0 → **14.5** | 472 → **216** |
-| 4K scene, 65 layers, 600 scripts | 482 → **392** | 602 → **107** | 455 → **55** | 18.8 → **11.6** | 1211 → **624** |
-| scene around a 4K video | 99 → **90** | 387 → **213** | 238 → **126** | 49.1 → **30.3** | 324 → **173** |
-| scene with a 4K video, sound, particles | 108 → **98** | 476 → **221** | 295 → **134** | 39.1 → **18.9** | 432 → **173** |
-| video, 720p 30 fps | 84 → **46** | 290 → **166** | 164 → **80** | 12.8 → **6.7** | 344 → **174** |
-| video, 4K 60 fps | 113 → **74** | 365 → **212** | 239 → **125** | 56.5 → **31.9** | 345 → **174** |
-| video, 4K 120 fps | 127 → **74** | 492 → **211** | 366 → **125** | 53.7 → **27.3** | 389 → **152** |
+| a picture with one effect | 65 | 76 | 26 | 2.5 | 87 |
+| a picture and three particle systems | 87 | 85 | 35 | 2.9 | 150 |
+| four pictures and particles | 125 | 85 | 34 | 3.5 | 131 |
+| puppets, nine effect chains | 478 | 91 | 39 | 4.3 | 432 |
+| 80 layers, effects on half | 152 | 94 | 42 | 6.8 | 195 |
+| 168 layers, a scripted console | 112 | 99 | 47 | 11.6 | 174 |
+| 190 layers, three video textures, scripts | 86 | 219 | 132 | 14.5 | 216 |
+| 4K scene, 65 layers, 600 scripts | 392 | 107 | 55 | 11.6 | 624 |
+| scene around a 4K video | 90 | 213 | 126 | 30.3 | 173 |
+| scene with a 4K video, sound, particles | 98 | 221 | 134 | 18.9 | 173 |
+| video, 720p 30 fps | 46 | 166 | 80 | 6.7 | 174 |
+| video, 4K 60 fps | 74 | 212 | 125 | 31.9 | 174 |
+| video, 4K 120 fps | 74 | 211 | 125 | 27.3 | 152 |
 
-Previous renderer → **wepaper**, same machine, one 2560x1440 output, 60 fps cap. On a typical wallpaper (the median of the thirteen measured) that is 1.3 times less video memory, 2.7 times less memory, 1.6 times less CPU and a start 2.5 times faster; on the heaviest one, 26 times less video memory and 27 times less memory.
-<!-- footprint:end -->
-
-"Previous renderer" is what WE Linux ran before wepaper existed, started the way WE Linux
-started it, with its own memory-saving switches on. Same machine, same compositor, same
-wallpapers, one after the other.
+One 2560x1440 output, 60 frames a second, sound off.
 
 ## What was measured, and how
 
@@ -49,9 +43,9 @@ wallpapers, one after the other.
 The memory column moves with the rest of the system. What is in it besides the process's own
 is code: the program and, mostly, the graphics driver's libraries, which the kernel keeps
 once for every program that has them and charges by share. The table was measured with
-nothing else holding the driver's libraries in memory, so each renderer pays for them in
+nothing else holding the driver's libraries in memory, so the renderer pays for them in
 full: the worst case. On a desktop where other programs have them loaded, the first row
-read 125 → **31**. The column "its own" does not move.
+read 31. The column "its own" does not move.
 
 Video scenes and video wallpapers decode on the CPU by default, at the monitor's size: that is
 where their CPU goes, and it is what keeps their video memory small. `video_hardware` moves
@@ -63,27 +57,22 @@ A second output showing the same wallpaper costs its surface (about 33 MiB of vi
 at 1440p) and a few kilobytes of state: the textures, the programs and the video decoder are
 the ones the first output uses.
 
-<!-- outputs:start -->
 | the scene with a 4K video | video memory, MiB | memory | video decoders | threads |
 |---|---|---|---|---|
 | on one 2560x1440 output | 98 | | 1 | 15 |
 | on two | 130 | 12 MB more | 1 | 15 |
 
 Unplugging the second output gives its 32 MiB back at once.
-<!-- outputs:end -->
 
 ## Building
 
-<!-- build:start -->
-| on a 32-thread desktop, from nothing | wepaper | previous renderer |
-|---|---|---|
-| debug build | 9.6 s | 4 min 48 s |
-| release build | 31 s | 3 min 52 s |
-| release build after a change to the engine | 9 s | |
-| CPU time of the release build | 101 s | 3880 s |
+| on a 32-thread desktop, from nothing | |
+|---|---|
+| debug build | 9.6 s |
+| release build | 31 s |
+| release build after a change to the engine | 9 s |
 
 The release binary is 3.8 MB.
-<!-- build:end -->
 
 The dependency tree is small on purpose: no shader cross-compiler, no GUI toolkit, no async
 runtime, no serde. The largest single item is QuickJS (C, compiled once) behind the `script`
