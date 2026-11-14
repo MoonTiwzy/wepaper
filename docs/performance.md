@@ -56,11 +56,25 @@ at 1440p) and a few kilobytes of state: the textures, the programs and the video
 the ones the first output uses.
 
 <!-- outputs:start -->
+| the scene with a 4K video | video memory, MiB | memory, MB | video decoders | threads |
+|---|---|---|---|---|
+| on one 2560x1440 output | 98 | 148 | 1 | 15 |
+| on two | 130 | 160 | 1 | 15 |
+
+Unplugging the second output gives its 32 MiB back at once.
 <!-- outputs:end -->
 
 ## Building
 
 <!-- build:start -->
+| on a 32-thread desktop, from nothing | wepaper | previous renderer |
+|---|---|---|
+| debug build | 9.6 s | 4 min 48 s |
+| release build | 31 s | 3 min 52 s |
+| release build after a change to the engine | 9 s | |
+| CPU time of the release build | 101 s | 3880 s |
+
+The release binary is 3.8 MB.
 <!-- build:end -->
 
 The dependency tree is small on purpose: no shader cross-compiler, no GUI toolkit, no async
