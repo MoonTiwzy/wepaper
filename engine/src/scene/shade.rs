@@ -336,6 +336,11 @@ impl Shade {
                 && bound.get(sampler.slot).copied().unwrap_or(false)
             {
                 combos.insert(combo.clone(), 1);
+                // A mask brings every channel it holds: the editor paints them all, and
+                // what is left unpainted holds the shader's own default.
+                for component in &sampler.components {
+                    combos.insert(component.clone(), 1);
+                }
             }
         }
         for (slot, texture) in textures.iter().enumerate() {
@@ -359,6 +364,10 @@ impl Shade {
         // without lights, gets none.
         if bindings.lights > 0 && combos.get("LIGHTING").is_some_and(|on| *on != 0) {
             combos.insert("WEPAPER_LIGHTS".to_owned(), bindings.lights as i32);
+        }
+        // In a scene drawn in a high dynamic range, light and brightness may go past one.
+        if bindings.hdr {
+            combos.insert("HDR".to_owned(), 1);
         }
 
         let program = share.program(&pair, &combos).map_err(|e| format!("shader {}: {e}", input.shader))?;

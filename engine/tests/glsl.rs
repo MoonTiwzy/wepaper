@@ -226,3 +226,15 @@ fn a_varying_the_stages_declare_differently_takes_the_vertex_stage_type() {
     // Stages that agree come back as they were.
     assert_eq!(vertex.matching(&vertex).text, vertex.text);
 }
+
+#[test]
+fn a_mask_slot_names_the_combos_of_its_channels() {
+    let text = r#"uniform sampler2D g_Texture2; // {"combo":"PBRMASKS","components":[{"label":"m","combo":"METALLIC_MAP"},{"label":"e","combo":"EMISSIVE_MAP"}]}
+uniform sampler2D g_Texture0; // {"material":"albedo"}
+"#;
+    let declared = Source::load(Stage::Fragment, text, &include).declared;
+    let mask = declared.samplers.iter().find(|s| s.slot == 2).unwrap();
+    assert_eq!(mask.combo.as_deref(), Some("PBRMASKS"));
+    assert_eq!(mask.components, ["METALLIC_MAP", "EMISSIVE_MAP"]);
+    assert!(declared.samplers.iter().find(|s| s.slot == 0).unwrap().components.is_empty());
+}

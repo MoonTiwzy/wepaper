@@ -73,7 +73,7 @@ fn a_perspective_scene_with_models_and_lights() {
                    "general": {"orthogonalprojection": null, "fov": 35, "nearz": 0.1, "farz": 1000,
                                "ambientcolor": "0.75 0.75 0.75", "skylightcolor": {"user": "sky", "value": "0.6 0.6 0.6"},
                                "hdr": true, "bloomhdrstrength": 0.8, "bloomhdrthreshold": 0.62, "bloomhdrfeather": 0.4,
-                               "bloomhdrscatter": 3.0, "bloomhdriterations": 8},
+                               "bloomhdrscatter": 3.0, "bloomhdriterations": 8, "bloomtint": "1 0.5 0.25"},
                    "objects": [
                      {"id": 23, "name": "Main Light", "light": "ldirectional", "color": "1 1 1", "intensity": 1.25,
                       "radius": 15.65, "exponent": 2.0, "castshadow": true, "angles": "0 0.9 -2.25"},
@@ -103,6 +103,7 @@ fn a_perspective_scene_with_models_and_lights() {
         ),
         (0.8, 0.62, 0.4, 3.0, 8)
     );
+    assert_eq!(general.bloom_hdr.tint, [1.0, 0.5, 0.25]);
     assert_eq!((scene.eye, scene.center), ([0.0, 0.5, 7.0], [0.0, 0.5, 6.0]));
 
     let ObjectKind::Light(sun) = &scene.objects[0].kind else { panic!("not a light") };

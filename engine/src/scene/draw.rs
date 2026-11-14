@@ -40,6 +40,9 @@ pub(super) struct Frame<'a> {
     lights: &'a super::lights::Lights,
     /// The scene behind the first layer that reflects it, with its smaller levels.
     reflection: std::cell::RefCell<Option<Target>>,
+    /// What the frame and the layers' buffers are kept in: half floats in a scene drawn
+    /// in a high dynamic range, bytes in any other.
+    format: TextureFormat,
 }
 
 /// What is the same for every pass of a layer.
@@ -92,20 +95,18 @@ impl SceneInstance {
         self.viewport = crate::Viewport { width: size.0.max(1), height: size.1.max(1) };
         let size = (self.viewport.width, self.viewport.height);
         // A scene that blooms is drawn into a buffer first: the bloom reads the finished
-        // frame. A 3D scene is too: it needs a depth buffer, and the surface has none.
+        // frame. A 3D scene is too: it needs a depth buffer, and the surface has none. And
+        // so is a scene in a high dynamic range: the surface keeps nothing over one.
         let deep = self.perspective.is_some();
+        let format = if self.hdr { super::hdr::FORMAT } else { TextureFormat::Rgba8 };
         let staged = if deep {
             engine
                 .pool
-                .take_with_depth(size.0, size.1, TextureFormat::Rgba8)
+                .take_with_depth(size.0, size.1, format)
                 .inspect_err(|e| log::warn!("3D scene: {e}"))
                 .ok()
-        } else if self.bloom.as_ref().is_some_and(|bloom| bloom.enabled) {
-            engine
-                .pool
-                .take(size.0, size.1, TextureFormat::Rgba8)
-                .inspect_err(|e| log::warn!("bloom: {e}"))
-                .ok()
+        } else if self.hdr || self.bloom.as_ref().is_some_and(|bloom| bloom.enabled) {
+            engine.pool.take(size.0, size.1, format).inspect_err(|e| log::warn!("bloom: {e}")).ok()
         } else {
             None
         };
@@ -208,6 +209,7 @@ impl SceneInstance {
             skylight: self.skylight,
             lights: &self.lights,
             reflection: std::cell::RefCell::new(None),
+            format,
         };
         canvas.bind(&engine.gl);
         if deep && staged.is_some() {
@@ -357,7 +359,12 @@ impl SceneInstance {
                 // No memory for the bloom's buffers: the frame without it.
                 staged.blit(to, size);
             }
+        } else if let (Some(staged), Some(bloom)) =
+            (&staged, self.hdr_bloom.as_ref().filter(|bloom| bloom.enabled))
+        {
+            bloom.finish(engine, &frame, staged, to, size);
         } else if let Some(staged) = &staged {
+            // Out of half floats, a copy clamps to what the output holds.
             staged.blit(to, size);
         }
         let reflection = frame.reflection.into_inner();
@@ -468,7 +475,7 @@ fn reflect(engine: &mut Engine, frame: &Frame<'_>, canvas: Canvas) {
         return;
     }
     let (width, height) = ((canvas.size.0 / 2).max(1), (canvas.size.1 / 2).max(1));
-    match engine.pool.take_mipmapped(width, height, TextureFormat::Rgba8) {
+    match engine.pool.take_mipmapped(width, height, frame.format) {
         Ok(copy) => {
             engine.gl.copy_framebuffer(
                 canvas.framebuffer,
@@ -548,7 +555,7 @@ fn draw_image(
     if needs_background {
         let copy = match background.take() {
             Some(copy) => copy,
-            None => match engine.pool.take(scene.size.0, scene.size.1, TextureFormat::Rgba8) {
+            None => match engine.pool.take(scene.size.0, scene.size.1, frame.format) {
                 Ok(copy) => copy,
                 Err(error) => {
                     log::warn!("layer {}: {error}", layer.name);
@@ -601,7 +608,7 @@ fn draw_image(
 
     // The base pass fills the first buffer.
     let ok = (|| -> Result<(), crate::gpu::GpuError> {
-        let first = engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?;
+        let first = engine.pool.take(size.0, size.1, frame.format)?;
         first.bind();
         engine.gl.set_blend(Blend::None);
         match image.mode {
@@ -684,7 +691,7 @@ fn draw_image(
             let last = index + 1 == steps.len();
             match step {
                 Step::Copy { source, target } => {
-                    ensure_named(engine, &mut chain, image, *target, size)?;
+                    ensure_named(engine, &mut chain, image, *target, size, frame.format)?;
                     if let (Some(from), Some(to)) =
                         (chain.named[*source].as_ref(), chain.named[*target].as_ref())
                     {
@@ -698,13 +705,12 @@ fn draw_image(
                         scene.bind(&engine.gl);
                         engine.gl.set_blend(image.blend);
                     } else if let Some(slot) = target {
-                        ensure_named(engine, &mut chain, image, *slot, size)?;
+                        ensure_named(engine, &mut chain, image, *slot, size, frame.format)?;
                         chain.named[*slot].as_ref().expect("just ensured").bind();
                         engine.gl.set_blend(Blend::None);
                     } else {
                         if chain.ping[next].is_none() {
-                            chain.ping[next] =
-                                Some(engine.pool.take(size.0, size.1, TextureFormat::Rgba8)?);
+                            chain.ping[next] = Some(engine.pool.take(size.0, size.1, frame.format)?);
                         }
                         chain.ping[next].as_ref().expect("just ensured").bind();
                         engine.gl.set_blend(Blend::None);
@@ -849,12 +855,13 @@ fn ensure_named(
     image: &ImageLayer,
     slot: usize,
     size: (u32, u32),
+    format: TextureFormat,
 ) -> Result<(), crate::gpu::GpuError> {
     if chain.named[slot].is_none() {
         let scale = image.buffers[slot].scale.max(1.0);
         let (w, h) =
             (((size.0 as f32 / scale).ceil() as u32).max(1), ((size.1 as f32 / scale).ceil() as u32).max(1));
-        chain.named[slot] = Some(engine.pool.take(w, h, TextureFormat::Rgba8)?);
+        chain.named[slot] = Some(engine.pool.take(w, h, format)?);
     }
     Ok(())
 }

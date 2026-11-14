@@ -145,7 +145,10 @@ impl SceneInstance {
         match field {
             SceneField::Zoom => Value::from(self.zoom),
             SceneField::Clear => vector(&self.clear),
-            SceneField::Bloom => Value::from(self.bloom.as_ref().is_some_and(|bloom| bloom.enabled)),
+            SceneField::Bloom => Value::from(
+                self.bloom.as_ref().is_some_and(|bloom| bloom.enabled)
+                    || self.hdr_bloom.as_ref().is_some_and(|bloom| bloom.enabled),
+            ),
             SceneField::Parallax => Value::from(self.parallax.enabled),
             SceneField::ParallaxAmount => Value::from(self.parallax.amount),
             SceneField::ParallaxDelay => Value::from(self.parallax.delay),

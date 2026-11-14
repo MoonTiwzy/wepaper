@@ -10,6 +10,7 @@ mod bindings;
 mod build;
 mod camera;
 mod draw;
+mod hdr;
 mod lights;
 mod model;
 mod particles;
@@ -255,6 +256,10 @@ pub struct SceneInstance {
     skipped: Vec<String>,
     /// The scene's bloom: bright parts of the finished frame, blurred and added back.
     bloom: Option<Bloom>,
+    /// Whether the scene is drawn in a high dynamic range (`general.hdr`).
+    hdr: bool,
+    /// The bloom of such a scene, in place of the other.
+    hdr_bloom: Option<hdr::HdrBloom>,
     /// The ids of layers whose finished picture another layer reads.
     provides: std::collections::HashSet<i64>,
     /// The ids of layers with a pass that reflects the scene behind it.
@@ -398,6 +403,9 @@ impl SceneInstance {
             Change::Flag(Slot::Scene(field), on) => match field {
                 SceneField::Bloom => {
                     if let Some(bloom) = &mut self.bloom {
+                        bloom.enabled = on;
+                    }
+                    if let Some(bloom) = &mut self.hdr_bloom {
                         bloom.enabled = on;
                     }
                 }

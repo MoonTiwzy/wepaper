@@ -67,6 +67,8 @@ pub struct BloomHdr {
     pub scatter: f32,
     /// How many times smaller the glow is taken, at most.
     pub iterations: u32,
+    /// The colour of the glow.
+    pub tint: [f32; 3],
 }
 
 /// What a light is.
@@ -402,6 +404,7 @@ impl Scene {
                     scatter: f32::from_doc(general.get("bloomhdrscatter")).unwrap_or(1.619),
                     iterations: i32::from_doc(general.get("bloomhdriterations")).unwrap_or(8).clamp(1, 16)
                         as u32,
+                    tint: <[f32; 3]>::from_doc(general.get("bloomtint")).unwrap_or([1.0; 3]),
                 },
             },
             eye: vector(doc.get("camera").get("eye"), [0.0, 0.0, 1.0]),

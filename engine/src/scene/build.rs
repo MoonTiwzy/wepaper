@@ -74,10 +74,20 @@ impl SceneInstance {
         bindings.link(&general.shake_speed, Slot::Scene(SceneField::ShakeSpeed));
         bindings.link(&general.ambient, Slot::Scene(SceneField::Ambient));
         bindings.link(&general.skylight, Slot::Scene(SceneField::Skylight));
+        bindings.hdr = scene.general.hdr;
         // The bloom is built when the scene can ever bloom: now, or when a property says so.
-        let bloom = (scene.general.bloom.value || scene.general.bloom.user.is_some())
+        // A scene in a high dynamic range has its own.
+        let blooms = scene.general.bloom.value || scene.general.bloom.user.is_some();
+        let bloom = (blooms && !scene.general.hdr)
             .then(|| build_bloom(engine, files, &mut bindings, &scene))
             .and_then(|bloom| bloom.inspect_err(|why| log::warn!("bloom: {why}")).ok());
+        let hdr_bloom = (blooms && scene.general.hdr)
+            .then(|| super::hdr::HdrBloom::build(engine, files, &mut bindings, &scene.general.bloom_hdr))
+            .and_then(|bloom| bloom.inspect_err(|why| log::warn!("hdr bloom: {why}")).ok())
+            .map(|mut bloom| {
+                bloom.enabled = scene.general.bloom.value;
+                bloom
+            });
         let mut layers = Vec::with_capacity(scene.objects.len());
         for (index, object) in scene.objects.iter().enumerate() {
             bindings.owner = (index, None);
@@ -230,6 +240,8 @@ impl SceneInstance {
             skipped,
             project,
             bloom,
+            hdr: scene.general.hdr,
+            hdr_bloom,
             provides: std::collections::HashSet::new(),
             reflects: std::collections::HashSet::new(),
             videos: Vec::new(),

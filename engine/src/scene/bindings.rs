@@ -182,6 +182,8 @@ pub(crate) struct Bindings {
     pub(crate) properties: HashMap<String, Value>,
     /// How many lights the scene has: its lit passes are compiled for that many.
     pub(crate) lights: usize,
+    /// Whether the scene is drawn in a high dynamic range: every pass is compiled for it.
+    pub(crate) hdr: bool,
 }
 
 /// A change a property made, for the scene to apply.
