@@ -39,7 +39,7 @@
   it does not take, a comparison that is counted with, a value one stage writes longer
   than the other reads.
 - On Mesa nearly all of the rest plays too: of the 59 effects and layers the test library
-  still left out, 6 are. A strict driver says that two values did not fit, not which kinds
+  still left out, 3 are, all three lit 3D objects, which are not drawn yet anyway. A strict driver says that two values did not fit, not which kinds
   they were, so the kinds are now worked out from what the shader declares (its variables,
   functions, macros, and only the branches of its `#if`s that are compiled), and the
   conversions the original makes by itself are written in: where two vectors of different
@@ -49,6 +49,12 @@
   kind it goes to. A statement written over several lines is read whole. Where a kind is
   not certain, nothing is changed. Audio visualizers that were a white square, blurs and
   colour effects that were missing are there.
+- Two stages that declare one name with different kinds are linked as the original links
+  them, each stage being built on its own there: a value the fragment stage reads longer than
+  the vertex stage writes gets the missing components as GL fills an attribute nobody sets
+  (nought, and one for the fourth); a uniform of two kinds is set as the fragment stage has
+  it and converted in the vertex stage. NVIDIA's way of saying a value's lengths disagree is
+  understood as well, which brings back a colour grading effect both its modes refused.
 - `wepaper get memory/heap` says what the allocator has in use and what it holds free.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in

@@ -115,43 +115,131 @@ fn statement(body: &str, mut start: usize, mut end: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// Tries to repair what the driver's `log` says of the two stages together, in the
-/// fragment stage's `source`. Returns whether anything was changed.
+/// Tries to repair what the driver's `log` says of the two stages together. Returns
+/// whether anything was changed.
 ///
-/// One mistake is known: a value the vertex stage writes as a longer vector than the
-/// fragment stage reads. The original links the two; here the fragment stage takes
-/// the whole value and reads its first components wherever it names it.
-pub fn repair_link(source: &mut String, log: &str) -> bool {
+/// Two mistakes are known, both of a name the stages declare with different kinds,
+/// which the original takes since it builds each stage on its own:
+/// - a value the vertex stage writes as a vector of another length than the fragment
+///   stage reads. The fragment stage takes the value as it is written and, wherever it
+///   names it, reads its first components, or the whole value with what is missing as
+///   GL fills an attribute nobody sets: nought, and one for the fourth.
+/// - a uniform. The fragment stage's kind is the one the material's value is set as;
+///   the vertex stage takes the uniform as that and converts it where it names it.
+pub fn repair_link(vertex: &mut String, fragment: &mut String, log: &str) -> bool {
     let quoted = |text: &str| -> Option<String> {
         let (_, rest) = text.split_once('`')?;
         rest.split_once('\'').map(|(inside, _)| inside.to_owned())
     };
-    let found = log.lines().find_map(|message| {
-        let (written, read) = message.split_once("but fragment shader input declared as type")?;
-        let (name, written) = written.split_once("declared as type")?;
-        Some((quoted(name)?, quoted(written)?, quoted(read)?))
-    });
-    let Some((name, written, read)) = found else { return false };
-    let (Some(wide), Some(narrow)) = (width(&written), width(&read)) else { return false };
-    if narrow >= wide || !written.starts_with("vec") {
-        return false;
+    for message in log.lines() {
+        if let Some((written, read)) = message.split_once("but fragment shader input declared as type") {
+            let Some((name, written)) = written.split_once("declared as type") else { continue };
+            let (Some(name), Some(written), Some(read)) = (quoted(name), quoted(written), quoted(read))
+            else {
+                continue;
+            };
+            return passed_on(fragment, &name, &written, &read);
+        }
+        // NVIDIA: `unknown semantics "ATTR0.xy" specified for "v_TexCoord"`, no kinds.
+        if message.contains("unknown semantics")
+            && let Some((_, rest)) = message.split_once("specified for \"")
+            && let Some((name, _)) = rest.split_once('"')
+        {
+            let written = declared_kind(vertex, &["varying", "out"], name);
+            let read = declared_kind(fragment, &["varying", "in"], name);
+            let (Some(written), Some(read)) = (written, read) else { continue };
+            return passed_on(fragment, name, &written, &read);
+        }
+        if let Some(rest) = message.split_once("uniform `").map(|(_, rest)| rest)
+            && rest.contains("declared as type")
+        {
+            let Some(name) = rest.split_once('\'').map(|(name, _)| name.to_owned()) else { continue };
+            let set = declared_kind(fragment, &["uniform"], &name);
+            let (Some(set), Some(declared)) = (set, declared_kind(vertex, &["uniform"], &name)) else {
+                continue;
+            };
+            let Some(reads) = read_as(&name, &set, &declared, true) else { continue };
+            return redeclare(
+                vertex,
+                &["uniform"],
+                &name,
+                &declared,
+                &format!("uniform {set} {name};"),
+                &reads,
+            );
+        }
     }
+    false
+}
+
+/// The code of a line, without its comment, cut into words.
+fn words(line: &str) -> Vec<&str> {
+    let code = line.split("//").next().unwrap_or("");
+    code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).filter(|w| !w.is_empty()).collect()
+}
+
+/// The kind the body of `source` declares `name` with, after one of `qualifiers`.
+fn declared_kind(source: &str, qualifiers: &[&str], name: &str) -> Option<String> {
+    let body =
+        source.split_once(super::source::BODY).or_else(|| source.split_once(super::source::BODY_LENIENT))?.1;
+    body.lines().find_map(|line| match words(line)[..] {
+        [qualifier, kind, declared] if qualifiers.contains(&qualifier) && declared == name => {
+            Some(kind.to_owned())
+        }
+        _ => None,
+    })
+}
+
+/// Makes the fragment stage read the value `name`, which the vertex stage passes on as
+/// `written`, where it declares it as `read`.
+fn passed_on(fragment: &mut String, name: &str, written: &str, read: &str) -> bool {
+    let Some(reads) = read_as(name, written, read, false) else { return false };
+    redeclare(fragment, &["varying", "in"], name, read, &format!("in {written} {name};"), &reads)
+}
+
+/// How a value of the kind `given` called `name` is read as the kind `taken`: its
+/// first components, or all of it with what is missing filled in. `spread`: a number
+/// is spread over a vector rather than filled in after.
+fn read_as(name: &str, given: &str, taken: &str, spread: bool) -> Option<String> {
+    let (Some(given_width), Some(taken_width)) = (width(given), width(taken)) else { return None };
+    let floats = |kind: &str| kind.starts_with("vec") || kind == "float";
+    if given_width == taken_width || !floats(given) || !floats(taken) {
+        return None;
+    }
+    Some(if taken_width < given_width {
+        format!("{name}.{}", &"xyzw"[..taken_width])
+    } else if spread && given_width == 1 {
+        format!("{taken}({name})")
+    } else {
+        let missing: Vec<&str> =
+            (given_width..taken_width).map(|at| if at == 3 { "1.0" } else { "0.0" }).collect();
+        format!("{taken}({name}, {})", missing.join(", "))
+    })
+}
+
+/// Replaces the declaration of `name` as `kind` (after one of `qualifiers`) in the
+/// body of `source` by a macro that `reads` it, and puts `declaration` in front of
+/// the body. The macro stands on the declaration's line, so that every line after it
+/// keeps its number.
+fn redeclare(
+    source: &mut String,
+    qualifiers: &[&str],
+    name: &str,
+    kind: &str,
+    declaration: &str,
+    reads: &str,
+) -> bool {
     let marker = [super::source::BODY, super::source::BODY_LENIENT]
         .into_iter()
         .find_map(|marker| source.find(marker).map(|at| (at, marker.len())));
     let Some((marker_at, marker_length)) = marker else { return false };
     let body_start = marker_at + marker_length;
-    // The declaration becomes a macro on its own line, so that every line after it
-    // keeps its number; the wider declaration goes in front of the body.
     let mut body = String::with_capacity(source.len() - body_start);
     let mut changed = false;
     for line in source[body_start..].split_inclusive('\n') {
-        let words: Vec<&str> = line
-            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .filter(|w| !w.is_empty())
-            .collect();
-        if matches!(words[..], ["varying" | "in", kind, declared] if kind == read && declared == name) {
-            body.push_str(&format!("#define {name} {name}.{}\n", &"xyzw"[..narrow]));
+        if matches!(words(line)[..], [qualifier, declared_kind, declared] if qualifiers.contains(&qualifier) && declared_kind == kind && declared == name)
+        {
+            body.push_str(&format!("#define {name} {reads}\n"));
             changed = true;
         } else {
             body.push_str(line);
@@ -160,7 +248,7 @@ pub fn repair_link(source: &mut String, log: &str) -> bool {
     if changed {
         source.truncate(body_start);
         source.push_str(&body);
-        source.insert_str(marker_at, &format!("in {written} {name};\n"));
+        source.insert_str(marker_at, &format!("{declaration}\n"));
     }
     changed
 }
@@ -606,14 +694,59 @@ mod tests {
             "varying vec2 v_TexCoord;\nvoid main() {\n\tgl_FragColor = texture(g_Texture0, v_TexCoord);\n}\n",
         );
         let log = "error: vertex shader output `v_TexCoord' declared as type `vec4', but fragment shader input declared as type `vec2'\n";
-        assert!(repair_link(&mut text, log));
+        assert!(repair_link(&mut String::new(), &mut text, log));
         // The lines of the body keep their numbers: what the driver says next still points at them.
         assert!(
             text.ends_with("in vec4 v_TexCoord;\n#line 1\n#define v_TexCoord v_TexCoord.xy\nvoid main() {\n\tgl_FragColor = texture(g_Texture0, v_TexCoord);\n}\n"),
             "{text}"
         );
-        assert!(!repair_link(&mut text, log), "nothing left to repair");
-        assert!(!repair_link(&mut text, "error: something else\n"));
+        assert!(!repair_link(&mut String::new(), &mut text, log), "nothing left to repair");
+        assert!(!repair_link(&mut String::new(), &mut text, "error: something else\n"));
+    }
+
+    #[test]
+    fn a_stage_that_reads_more_of_a_value_than_the_other_gives_gets_the_rest_as_nought_and_one() {
+        // The missing components are what GL gives an attribute nobody sets: (0, 0, 0, 1).
+        let mut text = source("varying vec4 v_TexCoord;\nvoid main() {\n\tgl_FragColor = v_TexCoord;\n}\n");
+        let log = "error: vertex shader output `v_TexCoord' declared as type `vec2', but fragment shader input declared as type `vec4'\n";
+        assert!(repair_link(&mut String::new(), &mut text, log));
+        assert!(
+            text.ends_with("in vec2 v_TexCoord;\n#line 1\n#define v_TexCoord vec4(v_TexCoord, 0.0, 1.0)\nvoid main() {\n\tgl_FragColor = v_TexCoord;\n}\n"),
+            "{text}"
+        );
+        assert!(!repair_link(&mut String::new(), &mut text, log), "nothing left to repair");
+    }
+
+    #[test]
+    fn a_value_the_stages_disagree_on_is_found_by_its_declarations_when_the_driver_names_no_kinds() {
+        // NVIDIA names only the value; what the stages make of it is in their declarations.
+        let mut vertex =
+            source("varying vec4 v_TexCoord;\nvoid main() {\n\tv_TexCoord.xy = a_TexCoord;\n}\n");
+        let mut fragment = source("varying vec2 v_TexCoord;\nvoid main() {}\n");
+        let log = "Vertex info\n-----------\n0(6) : error C5108: unknown semantics \"ATTR0.xy\" specified for \"v_TexCoord\"\n";
+        assert!(repair_link(&mut vertex, &mut fragment, log));
+        assert!(
+            fragment.contains("in vec4 v_TexCoord;\n#line 1\n#define v_TexCoord v_TexCoord.xy\n"),
+            "{fragment}"
+        );
+        assert!(!repair_link(&mut vertex, &mut fragment, log), "nothing left to repair");
+    }
+
+    #[test]
+    fn a_uniform_of_two_kinds_is_set_as_the_fragment_stage_has_it_and_converted_in_the_other() {
+        let mut vertex = source(
+            "uniform vec2 u_refResolution; // {\"default\":\"512 512\"}\nvoid main() {\n\tgl_Position = vec4(u_refResolution, 0.0, 1.0);\n}\n",
+        );
+        let mut fragment = source("uniform float u_refResolution; // {\"default\":512}\nvoid main() {}\n");
+        let unchanged = fragment.clone();
+        let log = "error: uniform `u_refResolution' declared as type `float' and type `vec2'\n";
+        assert!(repair_link(&mut vertex, &mut fragment, log));
+        assert_eq!(fragment, unchanged);
+        assert!(
+            vertex.contains("uniform float u_refResolution;\n#line 1\n#define u_refResolution vec2(u_refResolution)\nvoid main() {\n"),
+            "{vertex}"
+        );
+        assert!(!repair_link(&mut vertex, &mut fragment, log), "nothing left to repair");
     }
 
     #[test]

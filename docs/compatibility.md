@@ -50,10 +50,14 @@ control tree.
 ### Known differences
 
 - **Shaders that lean on HLSL.** Wallpaper Engine's shaders are GLSL written with HLSL
-  habits. Most are repaired on the way to the driver. Those that rely on implicit conversions
-  everywhere compile only in NVIDIA's lenient mode; on Mesa such a pass is left out and
-  named by `wepaper check`. One shader in the library is refused by every compiler: it is
-  broken as its author published it.
+  habits, and its compiler converts between kinds by itself. A shader the driver takes is
+  compiled as it is; one it refuses is repaired where the driver points, with the kinds of
+  the values there worked out from the shader's declarations and the original's conversions
+  written in. In the test library, Mesa (AMD) and NVIDIA leave out the same three passes,
+  all of them lit 3D objects; `wepaper check` names what is left out. Where a shader does
+  something GLSL leaves undefined, drivers differ: an audio visualizer whose bars are drawn
+  by `smoothstep` with equal edges in silence shows full bars on NVIDIA and none on Mesa
+  (HLSL, like Mesa, gives none).
 - **Particles** are simulated by wepaper's own code. They follow the documents (emitters,
   initializers, operators), but turbulence is another noise field: the look matches, the
   individual particles do not. Sprite orientation other than towards the screen, emitter
@@ -92,6 +96,7 @@ Not played, by design.
 ## Systems
 
 - A Wayland compositor with `wlr-layer-shell`. Developed on Hyprland.
-- OpenGL 3.3. Developed and measured on NVIDIA (driver 615); the code paths for Mesa are
-  written and unmeasured.
+- OpenGL 3.3. Developed and measured on NVIDIA (driver 615). Every scene of the test
+  library is also rendered on AMD with Mesa and compared with NVIDIA's frames; the
+  performance numbers are NVIDIA's.
 - Wallpaper Engine installed through Steam, for its `assets` folder.
