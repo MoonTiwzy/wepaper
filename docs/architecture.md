@@ -51,9 +51,13 @@ would throw a whole wallpaper away over one token.
 **glsl.** The shaders are GLSL written to also compile as HLSL. Translation is textual:
 includes are inlined, the settings in comments are read (`// [COMBO]`, the JSON after each
 `uniform`), and a prelude of `#define`s maps the dialect onto GLSL 330. The driver compiles
-the result. When it refuses, the reason is read from its message and repaired where that is
-possible (an `#endif` too many, `%` between floats); where the driver has a lenient mode for
-HLSL's implicit conversions, the shader gets a second chance in it. Linked programs are saved
+the result, as it is. Only when it refuses is anything repaired, one line at a time where the
+driver points: the statement there is parsed and typed against what the shader declares
+(`glsl/typed`: its variables, functions, structs, macros, the branches of its `#if`s that
+are compiled), and the conversions HLSL makes by itself are written in, on the same lines, so
+that the driver's next message still points at the right one. What that does not cover is
+repaired from the message itself (an `#endif` too many, `%` between floats). Where the driver
+has a lenient mode for HLSL's implicit conversions, the shader gets a second chance in it. Linked programs are saved
 with `glGetProgramBinary`, keyed by source and driver, so the next start compiles nothing.
 
 **gpu.** One context for the whole process, made current against each output's surface in

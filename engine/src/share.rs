@@ -322,7 +322,7 @@ impl Share {
                     Err(refused) => {
                         let repaired = match refused.stage {
                             "vertex" => crate::glsl::repair(&mut vertex, &refused.log),
-                            "link" => crate::glsl::repair_link(&mut fragment, &refused.log),
+                            "link" => crate::glsl::repair_link(&mut vertex, &mut fragment, &refused.log),
                             _ => crate::glsl::repair(&mut fragment, &refused.log),
                         };
                         if !repaired {
