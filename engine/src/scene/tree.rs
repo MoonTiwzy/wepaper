@@ -6,10 +6,10 @@
 
 use wepaper_json::{Map, Value, obj};
 
-use crate::doc::{FromDoc, PropertyKind};
+use crate::doc::{FromDoc, PropertyKind, typed_flag, typed_floats};
 
 use super::bindings::{Change, SceneField, Slot};
-use super::shade::{Shade, value_floats};
+use super::shade::Shade;
 use super::{LayerKind, SceneInstance, Step};
 
 fn vector(values: &[f32]) -> Value {
@@ -164,16 +164,18 @@ impl SceneInstance {
                     .find(|(known, _)| known == name)
                     .ok_or_else(|| format!("the scene has no value \"{name}\""))?;
                 if field.is_flag() {
-                    let on = bool::from_doc(value).ok_or("expected true or false")?;
+                    let on = typed_flag(value).ok_or("expected true or false")?;
                     if field == SceneField::Bloom && on && self.bloom.is_none() {
                         return Err("the scene was made without bloom".to_owned());
                     }
                     self.apply(Change::Flag(Slot::Scene(field), on));
                 } else {
-                    if value_floats(value, 1).is_empty() || value.is_null() {
-                        return Err("expected a number".to_owned());
+                    let mut numbers = typed_floats(value).ok_or("expected a number")?;
+                    // One number for a colour means that number in every component.
+                    if let [one] = numbers[..] {
+                        numbers = vec![one; 3];
                     }
-                    self.apply(Change::Floats(Slot::Scene(field), value_floats(value, 3)));
+                    self.apply(Change::Floats(Slot::Scene(field), numbers));
                 }
                 Ok(())
             }
@@ -191,16 +193,23 @@ impl SceneInstance {
                     .and_then(|id| self.layers.iter().position(|l| l.id == id))
                     .ok_or_else(|| format!("no layer with id {id}"))?;
                 let layer = &mut self.layers[index];
-                let flag = || bool::from_doc(value).ok_or_else(|| "expected true or false".to_owned());
+                let flag = || typed_flag(value).ok_or_else(|| "expected true or false".to_owned());
+                let numbers = typed_floats(value);
                 let three = || -> Result<[f32; 3], String> {
-                    let floats = value_floats(value, 3);
-                    if value.is_null() {
-                        Err("expected three numbers".to_owned())
-                    } else {
-                        Ok([floats[0], floats[1], floats[2]])
+                    match numbers.as_deref() {
+                        Some([one]) => Ok([*one; 3]),
+                        Some([x, y]) => Ok([*x, *y, 0.0]),
+                        Some([x, y, z, ..]) => Ok([*x, *y, *z]),
+                        _ => Err("expected three numbers".to_owned()),
                     }
                 };
-                let number = || f32::from_doc(value).ok_or_else(|| "expected a number".to_owned());
+                let number = || {
+                    numbers
+                        .as_deref()
+                        .and_then(<[f32]>::first)
+                        .copied()
+                        .ok_or_else(|| "expected a number".to_owned())
+                };
                 match rest {
                     ["visible"] => layer.visible = flag()?,
                     ["origin"] => layer.origin = three()?,
@@ -220,7 +229,8 @@ impl SceneInstance {
                         let LayerKind::Image(image) = &mut layer.kind else {
                             return Err(format!("layer {id} has no constants"));
                         };
-                        if value.is_null() || !image.base.set_constant(name, value, &mut self.bindings.values)
+                        if typed_floats(value).is_none()
+                            || !image.base.set_constant(name, value, &mut self.bindings.values)
                         {
                             return Err(format!("layer {id} has no constant \"{name}\""));
                         }
@@ -237,7 +247,7 @@ impl SceneInstance {
                         let mut any = false;
                         for step in &mut found.steps {
                             if let Step::Draw { shade, .. } = step {
-                                any |= !value.is_null()
+                                any |= typed_floats(value).is_some()
                                     && shade.set_constant(name, value, &mut self.bindings.values);
                             }
                         }

@@ -3,12 +3,11 @@
 use std::path::Path;
 
 use wepaper_engine::Fill;
-use wepaper_engine::doc::FromDoc;
 use wepaper_ipc::{PROTOCOL, Request, error, ok, split_path};
 use wepaper_json::{Map, Value, obj};
 
 use super::plugins::{Happening, Kind};
-use super::settings::{KEYS, Remembered, Settings};
+use super::settings::{KEYS, Remembered, Settings, typed_flag, typed_number};
 use super::{Daemon, Shown};
 
 /// The time of day, 0 (midnight) to 1, in the local time zone.
@@ -328,7 +327,7 @@ impl Daemon {
                 Ok(())
             }
             ["outputs", name, "paused"] => {
-                let paused = bool::from_doc(value).ok_or("paused takes true or false")?;
+                let paused = typed_flag(value).ok_or("paused takes true or false")?;
                 self.pause(Some(name), paused).map(|_| ())
             }
             ["outputs", name, "fill"] => {
@@ -354,7 +353,7 @@ impl Daemon {
                 Ok(())
             }
             ["plugins", id, "enabled"] => {
-                let enabled = bool::from_doc(value).ok_or("enabled takes true or false")?;
+                let enabled = typed_flag(value).ok_or("enabled takes true or false")?;
                 let manifest = self
                     .plugins
                     .manifests
@@ -369,7 +368,7 @@ impl Daemon {
                 Ok(())
             }
             ["plugins", id, "params", param] => {
-                let number = f32::from_doc(value).ok_or("a parameter takes a number")?;
+                let number = typed_number(value).ok_or("a parameter takes a number")? as f32;
                 let (_, pass) = self
                     .shaders
                     .iter_mut()

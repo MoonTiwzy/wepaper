@@ -81,6 +81,39 @@ pub fn floats(text: &str) -> Vec<f32> {
         .collect()
 }
 
+/// Numbers as a person gives them: a number, a list of numbers, or text that is
+/// nothing but numbers (`"1 0.5 0"`). `None` for anything else: unlike a wallpaper's
+/// documents, what a person types is not read as zero when it is not a number.
+pub fn typed_floats(value: &Value) -> Option<Vec<f32>> {
+    let numbers: Vec<f32> = match value {
+        Value::Number(number) => vec![*number as f32],
+        Value::String(text) => text
+            .split([' ', ',', '\t'])
+            .filter(|part| !part.is_empty())
+            .map(|part| part.parse::<f32>().ok())
+            .collect::<Option<_>>()?,
+        Value::Array(items) => {
+            items.iter().map(|item| item.as_f64().map(|n| n as f32)).collect::<Option<_>>()?
+        }
+        _ => return None,
+    };
+    (!numbers.is_empty() && numbers.iter().all(|number| number.is_finite())).then_some(numbers)
+}
+
+/// A switch as a person gives it: `true`, `false`, 1, 0, or one of the usual words.
+pub fn typed_flag(value: &Value) -> Option<bool> {
+    match value {
+        Value::Bool(on) => Some(*on),
+        Value::Number(number) if *number == 0.0 || *number == 1.0 => Some(*number == 1.0),
+        Value::String(text) => match text.trim() {
+            "true" | "1" | "on" | "yes" => Some(true),
+            "false" | "0" | "off" | "no" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// A value as the numbers an animation or a shader works with.
 pub trait AsFloats {
     /// The value's components; empty when it is not a number.

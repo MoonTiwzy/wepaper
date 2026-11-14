@@ -21,4 +21,4 @@ pub use scene::{
     Alignment, EffectUse, General, ImageObject, Object, ObjectKind, ParticleObject, PassOverride, Scene,
     SoundObject, TextObject,
 };
-pub use value::{AsFloats, Dyn, FromDoc, Script, UserLink, floats};
+pub use value::{AsFloats, Dyn, FromDoc, Script, UserLink, floats, typed_flag, typed_floats};

@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use wepaper_engine::Fill;
-use wepaper_engine::doc::FromDoc;
 use wepaper_json::{Map, Value, obj};
 
 /// Which layer-shell layer the wallpaper sits on.
@@ -70,6 +69,17 @@ impl Default for Settings {
     }
 }
 
+/// A number as a person gives it over the socket or in the config: a number, or
+/// text that is one.
+pub fn typed_number(value: &Value) -> Option<f64> {
+    match wepaper_engine::doc::typed_floats(value)?.as_slice() {
+        [one] => Some(f64::from(*one)),
+        _ => None,
+    }
+}
+
+pub use wepaper_engine::doc::typed_flag;
+
 /// The names of the settings, in the order they are listed.
 pub const KEYS: &[&str] = &[
     "fps",
@@ -104,16 +114,11 @@ impl Settings {
     /// Changes one setting. The error says what the setting takes.
     pub fn set(&mut self, key: &str, value: &Value) -> Result<(), String> {
         let number = |low: f64, high: f64| -> Result<f64, String> {
-            f32::from_doc(value)
-                .map(f64::from)
+            typed_number(value)
                 .filter(|n| (low..=high).contains(n))
                 .ok_or_else(|| format!("{key} takes a number from {low} to {high}"))
         };
-        let flag = || {
-            bool::from_doc(value)
-                .filter(|_| !value.is_null())
-                .ok_or_else(|| format!("{key} takes true or false"))
-        };
+        let flag = || typed_flag(value).ok_or_else(|| format!("{key} takes true or false"));
         match key {
             "fps" => self.fps = number(0.0, 1000.0)? as u32,
             "volume" => self.volume = number(0.0, 100.0)? as f32,
@@ -366,6 +371,13 @@ mod tests {
         assert!(settings.set("layer", &Value::from("bottom")).is_ok() && settings.layer == Layer::Bottom);
         assert!(settings.set("mute", &Value::from(false)).is_ok() && !settings.mute);
         assert!(settings.set("mute", &Value::Null).is_err());
+        assert!(
+            settings.set("fps", &Value::from("banana")).is_err() && settings.fps == 60,
+            "text is not zero"
+        );
+        assert!(settings.set("mute", &Value::from("banana")).is_err() && !settings.mute);
+        assert!(settings.set("mute", &Value::from("on")).is_ok() && settings.mute);
+        assert!(settings.set("mute", &Value::from(0)).is_ok() && !settings.mute);
         assert!(settings.set("colour", &Value::from(1)).unwrap_err().contains("there is no setting"));
         settings.apply(
             &wepaper_json::parse(r#"{"fps": 24, "nonsense": 1, "passthrough": true}"#).unwrap(),

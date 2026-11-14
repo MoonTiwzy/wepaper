@@ -127,3 +127,26 @@ fn project_kinds_and_properties() {
     assert_eq!(Project::parse(&parse(r#"{"type": "video", "file": "a.mp4"}"#).unwrap()).kind, Kind::Video);
     assert_eq!(Project::parse(&parse("{}").unwrap()).kind, Kind::Scene);
 }
+
+#[test]
+fn what_a_person_types_is_a_number_or_nothing() {
+    use wepaper_engine::doc::{typed_flag, typed_floats};
+    use wepaper_json::Value;
+    assert_eq!(typed_floats(&Value::from(0.5)), Some(vec![0.5]));
+    assert_eq!(typed_floats(&Value::from("1 0.5, 0")), Some(vec![1.0, 0.5, 0.0]));
+    assert_eq!(typed_floats(&wepaper_json::parse("[1, 2]").unwrap()), Some(vec![1.0, 2.0]));
+    // Text that is not numbers is not zero, as it would be in a wallpaper's document.
+    assert_eq!(typed_floats(&Value::from("banana")), None);
+    assert_eq!(typed_floats(&Value::from("1 two 3")), None);
+    assert_eq!(typed_floats(&Value::from("")), None);
+    assert_eq!(typed_floats(&Value::from("nan")), None);
+    assert_eq!(typed_floats(&Value::Null), None);
+    assert_eq!(typed_floats(&Value::from(true)), None);
+
+    assert_eq!(typed_flag(&Value::from(true)), Some(true));
+    assert_eq!(typed_flag(&Value::from("off")), Some(false));
+    assert_eq!(typed_flag(&Value::from(1)), Some(true));
+    assert_eq!(typed_flag(&Value::from(2)), None);
+    assert_eq!(typed_flag(&Value::from("banana")), None);
+    assert_eq!(typed_flag(&Value::Null), None);
+}
