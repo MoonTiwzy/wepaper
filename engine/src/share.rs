@@ -69,11 +69,15 @@ pub struct Share {
     textures: HashMap<u64, Weak<SharedTexture>>,
     programs: HashMap<u64, Weak<Program>>,
     puppets: HashMap<u64, Weak<SharedPuppet>>,
-    shaders: HashMap<String, Option<Rc<ShaderPair>>>,
+    /// The shaders read while a wallpaper loads, by the two files each is made of: a
+    /// name is not enough, every wallpaper carries its own copies of the effects it
+    /// uses and an author may have changed his. Emptied once the wallpaper is loaded.
+    shaders: HashMap<(u64, u64), Option<Rc<ShaderPair>>>,
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
     pub max_texture_side: u32,
-    fonts: HashMap<String, Option<Rc<ab_glyph::FontVec>>>,
+    /// The fonts text layers hold, by file (a system font by its name).
+    fonts: HashMap<u64, Option<Rc<ab_glyph::FontVec>>>,
     /// The videos being played.
     pub videos: VideoHub,
     /// Where videos packed inside textures are unpacked to.
@@ -222,7 +226,8 @@ impl Share {
     /// The font a text layer names: a file of the wallpaper or the assets, or a
     /// system font (`systemfont_arial`). Loaded once; `None` when there is no such font.
     pub fn font(&mut self, files: &Files, name: &str) -> Option<Rc<ab_glyph::FontVec>> {
-        if let Some(font) = self.fonts.get(name) {
+        let key = files.locate(name).map_or_else(|| fnv(FNV_SEED, name.as_bytes()), |file| file.key);
+        if let Some(font) = self.fonts.get(&key) {
             return font.clone();
         }
         let bytes = files.read(name).ok().or_else(|| std::fs::read(crate::scene::system_font(name)?).ok());
@@ -235,13 +240,17 @@ impl Share {
                 None
             }
         });
-        self.fonts.insert(name.to_owned(), font.clone());
+        self.fonts.insert(key, font.clone());
         font
     }
 
-    /// The shader called `name` (`shaders/<name>.vert` and `.frag`), read once.
+    /// The shader called `name` (`shaders/<name>.vert` and `.frag`), read once for
+    /// all the layers of a wallpaper that use it.
     pub fn shader(&mut self, files: &Files, name: &str) -> Option<Rc<ShaderPair>> {
-        if let Some(pair) = self.shaders.get(name) {
+        let file =
+            |extension: &str| files.locate(&format!("shaders/{name}.{extension}")).map_or(0, |f| f.key);
+        let key = (file("vert"), file("frag"));
+        if let Some(pair) = self.shaders.get(&key) {
             return pair.clone();
         }
         let include = |file: &str| files.read_text(&format!("shaders/{file}")).ok();
@@ -255,7 +264,7 @@ impl Share {
                 declared.merge(vertex.declared.clone());
                 Rc::new(ShaderPair { vertex, fragment, declared })
             });
-        self.shaders.insert(name.to_owned(), pair.clone());
+        self.shaders.insert(key, pair.clone());
         pair
     }
 
@@ -339,6 +348,11 @@ impl Share {
         self.textures.retain(|_, texture| texture.strong_count() > 0);
         self.programs.retain(|_, program| program.strong_count() > 0);
         self.puppets.retain(|_, puppet| puppet.strong_count() > 0);
+        // Shader sources are for compiling; what is compiled does not need them.
+        self.shaders = HashMap::new();
+        // A font nobody writes with is megabytes of file.
+        self.fonts.retain(|_, font| font.as_ref().is_some_and(|font| Rc::strong_count(font) > 1));
+        self.fonts.shrink_to_fit();
     }
 
     /// How many textures are alive.

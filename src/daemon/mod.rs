@@ -122,6 +122,8 @@ struct Daemon {
     /// When the outputs were last looked at for drawing.
     last_round: Instant,
     last_upkeep: Instant,
+    /// When what a wallpaper that went left behind is given back once more.
+    release_at: Option<Instant>,
     /// How many videos are being re-encoded right now.
     optimising: usize,
     plugins: plugins::Plugins,
@@ -162,6 +164,12 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     // SAFETY: plain libc calls with valid arguments, before any other thread exists.
     unsafe {
         libc::mallopt(libc::M_ARENA_MAX, 2);
+        // A block of this size and up is a mapping of its own, back with the system the
+        // moment it is freed. Left alone the allocator raises the limit to the largest
+        // block it has freed, up to 32 MB: the pictures a wallpaper is decoded from then
+        // come out of the heap, and the heap keeps what it was once given. A daemon that
+        // had shown a dozen wallpapers held 140 MB that nothing used.
+        libc::mallopt(libc::M_MMAP_THRESHOLD, 256 * 1024);
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = on_signal as *const () as usize;
         // No SA_RESTART: a signal must end the wait in poll.
@@ -225,6 +233,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
         slots: HashMap::new(),
         last_round: now,
         last_upkeep: now,
+        release_at: None,
         optimising: 0,
         plugins: plugins::Plugins::new(found, socket),
         sounding: Vec::new(),
@@ -316,7 +325,7 @@ impl Daemon {
         for id in gone {
             self.slots.remove(&id);
             self.display.heads.retain(|head| head.id != id);
-            self.engine.trim();
+            self.release();
         }
         let fresh: Vec<(u32, String)> = self
             .display
@@ -482,9 +491,7 @@ impl Daemon {
                     }
                 }
                 // What the old wallpaper held alone is freed now, not at the next load.
-                self.engine.trim();
-                // SAFETY: returns memory the loader freed to the system; no pointers are invalidated.
-                unsafe { libc::malloc_trim(0) };
+                self.release();
                 log::info!("{name}: playing \"{}\" ({})", project.title, folder.display());
                 self.plugins.announce(&plugins::Happening {
                     event: "shown",
@@ -527,6 +534,10 @@ impl Daemon {
             self.last_upkeep = now;
             self.optimising = self.engine.videos().optimise();
             self.plugins.upkeep();
+            if self.release_at.is_some_and(|at| now >= at) {
+                self.release();
+                self.release_at = None;
+            }
             // A wallpaper that gave up (a video that cannot be played) is said to have:
             // the output's `error` names it instead of the tree calling it playing.
             for slot in self.slots.values_mut() {
@@ -720,6 +731,17 @@ impl Daemon {
                 renderer.send(&wepaper_json::obj! { "cmd" => "mute", "value" => !on });
             }
         }
+    }
+
+    /// Gives back what a wallpaper that went held: the engine's idle buffers and dead
+    /// cache entries, and the allocator's free memory, to the system. Once now and once
+    /// more in a moment: players are shut down on threads of their own, and what they
+    /// held is free only when they are gone.
+    fn release(&mut self) {
+        self.engine.trim();
+        // SAFETY: returns free memory to the system; no pointers are invalidated.
+        unsafe { libc::malloc_trim(0) };
+        self.release_at = Some(Instant::now() + Duration::from_secs(2));
     }
 
     /// Remembers what the outputs show, for the next run.

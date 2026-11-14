@@ -53,6 +53,7 @@ name may be `*`, which means every output.
 | `memory/videos` | how many videos are being decoded | |
 | `memory/optimising` | how many videos are being re-encoded into cheaper copies | |
 | `memory/listening` | whether the system's sound is being recorded for the spectrum | |
+| `memory/heap/used`, `free`, `blocks` | bytes the allocator has in use, holds free for the next request, and took from the system as blocks of their own | |
 
 Vectors (`origin`, `color`, ...) are arrays of numbers; on `set` an array, a string of numbers
 (`"1 0.5 0"`) or one number for all components is taken.

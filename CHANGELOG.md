@@ -22,6 +22,18 @@
 - A hidden layer that another layer reads is drawn, into its picture only. Scenes build one
   picture out of layers nobody is to see as they are (a globe out of a map, its clouds and
   a mask): the layer that put them together showed a white sheet instead.
+- A daemon that has shown many wallpapers gives their memory back. The allocator kept the
+  blocks pictures were decoded in once it had been given them (some 140 MB after a dozen
+  scenes): such blocks are now mappings of their own, gone when freed. What a wallpaper
+  that went left behind is released when it goes and once more a moment later, and the
+  sources of shaders and the fonts nobody writes with are no longer kept.
+- Two wallpapers with a shader of the same name each get their own: the second one shown
+  was drawn with the first one's.
+- More of what the original's shader compiler lets through is repaired: a second index on
+  one float of an array (`spectrum[a][b]`), a float as an array index, a remainder of
+  floats in the words of another driver. A line with several mistakes is repaired one
+  after another.
+- `wepaper get memory/heap` says what the allocator has in use and what it holds free.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in
   three seconds whatever it was doing, and one whose loop stands for half a minute gives up

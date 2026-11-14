@@ -39,6 +39,21 @@ fn descend<'a>(tree: &'a Value, path: &[&str]) -> Option<&'a Value> {
     })
 }
 
+/// The allocator's own count of the process's memory: what is in use, what it holds
+/// free for the next request, and what it took from the system in blocks of their own.
+/// Tells a leak (in use grows) from a heap that is only not given back (free grows).
+#[cfg(target_env = "gnu")]
+fn heap() -> Value {
+    // SAFETY: reads the allocator's statistics; no preconditions.
+    let info = unsafe { libc::mallinfo2() };
+    obj! { "used" => info.uordblks as u64, "free" => info.fordblks as u64, "blocks" => info.hblkhd as u64 }
+}
+
+#[cfg(not(target_env = "gnu"))]
+fn heap() -> Value {
+    Value::Null
+}
+
 impl Daemon {
     /// Everything the daemon knows, as one tree.
     fn tree(&mut self) -> Value {
@@ -129,6 +144,7 @@ impl Daemon {
                 "optimising" => self.optimising,
                 "listening" => self.engine.listening(),
                 "peak_effect_buffers" => self.engine.peak_buffers(),
+                "heap" => heap(),
             },
         }
     }
@@ -208,7 +224,7 @@ impl Daemon {
                     });
                 }
                 self.state.last = Shown::default();
-                self.engine.trim();
+                self.release();
                 self.save_state();
                 Value::Null
             }),
