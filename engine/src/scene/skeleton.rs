@@ -21,6 +21,24 @@ pub(crate) struct AnimationLayer {
     /// Where it is in its animation, in seconds: the time played, each stretch at
     /// the rate it had.
     pub(crate) clock: f32,
+    /// Whether its clock runs: a script may pause it, or stop it at the start.
+    pub(crate) running: bool,
+}
+
+impl AnimationLayer {
+    /// Plays on by `seconds`, at its rate, unless it is paused.
+    pub(crate) fn advance(&mut self, seconds: f32) {
+        if self.running {
+            self.clock += seconds * self.rate;
+        }
+    }
+
+    /// Puts it at `frame` of an animation of `fps` frames a second.
+    pub(crate) fn seek(&mut self, frame: f32, fps: f32) {
+        if fps > 0.0 && frame.is_finite() {
+            self.clock = frame / fps;
+        }
+    }
 }
 
 /// The animation layers of one puppet or model and where its bones are.
@@ -58,6 +76,7 @@ impl Skeleton {
                     blend: spec.blend.value,
                     visible: spec.visible.value,
                     clock: 0.0,
+                    running: true,
                     spec,
                 }
             })
@@ -82,6 +101,14 @@ impl Skeleton {
         slots
     }
 
+    /// The animation layer a script means: by its name, or by its place.
+    pub(crate) fn find_layer(&self, key: &str) -> Option<usize> {
+        self.layers
+            .iter()
+            .position(|layer| layer.spec.name == key)
+            .or_else(|| key.parse::<usize>().ok().filter(|index| *index < self.layers.len()))
+    }
+
     /// Where the puppet's attachment points are this frame, in the space of its mesh.
     pub(crate) fn attachment_places(&self, puppet: &Puppet, out: &mut Vec<crate::math::Mat4>) {
         puppet.attachment_places(&self.playing, out);
@@ -94,7 +121,7 @@ impl Skeleton {
         }
         self.playing.clear();
         for layer in &mut self.layers {
-            layer.clock += seconds * layer.rate;
+            layer.advance(seconds);
             if layer.visible {
                 self.playing.push(PlayingLayer {
                     animation: layer.spec.animation,
@@ -110,5 +137,44 @@ impl Skeleton {
         if let Some(alpha) = self.alpha.and_then(|slot| values.get_mut(slot)) {
             puppet.bone_alpha(&self.playing, alpha);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::doc::Dyn;
+
+    fn layer(name: &str) -> AnimationLayer {
+        let spec = LayerSpec {
+            id: 1,
+            animation: 7,
+            name: name.to_owned(),
+            rate: Dyn::constant(2.0),
+            blend: Dyn::constant(1.0),
+            visible: Dyn::constant(true),
+            additive: false,
+            blend_in: false,
+            blend_out: false,
+            blend_time: 0.5,
+        };
+        AnimationLayer { rate: 2.0, blend: 1.0, visible: true, clock: 0.0, running: true, spec }
+    }
+
+    #[test]
+    fn a_paused_layer_keeps_its_place_and_a_frame_is_a_place() {
+        let mut jump = layer("Jump");
+        jump.advance(0.5);
+        assert_eq!(jump.clock, 1.0, "at twice its speed");
+        jump.running = false;
+        jump.advance(0.5);
+        assert_eq!(jump.clock, 1.0, "paused, it stays");
+        jump.seek(12.0, 24.0);
+        assert_eq!(jump.clock, 0.5, "frame 12 at 24 a second is half a second in");
+        let skeleton =
+            Skeleton { layers: vec![layer("Idle"), jump], bones: 0, alpha: None, playing: Vec::new() };
+        assert_eq!(skeleton.find_layer("Jump"), Some(1));
+        assert_eq!(skeleton.find_layer("1"), Some(1), "or by its place");
+        assert_eq!(skeleton.find_layer("Run"), None);
     }
 }

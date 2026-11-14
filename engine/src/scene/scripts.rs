@@ -540,6 +540,82 @@ impl SceneHost<'_> {
     }
 }
 
+impl SceneHost<'_> {
+    /// What a script asks of an animation layer of a puppet or a model
+    /// (`thisLayer.getAnimationLayer("Jump").setFrame(0)`): the layer is named by the
+    /// first argument, by its name or its place.
+    fn animation_layer_call(&mut self, index: usize, method: &str, arguments: &[Datum]) -> Option<Datum> {
+        let action = method.strip_prefix("animationLayer.")?;
+        let number = |at: usize| match arguments.get(at) {
+            Some(Datum::Number(number)) => Some(*number as f32),
+            _ => None,
+        };
+        let key = match arguments.first()? {
+            Datum::Text(name) => name.clone(),
+            Datum::Number(place) if *place >= 0.0 => (*place as usize).to_string(),
+            _ => return None,
+        };
+        let layer = self.scene.layers.get_mut(index)?;
+        let which = layer.skeleton()?.find_layer(&key)?;
+        let id = layer.skeleton()?.layers[which].spec.animation;
+        let puppet = match &layer.kind {
+            LayerKind::Image(image) => &image.puppet.as_ref()?.shared.puppet,
+            LayerKind::Model(model) => &model.shared.model,
+            _ => return None,
+        };
+        let (fps, frames) =
+            puppet.animation(id).map_or((30.0, 0), |animation| (animation.fps, animation.frames));
+        let playing = layer.skeleton_mut()?.layers.get_mut(which)?;
+        Some(match action {
+            "play" => {
+                playing.running = true;
+                Datum::Null
+            }
+            "pause" => {
+                playing.running = false;
+                Datum::Null
+            }
+            "stop" => {
+                playing.running = false;
+                playing.clock = 0.0;
+                Datum::Null
+            }
+            "isPlaying" => Datum::Bool(playing.running),
+            "getFrame" => datum(&[playing.clock * fps]),
+            "setFrame" => {
+                playing.seek(number(1)?, fps);
+                Datum::Null
+            }
+            "get" => match arguments.get(1) {
+                Some(Datum::Text(what)) => match what.as_str() {
+                    "rate" => datum(&[playing.rate]),
+                    "blend" => datum(&[playing.blend]),
+                    "visible" => Datum::Bool(playing.visible),
+                    "fps" => datum(&[fps]),
+                    "frameCount" => datum(&[frames as f32]),
+                    "duration" => datum(&[if fps > 0.0 { frames as f32 / fps } else { 0.0 }]),
+                    "name" => Datum::Text(playing.spec.name.clone()),
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            "set" => match (arguments.get(1), arguments.get(2)) {
+                (Some(Datum::Text(what)), Some(value)) => {
+                    match (what.as_str(), value) {
+                        ("rate", Datum::Number(rate)) => playing.rate = *rate as f32,
+                        ("blend", Datum::Number(blend)) => playing.blend = *blend as f32,
+                        ("visible", Datum::Bool(on)) => playing.visible = *on,
+                        _ => return None,
+                    }
+                    Datum::Null
+                }
+                _ => return None,
+            },
+            _ => return None,
+        })
+    }
+}
+
 impl Host for SceneHost<'_> {
     fn layer_named(&self, name: &str) -> Option<LayerId> {
         self.scene.layers.iter().position(|layer| layer.name == name).map(|index| LayerId(index as u32))
@@ -707,6 +783,7 @@ impl Host for SceneHost<'_> {
                 }),
                 _ => None,
             },
+            _ if method.starts_with("animationLayer.") => self.animation_layer_call(index, method, arguments),
             _ => {
                 let action = method.strip_prefix("animation.")?;
                 let name = arguments.first().cloned().unwrap_or(Datum::Null);
