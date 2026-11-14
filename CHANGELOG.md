@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Videos loop without a seam. An MP4 or MOV file plays as a tape of itself: the end of one
+  copy runs into the start of the next with no seek, where the picture used to stand still
+  for a quarter of a second every time round. Other containers still seek at their end.
+- A frame's size is no longer asked of the player while it waits for the frame to be drawn,
+  which could stall the drawing for a fifth of a second.
+
 ## 0.1.0
 
 The first version.

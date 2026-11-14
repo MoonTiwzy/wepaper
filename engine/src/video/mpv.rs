@@ -72,6 +72,16 @@ pub(crate) const EVENT_NONE: c_int = 0;
 pub(crate) const EVENT_SHUTDOWN: c_int = 1;
 pub(crate) const EVENT_END_FILE: c_int = 7;
 pub(crate) const EVENT_FILE_LOADED: c_int = 8;
+pub(crate) const EVENT_PROPERTY_CHANGE: c_int = 22;
+
+/// What `Event::data` points at for [`EVENT_PROPERTY_CHANGE`] (`mpv_event_property`).
+#[repr(C)]
+pub(crate) struct EventProperty {
+    pub(crate) name: *const c_char,
+    /// The format of `data`; `FORMAT_NONE` while the property has no value.
+    pub(crate) format: c_int,
+    pub(crate) data: *mut c_void,
+}
 pub(crate) const FORMAT_INT64: c_int = 4;
 pub(crate) const FORMAT_DOUBLE: c_int = 5;
 
@@ -84,6 +94,7 @@ pub(crate) struct Api {
     pub(crate) set_option_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
     pub(crate) set_property_string: unsafe extern "C" fn(*mut Handle, *const c_char, *const c_char) -> c_int,
     pub(crate) get_property: unsafe extern "C" fn(*mut Handle, *const c_char, c_int, *mut c_void) -> c_int,
+    pub(crate) observe_property: unsafe extern "C" fn(*mut Handle, u64, *const c_char, c_int) -> c_int,
     pub(crate) command: unsafe extern "C" fn(*mut Handle, *mut *const c_char) -> c_int,
     pub(crate) wait_event: unsafe extern "C" fn(*mut Handle, f64) -> *mut Event,
     pub(crate) error_string: unsafe extern "C" fn(c_int) -> *const c_char,
@@ -132,6 +143,7 @@ fn load(name: &str) -> Option<Api> {
             set_option_string: symbol!("mpv_set_option_string"),
             set_property_string: symbol!("mpv_set_property_string"),
             get_property: symbol!("mpv_get_property"),
+            observe_property: symbol!("mpv_observe_property"),
             command: symbol!("mpv_command"),
             wait_event: symbol!("mpv_wait_event"),
             error_string: symbol!("mpv_error_string"),

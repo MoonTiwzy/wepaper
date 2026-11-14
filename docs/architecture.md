@@ -101,6 +101,7 @@ what `wepaper get` reads and `wepaper set` writes.
 | compressed textures stay compressed; unreachable levels are not read | a quarter to an eighth of the memory of decoding them |
 | libmpv draws into our texture; no GPU decoder session unless asked | no copies through main memory; about 100 MB less video memory on NVIDIA |
 | background copies of oversized videos, playback moves over | decode cost follows the monitor, not the file |
+| a video plays as a tape of copies of itself | a loop has no seek in it: no frame is held, repeated or lost where it wraps |
 | lazy audio capture, no sound decode when muted, video frames only when new | nothing runs for a wallpaper that does not use it |
 | waiting for heavy frames asleep | a driver that spins a core while the GPU works is not given the chance |
 | archives read in place, loader memory returned to the system | resident memory follows what plays, not what was loaded |

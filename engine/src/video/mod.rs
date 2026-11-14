@@ -11,6 +11,7 @@
 mod hub;
 pub(crate) mod mpv;
 mod stream;
+mod tape;
 mod transcode;
 mod wallpaper;
 

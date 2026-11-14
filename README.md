@@ -232,7 +232,8 @@ flowchart LR
   cannot reach the screen are never read from disk.
 - **Video is decoded once per file** and drawn by libmpv directly into a texture in the same
   context. Oversized videos get a cheaper copy in the background, and playback moves to it
-  without a restart.
+  without a restart. A video loops without a seam: the player is given it as one long tape
+  of copies, so it never seeks back.
 - **Nothing runs until it is needed.** No audio capture unless a visible wallpaper reads the
   spectrum, no sound decoding while muted, no frame when a video has no new one, no effect
   buffers for a paused output, no script interpreter for a scene without scripts.

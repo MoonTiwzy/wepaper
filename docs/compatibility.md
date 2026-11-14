@@ -73,6 +73,11 @@ control tree.
 Whatever libmpv plays. A video larger than the widest monitor, or faster than the frame cap,
 gets a copy in the cache that is cheaper to decode; playback moves to it without a restart.
 
+MP4 and MOV videos loop without a seam: the last frame is followed by the first one a frame
+later, with no seek. A sound track that runs longer than the picture is cut where the picture
+ends. Videos in other containers (WebM, Matroska) seek back at their end, which holds the
+last frame for a few frames.
+
 ## Web
 
 Through the `web` plugin, on WebKitGTK: `wallpaperPropertyListener`, pause,

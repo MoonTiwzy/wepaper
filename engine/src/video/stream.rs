@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::gpu::{Gl, MemoryClass, Target, Texture, TextureFormat};
 
 use super::mpv::{self, Api};
+use super::tape;
 
 /// Why a video does not play.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,7 +108,19 @@ pub struct VideoStream {
     serial: u64,
     /// A file was started part way in: once it plays, loops go back to its beginning.
     restart_at_zero: bool,
+    /// The size frames are shown at, as the player last announced it.
+    shown: (Option<i64>, Option<i64>),
+    /// How long one copy of the video is on the tape that plays; `None` when the
+    /// file plays as itself.
+    copy: Option<f64>,
+    /// The file that plays, held open: its descriptor is the short name the tape
+    /// calls it by, which the player opens some time after it is told to.
+    file: Option<std::fs::File>,
 }
+
+/// What the player's announcements of the frame's width and height are marked with.
+const WIDTH: u64 = 1;
+const HEIGHT: u64 = 2;
 
 unsafe extern "C" fn proc_address(context: *mut c_void, name: *const c_char) -> *mut c_void {
     // SAFETY: `context` is the `Gl` handed to libmpv at creation, which outlives the
@@ -228,6 +241,9 @@ impl VideoStream {
             }
             let signal = Box::into_raw(Box::new(Signal { fresh: AtomicBool::new(false), waker }));
             (api.render_context_set_update_callback)(render, Some(on_update), signal.cast());
+            // The size of a frame is announced, not asked for: see `poll`.
+            (api.observe_property)(handle, WIDTH, c"dwidth".as_ptr(), mpv::FORMAT_INT64);
+            (api.observe_property)(handle, HEIGHT, c"dheight".as_ptr(), mpv::FORMAT_INT64);
 
             let stream = Self {
                 api,
@@ -242,8 +258,15 @@ impl VideoStream {
                 ended: false,
                 serial: 0,
                 restart_at_zero: false,
+                shown: (None, None),
+                copy: None,
+                file: None,
             };
-            let file = text(&path.to_string_lossy())?;
+            let mut stream = stream;
+            // Not the file but a tape of it: the end of one copy runs into the start
+            // of the next without the player seeking.
+            let file = CString::new(stream.tape(path))
+                .map_err(|_| VideoError("a NUL byte in a video's path".to_owned()))?;
             let mut command = [c"loadfile".as_ptr(), file.as_ptr(), std::ptr::null()];
             let code = (api.command)(handle, command.as_mut_ptr());
             if code < 0 {
@@ -251,6 +274,21 @@ impl VideoStream {
             }
             Ok(stream)
         }
+    }
+
+    /// What the player is told to open to play `path` in a loop; the stream notes
+    /// what it needs of it.
+    fn tape(&mut self, path: &Path) -> Vec<u8> {
+        self.file = std::fs::File::open(path).ok();
+        // The file by its descriptor, or by its own name when it does not open (the
+        // player will say why).
+        let alias = self.file.as_ref().map(|file| format!("/proc/self/fd/{}", file.as_raw_fd()));
+        let tape = tape::of(path, alias.as_deref().map_or(path, Path::new));
+        self.copy = tape.copy;
+        if tape.copy.is_none() {
+            self.file = None;
+        }
+        tape.address
     }
 
     fn property_i64(&self, name: &CStr) -> Option<i64> {
@@ -293,6 +331,22 @@ impl VideoStream {
                         self.set(c"start", "none");
                     }
                     mpv::EVENT_SHUTDOWN => self.ended = true,
+                    // A size that goes away for a moment (the player seeks) is kept:
+                    // the frames that follow are the same size.
+                    mpv::EVENT_PROPERTY_CHANGE => {
+                        let change = event.data.cast::<mpv::EventProperty>();
+                        if !change.is_null()
+                            && (*change).format == mpv::FORMAT_INT64
+                            && !(*change).data.is_null()
+                        {
+                            let value = Some(*(*change).data.cast::<i64>());
+                            match event.reply_userdata {
+                                WIDTH => self.shown.0 = value,
+                                HEIGHT => self.shown.1 = value,
+                                _ => {}
+                            }
+                        }
+                    }
                     // Why a file ended is in the event's data; a file that loops only
                     // ends when it cannot be played.
                     mpv::EVENT_END_FILE => {
@@ -312,8 +366,14 @@ impl VideoStream {
                 return false;
             }
         }
-        let (Some(width), Some(height)) = (self.property_i64(c"dwidth"), self.property_i64(c"dheight"))
-        else {
+        // The player's output thread now waits for this frame to be drawn, for up to
+        // a fifth of a second, and its core may be waiting for that thread: asking
+        // the core anything here would wait for both. So the size is the one it
+        // announced; it is asked for only when a first frame beats the announcement.
+        if self.shown.0.is_none() || self.shown.1.is_none() {
+            self.shown = (self.property_i64(c"dwidth"), self.property_i64(c"dheight"));
+        }
+        let (Some(width), Some(height)) = self.shown else {
             return false;
         };
         if width <= 0 || height <= 0 {
@@ -393,8 +453,9 @@ impl VideoStream {
 
     /// Carries on from the same moment in another file: a cheaper copy of the same video.
     pub fn switch_to(&mut self, path: &Path) {
-        let Ok(file) = CString::new(path.to_string_lossy().as_bytes()) else { return };
-        let position = self.property_f64(c"time-pos").unwrap_or(0.0);
+        // Where the tape is, and from that where the video is in its own time.
+        let position = tape::within(self.property_f64(c"time-pos").unwrap_or(0.0), self.copy);
+        let Ok(file) = CString::new(self.tape(path)) else { return };
         self.set(c"start", &format!("{position:.3}"));
         let mut command = [c"loadfile".as_ptr(), file.as_ptr(), c"replace".as_ptr(), std::ptr::null()];
         // SAFETY: the handle is alive and the strings outlive the call.
