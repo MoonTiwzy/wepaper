@@ -378,6 +378,122 @@ fn every_skinned_layout_parses_to_the_same_puppet() {
 }
 
 #[test]
+fn a_model_of_several_meshes_reads_them_all_one_after_the_other() {
+    for spec in [square(23), rigged(23, 4, 6, vec![swing(7, "loop")])] {
+        let (bytes, mesh_end) = spec.build();
+        // The header's third number counts the meshes. A second one follows the first
+        // as it is, from its material on: the same square, moved, drawn with one triangle.
+        let first_mesh = 9 + 12 + "materials/test.json".len() + 1;
+        let mut file = bytes[..mesh_end].to_vec();
+        file[17..21].copy_from_slice(&2u32.to_le_bytes());
+        let mut second = bytes[first_mesh..mesh_end].to_vec();
+        second.splice(..0, b"materials/other.json\0".iter().copied());
+        // Moves the first vertex: its x is right after the format and the size of the vertices.
+        let vertices_at = 20 + 1 + 4 + 24 + 4 + 4;
+        second[vertices_at..vertices_at + 4].copy_from_slice(&99.0f32.to_le_bytes());
+        file.extend_from_slice(&second);
+        let sections = &bytes[mesh_end..];
+        let shift = file.len() - mesh_end;
+        file.extend_from_slice(sections);
+        for letter in *b"SA" {
+            if let Some(at) = file.windows(4).position(|w| w == [b'M', b'D', b'L', letter]) {
+                let at = at + 9;
+                let end = u32::from_le_bytes(file[at..at + 4].try_into().unwrap()) + shift as u32;
+                file[at..at + 4].copy_from_slice(&end.to_le_bytes());
+            }
+        }
+
+        let label = if spec.skinned() { "skinned" } else { "plain" };
+        let puppet = Puppet::parse(&file).unwrap_or_else(|why| panic!("{label}: {why}"));
+        assert_eq!(puppet.vertices.len(), 8, "{label}: the vertices of both meshes, in order");
+        assert_eq!(puppet.vertices[4].position[0], 99.0, "{label}");
+        assert_eq!(
+            puppet.indices,
+            [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7],
+            "{label}: the second mesh's triangles count from its own first vertex"
+        );
+        assert_eq!(
+            puppet
+                .surfaces
+                .iter()
+                .map(|s| (s.material.as_str(), s.first_index, s.index_count))
+                .collect::<Vec<_>>(),
+            [("materials/test.json", 0, 6), ("materials/other.json", 6, 6)],
+            "{label}"
+        );
+        assert_eq!(
+            puppet.material, "materials/test.json",
+            "{label}: the first mesh's material is the puppet's"
+        );
+        if spec.skinned() {
+            assert_eq!((puppet.bones.len(), puppet.animations.len()), (2, 1), "{label}");
+            // The parts of the second mesh count in the indices of the whole.
+            assert_eq!(puppet.parts.iter().map(|p| p.first_index).collect::<Vec<_>>(), [0, 6], "{label}");
+        }
+    }
+    // A puppet of the usual kind is one surface over every triangle.
+    let puppet = parse(&square(16));
+    assert_eq!(puppet.surfaces.iter().map(|s| (s.first_index, s.index_count)).collect::<Vec<_>>(), [(0, 6)]);
+}
+
+#[test]
+fn attachment_points_are_read_and_the_animations_after_them_too() {
+    let spec = rigged(23, 4, 6, vec![swing(7, "loop")]);
+    let (bytes, _) = spec.build();
+    // The editor puts the attachments between the skeleton and the animations, in a
+    // section whose header has no `MDL` in front: `MDAT`.
+    let animations = bytes.windows(4).position(|w| w == b"MDLA").expect("the animations");
+    let mut file = bytes[..animations].to_vec();
+    let mut moved = [0.0f32; 16];
+    for (at, value) in [(0, 1.0), (5, 1.0), (10, 1.0), (15, 1.0), (12, 3.0), (13, -2.0)] {
+        moved[at] = value;
+    }
+    let mut body = Vec::new();
+    body.extend_from_slice(&1u16.to_le_bytes());
+    body.extend_from_slice(&1u16.to_le_bytes());
+    body.extend_from_slice(b"Arm\0");
+    moved.iter().for_each(|n| body.extend_from_slice(&n.to_le_bytes()));
+    file.extend_from_slice(b"MDAT0001\0");
+    let end = file.len() + 4 + body.len();
+    file.extend_from_slice(&(end as u32).to_le_bytes());
+    file.extend_from_slice(&body);
+    let shift = file.len() - animations;
+    file.extend_from_slice(&bytes[animations..]);
+    let at = file.windows(4).position(|w| w == b"MDLA").unwrap() + 9;
+    let end = u32::from_le_bytes(file[at..at + 4].try_into().unwrap()) + shift as u32;
+    file[at..at + 4].copy_from_slice(&end.to_le_bytes());
+
+    let puppet = Puppet::parse(&file).expect("a puppet with attachments");
+    assert_eq!(puppet.animations.len(), 1, "the section after the attachments is read");
+    assert_eq!(puppet.attachments.len(), 1);
+    let arm = &puppet.attachments[0];
+    assert_eq!((arm.name.as_str(), arm.bone), ("Arm", 1));
+    assert_eq!(&arm.offset.0[12..14], [3.0, -2.0]);
+    // Where the attachment is: on its bone, as the animation poses it.
+    let mut places = Vec::new();
+    puppet.attachment_places(&[], &mut places);
+    let rest = places[0].0;
+    assert!((rest[12] - (-10.0 + 15.0 + 3.0)).abs() < 1e-4 && (rest[13] + 2.0).abs() < 1e-4, "{rest:?}");
+    puppet.attachment_places(&[layer(7, 0.1)], &mut places);
+    let turned = places[0].0;
+    // The second bone turned a quarter: the offset of 3 along its x now points up.
+    assert!((turned[12] - 5.0 - 2.0).abs() < 1e-3 && (turned[13] - 3.0).abs() < 1e-3, "{turned:?}");
+}
+
+#[test]
+fn a_version_6_animation_that_ends_with_its_bounds_is_followed_by_the_next() {
+    let (mut bytes, _) = rigged(23, 4, 6, vec![swing(7, "loop"), swing(8, "single")]).build();
+    // The 30 bytes after an animation of section version 6 hold, past their first, the
+    // box the animation moves the mesh in: six floats, which are not zero in real files.
+    let second = bytes.windows(5).enumerate().filter(|(_, w)| w == b"clip\0").nth(1).unwrap().0 - 8;
+    let bounds: Vec<u8> =
+        [-63.4f32, -500.0, -79.8, 73.1, 574.8, 58.5].iter().flat_map(|n| n.to_le_bytes()).collect();
+    bytes[second - 29..second - 5].copy_from_slice(&bounds);
+    let puppet = Puppet::parse(&bytes).expect("the puppet");
+    assert_eq!(puppet.animations.iter().map(|a| a.id).collect::<Vec<_>>(), [7, 8]);
+}
+
+#[test]
 fn a_version_nobody_has_seen_is_read_by_the_layout_that_adds_up() {
     // 15 is taken for "format, no bounds"; this file has the bounds as well.
     let mut spec = rigged(17, 2, 4, vec![swing(7, "loop")]);
@@ -696,8 +812,8 @@ fn every_puppet_of_the_library_reads() {
     let mut failures = Vec::new();
     let mut read = 0;
     eprintln!(
-        "{:<11} {:<26} {:>4} {:>6} {:>6} {:>5} {:>5}  animations: id name frames@fps = seconds (+alpha)",
-        "wallpaper", "file", "ver", "verts", "tris", "bones", "parts"
+        "{:<11} {:<26} {:>4} {:>6} {:>6} {:>5} {:>5} {:>6}  animations: id name frames@fps = seconds (+alpha)",
+        "wallpaper", "file", "ver", "verts", "tris", "bones", "parts", "meshes"
     );
     for package in &packages {
         let Ok(archive) = Archive::open(package) else { continue };
@@ -739,12 +855,13 @@ fn every_puppet_of_the_library_reads() {
                 .collect();
             let file = name.rsplit('/').next().unwrap_or(&name);
             eprintln!(
-                "{wallpaper:<11} {file:<26} {:>4} {:>6} {:>6} {:>5} {:>5}  {}",
+                "{wallpaper:<11} {file:<26} {:>4} {:>6} {:>6} {:>5} {:>5} {:>6}  {}",
                 puppet.version,
                 puppet.vertices.len(),
                 puppet.indices.len() / 3,
                 puppet.bones.len(),
                 puppet.parts.len(),
+                puppet.surfaces.len(),
                 if animations.is_empty() { "-".to_owned() } else { animations.join("; ") }
             );
             failures.extend(check(&puppet).into_iter().map(|why| format!("{label}: {why}")));
@@ -778,6 +895,11 @@ fn check(puppet: &Puppet) -> Vec<String> {
         puppet.parts.iter().map(|part| part.index_count as usize).sum::<usize>()
             == if puppet.parts.is_empty() { 0 } else { puppet.indices.len() },
         "parts that do not cover the triangles",
+    );
+    expect(
+        puppet.surfaces.iter().all(|s| s.material.ends_with(".json"))
+            && puppet.surfaces.iter().map(|s| s.index_count as usize).sum::<usize>() == puppet.indices.len(),
+        "meshes that do not cover the triangles",
     );
     expect(puppet.is_skinned() == !puppet.bones.is_empty(), "bones without weights or weights without bones");
     if !puppet.is_skinned() {

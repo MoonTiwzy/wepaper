@@ -12,7 +12,7 @@ mod program;
 mod target;
 mod texture;
 
-pub use context::{Blend, Caps, Gl, GpuError, Memory, MemoryClass};
+pub use context::{Blend, Caps, Depth, Gl, GpuError, Memory, MemoryClass};
 pub use egl::{Context, Surface};
 pub use mesh::Mesh;
 pub use program::{ATTRIBUTES, Program, ProgramError, Uniform};

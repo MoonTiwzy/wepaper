@@ -99,10 +99,11 @@ impl<'a> Reader<'a> {
     }
 
     /// The section header at the cursor (`MDL`, a letter, four digits, a zero byte): the
-    /// letter and the version. The cursor moves past it only when there is one.
+    /// letter and the version. The attachments' header is `MDAT` instead, and reads as
+    /// the letter `T`. The cursor moves past it only when there is one.
     pub(super) fn tag(&mut self) -> Option<(u8, u32)> {
         let tag = self.bytes.get(self.at..self.at + 9)?;
-        if &tag[..3] != b"MDL"
+        if (&tag[..3] != b"MDL" && &tag[..4] != b"MDAT")
             || !tag[3].is_ascii_uppercase()
             || tag[8] != 0
             || !tag[4..8].iter().all(u8::is_ascii_digit)

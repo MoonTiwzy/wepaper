@@ -46,6 +46,99 @@ pub struct General {
     pub shake_speed: Dyn<f32>,
     /// The scene asks for a high dynamic range pipeline.
     pub hdr: bool,
+    /// The light that reaches what faces up, everywhere.
+    pub ambient: Dyn<[f32; 3]>,
+    /// The light that reaches what faces down; surfaces in between get a mix.
+    pub skylight: Dyn<[f32; 3]>,
+    /// The bloom of the high dynamic range pipeline.
+    pub bloom_hdr: BloomHdr,
+}
+
+/// The settings of the bloom a scene with `hdr` has instead of the plain one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BloomHdr {
+    /// How much of the glow is added back.
+    pub strength: Dyn<f32>,
+    /// How bright a pixel must be to glow.
+    pub threshold: Dyn<f32>,
+    /// How softly the threshold cuts in.
+    pub feather: f32,
+    /// How far the glow spreads between two of its sizes.
+    pub scatter: f32,
+    /// How many times smaller the glow is taken, at most.
+    pub iterations: u32,
+}
+
+/// What a light is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightKind {
+    /// Shines all around from a point, fading to nothing at its radius.
+    Point,
+    /// A point that shines into a cone.
+    Spot,
+    /// A line that shines all around.
+    Tube,
+    /// Parallel light from far away, along the way the object faces.
+    Directional,
+}
+
+impl LightKind {
+    /// The kind a document names. The editor writes some with an `l` in front
+    /// (`ldirectional`); both spellings are taken.
+    pub fn from_name(name: &str) -> Option<Self> {
+        let kind = |name: &str| match name {
+            "point" => Some(LightKind::Point),
+            "spot" => Some(LightKind::Spot),
+            "tube" => Some(LightKind::Tube),
+            "directional" => Some(LightKind::Directional),
+            _ => None,
+        };
+        kind(name).or_else(|| name.strip_prefix('l').and_then(kind))
+    }
+}
+
+/// A light.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LightObject {
+    /// What it is.
+    pub kind: LightKind,
+    /// Its colour.
+    pub color: Dyn<[f32; 3]>,
+    /// How bright it is.
+    pub intensity: Dyn<f32>,
+    /// How far it reaches.
+    pub radius: f32,
+    /// How its light falls off towards the radius: 0 not at all, 1 evenly, more is sharper.
+    pub exponent: f32,
+    /// A spot's cone where it is full, in degrees.
+    pub inner_cone: f32,
+    /// A spot's cone where it ends, in degrees.
+    pub outer_cone: f32,
+    /// Whether it casts shadows.
+    pub cast_shadow: bool,
+}
+
+/// A camera: what a scene is seen through, from where the object is, looking along
+/// its own -z with its y up.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CameraObject {
+    /// Its name (`default` for the one a scene starts with).
+    pub name: String,
+    /// From the bottom of its view to the top, in degrees.
+    pub fov: f32,
+    /// How far it is zoomed in.
+    pub zoom: f32,
+    /// The file of the paths it can fly along.
+    pub path: Option<String>,
+}
+
+/// A 3D model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelObject {
+    /// The `.mdl` file.
+    pub file: String,
+    /// The animation layers playing on its skeleton.
+    pub animation_layers: Value,
 }
 
 /// Where a layer's origin sits on it.
@@ -211,6 +304,12 @@ pub enum ObjectKind {
     Particle(ParticleObject),
     /// Sound.
     Sound(SoundObject),
+    /// A 3D model.
+    Model(Box<ModelObject>),
+    /// A light.
+    Light(Box<LightObject>),
+    /// A camera.
+    Camera(Box<CameraObject>),
     /// Nothing drawn: a parent for other objects.
     Group,
     /// A kind this version does not draw (`light`, `model`, ...).
@@ -226,6 +325,8 @@ pub struct Object {
     pub name: String,
     /// The object it is attached to.
     pub parent: Option<i64>,
+    /// The attachment point of its parent's model it hangs from, by name.
+    pub attachment: Option<String>,
     /// Whether it shows.
     pub visible: Dyn<bool>,
     /// Position.
@@ -292,6 +393,16 @@ impl Scene {
                 shake_roughness: field("camerashakeroughness", 1.0),
                 shake_speed: field("camerashakespeed", 3.0),
                 hdr: bool::from_doc(general.get("hdr")).unwrap_or(false),
+                ambient: Dyn::read(general.get("ambientcolor"), [0.2; 3]),
+                skylight: Dyn::read(general.get("skylightcolor"), [0.3; 3]),
+                bloom_hdr: BloomHdr {
+                    strength: field("bloomhdrstrength", 2.0),
+                    threshold: field("bloomhdrthreshold", 1.0),
+                    feather: f32::from_doc(general.get("bloomhdrfeather")).unwrap_or(0.1),
+                    scatter: f32::from_doc(general.get("bloomhdrscatter")).unwrap_or(1.619),
+                    iterations: i32::from_doc(general.get("bloomhdriterations")).unwrap_or(8).clamp(1, 16)
+                        as u32,
+                },
             },
             eye: vector(doc.get("camera").get("eye"), [0.0, 0.0, 1.0]),
             center: vector(doc.get("camera").get("center"), [0.0; 3]),
@@ -322,10 +433,23 @@ impl Object {
                 max_time: f32::from_doc(doc.get("maxtime")).unwrap_or(0.0),
                 start_silent: bool::from_doc(doc.get("startsilent")).unwrap_or(false),
             })
-        } else if text("light").is_some() {
-            ObjectKind::Unsupported("light")
-        } else if text("model").is_some() {
-            ObjectKind::Unsupported("model")
+        } else if let Some(light) = text("light") {
+            match LightKind::from_name(light) {
+                Some(kind) => ObjectKind::Light(Box::new(LightObject::parse(doc, kind))),
+                None => ObjectKind::Unsupported("light"),
+            }
+        } else if let Some(name) = text("camera") {
+            ObjectKind::Camera(Box::new(CameraObject {
+                name: name.to_owned(),
+                fov: f32::from_doc(doc.get("fov")).unwrap_or(50.0),
+                zoom: f32::from_doc(doc.get("zoom")).unwrap_or(1.0),
+                path: text("path").map(str::to_owned),
+            }))
+        } else if let Some(file) = text("model") {
+            ObjectKind::Model(Box::new(ModelObject {
+                file: file.to_owned(),
+                animation_layers: doc.get("animationlayers").clone(),
+            }))
         } else {
             ObjectKind::Group
         };
@@ -333,6 +457,7 @@ impl Object {
             id: doc.get("id").as_i64().unwrap_or(-1),
             name: text("name").unwrap_or("").to_owned(),
             parent: doc.get("parent").as_i64(),
+            attachment: text("attachment").map(str::to_owned),
             visible: Dyn::read(doc.get("visible"), true),
             origin: Dyn::read(doc.get("origin"), [0.0; 3]),
             scale: Dyn::read(doc.get("scale"), [1.0; 3]),
@@ -373,6 +498,22 @@ fn effects(doc: &Value) -> Vec<EffectUse> {
 
 fn size(doc: &Value) -> Option<[f32; 2]> {
     <[f32; 2]>::from_doc(doc.get("size")).filter(|s| s[0] > 0.0 && s[1] > 0.0)
+}
+
+impl LightObject {
+    fn parse(doc: &Value, kind: LightKind) -> Self {
+        let number = |key: &str, default: f32| f32::from_doc(doc.get(key)).unwrap_or(default);
+        Self {
+            kind,
+            color: Dyn::read(doc.get("color"), [1.0; 3]),
+            intensity: Dyn::read(doc.get("intensity"), 1.0),
+            radius: number("radius", 1000.0),
+            exponent: number("exponent", 1.0),
+            inner_cone: number("innercone", 30.0),
+            outer_cone: number("outercone", 45.0),
+            cast_shadow: bool::from_doc(doc.get("castshadow")).unwrap_or(false),
+        }
+    }
 }
 
 impl ImageObject {

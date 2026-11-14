@@ -15,6 +15,8 @@ pub struct Mesh {
     count: i32,
     capacity: usize,
     layout: Vec<(u32, i32)>,
+    /// `UNSIGNED_SHORT` or `UNSIGNED_INT`: how wide the indices are.
+    index_type: u32,
 }
 
 impl Mesh {
@@ -27,6 +29,28 @@ impl Mesh {
         layout: &[(u32, i32)],
         vertices: &[f32],
         indices: Option<&[u16]>,
+        dynamic: bool,
+    ) -> Result<Self, GpuError> {
+        let indices = indices.map(|indices| (as_bytes(indices), indices.len(), glow::UNSIGNED_SHORT));
+        Self::make(gl, layout, vertices, indices, dynamic)
+    }
+
+    /// A mesh of interleaved float attributes with 32-bit triangle indices: a model,
+    /// whose meshes together may have more vertices than 16 bits count.
+    pub fn new_indexed(
+        gl: &Gl,
+        layout: &[(u32, i32)],
+        vertices: &[f32],
+        indices: &[u32],
+    ) -> Result<Self, GpuError> {
+        Self::make(gl, layout, vertices, Some((as_bytes(indices), indices.len(), glow::UNSIGNED_INT)), false)
+    }
+
+    fn make(
+        gl: &Gl,
+        layout: &[(u32, i32)],
+        vertices: &[f32],
+        indices: Option<(&[u8], usize, u32)>,
         dynamic: bool,
     ) -> Result<Self, GpuError> {
         let stride: i32 = layout.iter().map(|(_, n)| n * 4).sum();
@@ -46,12 +70,13 @@ impl Mesh {
                 raw.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
                 offset += components * 4;
             }
+            let index_type = indices.map_or(glow::UNSIGNED_SHORT, |(_, _, kind)| kind);
             let (index_buffer, count) = match indices {
-                Some(indices) => {
+                Some((bytes, count, _)) => {
                     let index_buffer = raw.create_buffer().map_err(GpuError)?;
                     raw.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, Some(index_buffer));
-                    raw.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, as_bytes(indices), usage);
-                    (Some(index_buffer), indices.len() as i32)
+                    raw.buffer_data_u8_slice(glow::ELEMENT_ARRAY_BUFFER, bytes, usage);
+                    (Some(index_buffer), count as i32)
                 }
                 None => (None, vertices.len() as i32 * 4 / stride.max(1)),
             };
@@ -65,6 +90,7 @@ impl Mesh {
                 count,
                 capacity: vertices.len(),
                 layout: layout.to_vec(),
+                index_type,
             })
         }
     }
@@ -138,10 +164,30 @@ impl Mesh {
             let raw = self.gl.raw();
             raw.bind_vertex_array(Some(self.array));
             if self.indices.is_some() {
-                raw.draw_elements(glow::TRIANGLES, self.count, glow::UNSIGNED_SHORT, 0);
+                raw.draw_elements(glow::TRIANGLES, self.count, self.index_type, 0);
             } else {
                 raw.draw_arrays(glow::TRIANGLES, 0, self.count);
             }
+        }
+    }
+}
+
+impl Mesh {
+    /// Draws `count` indices from the `first`, of a mesh with indices: one of a
+    /// model's meshes, with its own material. A range past the end draws what is there.
+    pub fn draw_range(&self, first: u32, count: u32) {
+        let width = if self.index_type == glow::UNSIGNED_INT { 4 } else { 2 };
+        let first = (first as i32).min(self.count);
+        let count = (count as i32).min(self.count - first);
+        if self.indices.is_none() || count <= 0 {
+            return;
+        }
+        // SAFETY: the vertex array is alive, and the range lies within the `count`
+        // indices its index buffer holds.
+        unsafe {
+            let raw = self.gl.raw();
+            raw.bind_vertex_array(Some(self.array));
+            raw.draw_elements(glow::TRIANGLES, count, self.index_type, first * width);
         }
     }
 }
@@ -162,6 +208,6 @@ impl Drop for Mesh {
 
 /// The bytes of a slice of plain numbers.
 fn as_bytes<T: Copy>(values: &[T]) -> &[u8] {
-    // SAFETY: `T` is only ever `f32` or `u16` here: no padding, any bit pattern is a valid `u8`.
+    // SAFETY: `T` is only ever `f32`, `u16` or `u32` here: no padding, any bit pattern is a valid `u8`.
     unsafe { std::slice::from_raw_parts(values.as_ptr().cast(), std::mem::size_of_val(values)) }
 }

@@ -10,6 +10,8 @@ pub struct Target {
     framebuffer: glow::Framebuffer,
     /// What was drawn.
     pub texture: Texture,
+    /// How near what was drawn is, for a target a 3D scene is drawn in.
+    depth: Option<glow::Renderbuffer>,
     /// The frame it was last given back in; the pool trims by it.
     idle_since: u64,
 }
@@ -17,9 +19,21 @@ pub struct Target {
 impl Target {
     /// A target of the given size.
     pub fn new(gl: &Gl, width: u32, height: u32, format: TextureFormat) -> Result<Self, GpuError> {
-        let texture = Texture::empty(gl, format, width, height, MemoryClass::Targets)?;
-        // SAFETY: the context is current; the texture attached is alive for as long as this target.
-        let framebuffer = unsafe {
+        Self::make(gl, width, height, format, Kind::Plain)
+    }
+
+    /// A target of the given size with a depth buffer: what a 3D scene is drawn in.
+    pub fn with_depth(gl: &Gl, width: u32, height: u32, format: TextureFormat) -> Result<Self, GpuError> {
+        Self::make(gl, width, height, format, Kind::Depth)
+    }
+
+    fn make(gl: &Gl, width: u32, height: u32, format: TextureFormat, kind: Kind) -> Result<Self, GpuError> {
+        let levels = if kind == Kind::Mipmapped { u32::MAX } else { 1 };
+        let texture = Texture::empty_levels(gl, format, width, height, MemoryClass::Targets, levels)?;
+        let depth = kind == Kind::Depth;
+        // SAFETY: the context is current; the texture and the renderbuffer attached are
+        // alive for as long as this target.
+        let (framebuffer, depth) = unsafe {
             let framebuffer = gl.raw().create_framebuffer().map_err(GpuError)?;
             gl.bind_framebuffer(Some(framebuffer), (width, height));
             gl.raw().framebuffer_texture_2d(
@@ -29,14 +43,69 @@ impl Target {
                 Some(texture.raw()),
                 0,
             );
+            let depth = if depth {
+                let buffer = gl.raw().create_renderbuffer().map_err(GpuError)?;
+                gl.raw().bind_renderbuffer(glow::RENDERBUFFER, Some(buffer));
+                gl.raw().renderbuffer_storage(
+                    glow::RENDERBUFFER,
+                    glow::DEPTH_COMPONENT24,
+                    width as i32,
+                    height as i32,
+                );
+                gl.raw().framebuffer_renderbuffer(
+                    glow::FRAMEBUFFER,
+                    glow::DEPTH_ATTACHMENT,
+                    glow::RENDERBUFFER,
+                    Some(buffer),
+                );
+                Some(buffer)
+            } else {
+                None
+            };
             if gl.raw().check_framebuffer_status(glow::FRAMEBUFFER) != glow::FRAMEBUFFER_COMPLETE {
                 gl.raw().delete_framebuffer(framebuffer);
+                if let Some(buffer) = depth {
+                    gl.raw().delete_renderbuffer(buffer);
+                }
                 gl.surface_changed();
                 return Err(GpuError(format!("a {width}x{height} render target is not usable on this GPU")));
             }
-            framebuffer
+            (framebuffer, depth)
         };
-        Ok(Self { gl: gl.clone(), framebuffer, texture, idle_since: 0 })
+        if depth.is_some() {
+            gl.account(MemoryClass::Targets, Self::depth_bytes(width, height) as i64);
+        }
+        Ok(Self { gl: gl.clone(), framebuffer, texture, depth, idle_since: 0 })
+    }
+
+    /// What a depth buffer of this size takes: 24 bits of depth, stored in four bytes.
+    fn depth_bytes(width: u32, height: u32) -> u64 {
+        u64::from(width) * u64::from(height) * 4
+    }
+
+    /// Whether the target has a depth buffer.
+    pub fn has_depth(&self) -> bool {
+        self.depth.is_some()
+    }
+
+    /// How many levels its picture has: more than one for a mipmapped target.
+    pub fn levels(&self) -> u32 {
+        self.texture.levels
+    }
+
+    /// Makes the smaller levels of a mipmapped target from what was drawn into the largest.
+    pub fn generate_mipmaps(&self) {
+        self.gl.bind_texture(15, self.texture.raw());
+        // SAFETY: the texture is alive and bound; its levels were allocated with it.
+        unsafe { self.gl.raw().generate_mipmap(glow::TEXTURE_2D) };
+    }
+
+    fn kind(&self) -> Kind {
+        match (self.depth.is_some(), self.levels() > 1) {
+            (true, _) => Kind::Depth,
+            (false, true) => Kind::Mipmapped,
+            (false, false) => Kind::Plain,
+        }
     }
 
     /// Directs drawing at this target.
@@ -110,9 +179,28 @@ impl Target {
 impl Drop for Target {
     fn drop(&mut self) {
         self.gl.surface_changed();
-        // SAFETY: the framebuffer belongs to the process's one context, current on this thread.
-        unsafe { self.gl.raw().delete_framebuffer(self.framebuffer) };
+        // SAFETY: the framebuffer and renderbuffer belong to the process's one context, current on this thread.
+        unsafe {
+            self.gl.raw().delete_framebuffer(self.framebuffer);
+            if let Some(depth) = self.depth {
+                self.gl.raw().delete_renderbuffer(depth);
+                self.gl.account(
+                    MemoryClass::Targets,
+                    -(Self::depth_bytes(self.texture.width, self.texture.height) as i64),
+                );
+            }
+        }
     }
+}
+
+/// What a target has besides its picture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Plain,
+    /// A depth buffer.
+    Depth,
+    /// Every smaller level of its picture.
+    Mipmapped,
 }
 
 /// Targets handed out for the length of a layer's effect chain and taken back.
@@ -140,10 +228,42 @@ impl TargetPool {
 
     /// A target of exactly this size and format, reused if one is free.
     pub fn take(&mut self, width: u32, height: u32, format: TextureFormat) -> Result<Target, GpuError> {
-        let fits = |t: &Target| t.width() == width && t.height() == height && t.texture.format == format;
+        self.lend(width, height, format, Kind::Plain)
+    }
+
+    /// The same with every smaller level of its picture.
+    pub fn take_mipmapped(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<Target, GpuError> {
+        self.lend(width, height, format, Kind::Mipmapped)
+    }
+
+    /// The same with a depth buffer.
+    pub fn take_with_depth(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<Target, GpuError> {
+        self.lend(width, height, format, Kind::Depth)
+    }
+
+    fn lend(
+        &mut self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+        kind: Kind,
+    ) -> Result<Target, GpuError> {
+        let fits = |t: &Target| {
+            t.width() == width && t.height() == height && t.texture.format == format && t.kind() == kind
+        };
         let target = match self.free.iter().position(fits) {
             Some(index) => self.free.swap_remove(index),
-            None => Target::new(&self.gl, width, height, format)?,
+            None => Target::make(&self.gl, width, height, format, kind)?,
         };
         self.lent += 1;
         self.peak_lent = self.peak_lent.max(self.lent);

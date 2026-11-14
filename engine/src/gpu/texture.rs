@@ -77,6 +77,8 @@ pub struct Texture {
     pub format: TextureFormat,
     bytes: u64,
     class: MemoryClass,
+    /// How many levels it has.
+    pub levels: u32,
 }
 
 impl Texture {
@@ -147,8 +149,16 @@ impl Texture {
             gl.raw().tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, levels.len() as i32 - 1);
             raw
         };
-        let texture =
-            Self { gl: gl.clone(), raw, width, height, format, bytes, class: MemoryClass::Textures };
+        let texture = Self {
+            gl: gl.clone(),
+            raw,
+            width,
+            height,
+            format,
+            bytes,
+            class: MemoryClass::Textures,
+            levels: levels.len() as u32,
+        };
         texture.set_sampling(sampling, levels.len() > 1);
         gl.account(MemoryClass::Textures, bytes as i64);
         Ok(texture)
@@ -162,32 +172,50 @@ impl Texture {
         height: u32,
         class: MemoryClass,
     ) -> Result<Self, GpuError> {
+        Self::empty_levels(gl, format, width, height, class, 1)
+    }
+
+    /// The same with `levels` levels, each half the size of the one before (and at
+    /// least a pixel): what a picture sampled blurred by level is drawn into.
+    pub fn empty_levels(
+        gl: &Gl,
+        format: TextureFormat,
+        width: u32,
+        height: u32,
+        class: MemoryClass,
+        levels: u32,
+    ) -> Result<Self, GpuError> {
         let (internal, upload, kind) = format.gl();
+        let levels = levels.clamp(1, 32 - width.max(height).max(1).leading_zeros());
         if format.compressed() || width == 0 || height == 0 || width.max(height) > gl.caps().max_texture_size
         {
             return Err(GpuError(format!("cannot make an empty {width}x{height} {format:?} texture")));
         }
+        let mut bytes = 0;
         // SAFETY: the context is current; a null pixel pointer allocates without reading.
         let raw = unsafe {
             let raw = gl.raw().create_texture().map_err(GpuError)?;
             gl.bind_texture(15, raw);
-            gl.raw().tex_image_2d(
-                glow::TEXTURE_2D,
-                0,
-                internal as i32,
-                width as i32,
-                height as i32,
-                0,
-                upload,
-                kind,
-                glow::PixelUnpackData::Slice(None),
-            );
-            gl.raw().tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
+            for level in 0..levels {
+                let (w, h) = ((width >> level).max(1), (height >> level).max(1));
+                gl.raw().tex_image_2d(
+                    glow::TEXTURE_2D,
+                    level as i32,
+                    internal as i32,
+                    w as i32,
+                    h as i32,
+                    0,
+                    upload,
+                    kind,
+                    glow::PixelUnpackData::Slice(None),
+                );
+                bytes += format.level_size(w, h);
+            }
+            gl.raw().tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, levels as i32 - 1);
             raw
         };
-        let bytes = format.level_size(width, height);
-        let texture = Self { gl: gl.clone(), raw, width, height, format, bytes, class };
-        texture.set_sampling(Sampling { clamp: true, nearest: false }, false);
+        let texture = Self { gl: gl.clone(), raw, width, height, format, bytes, class, levels };
+        texture.set_sampling(Sampling { clamp: true, nearest: false }, levels > 1);
         gl.account(class, bytes as i64);
         Ok(texture)
     }
