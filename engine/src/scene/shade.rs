@@ -62,6 +62,11 @@ pub(crate) enum Feed {
     Mvp,
     MvpInverse,
     Model,
+    ModelInverse,
+    /// Where the camera is, in scene space.
+    Eye,
+    /// `g_RenderVar0` and `g_RenderVar1`: what a particle renderer tells its shader.
+    RenderVar(usize),
     ViewProjection,
     Identity,
     Resolution(u32),
@@ -184,10 +189,16 @@ fn builtin(name: &str) -> Option<Feed> {
         "g_ModelViewProjectionMatrixInverse" => Feed::MvpInverse,
         "g_ModelMatrix" | "g_AltModelMatrix" => Feed::Model,
         "g_ViewProjectionMatrix" | "g_AltViewProjectionMatrix" => Feed::ViewProjection,
+        "g_ModelMatrixInverse" => Feed::ModelInverse,
         "g_EffectTextureProjectionMatrix"
         | "g_EffectTextureProjectionMatrixInverse"
-        | "g_ModelMatrixInverse"
         | "g_NormalModelMatrix" => Feed::Identity,
+        // A flat scene is seen head on: the screen's axes are the scene's.
+        "g_OrientationRight" | "g_ViewRight" => Feed::Const(vec![1.0, 0.0, 0.0]),
+        "g_OrientationUp" | "g_ViewUp" => Feed::Const(vec![0.0, 1.0, 0.0]),
+        "g_OrientationForward" => Feed::Const(vec![0.0, 0.0, 1.0]),
+        "g_RenderVar0" => Feed::RenderVar(0),
+        "g_RenderVar1" => Feed::RenderVar(1),
         "g_Time" => Feed::Time,
         "g_Daytime" => Feed::Daytime,
         "g_PointerPosition" | "g_PointerPositionLast" => Feed::PointerPosition,
@@ -199,7 +210,7 @@ fn builtin(name: &str) -> Option<Feed> {
         "g_Color" => Feed::Color,
         "g_Alpha" | "g_UserAlpha" => Feed::Alpha,
         "g_Brightness" => Feed::Brightness,
-        "g_EyePosition" => Feed::Const(vec![0.0, 0.0, 1.0]),
+        "g_EyePosition" => Feed::Eye,
         "g_LightAmbientColor" => Feed::Const(vec![1.0, 1.0, 1.0]),
         _ => return None,
     })

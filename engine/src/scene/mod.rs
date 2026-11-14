@@ -9,6 +9,7 @@
 mod bindings;
 mod build;
 mod draw;
+mod particles;
 mod shade;
 mod text;
 mod tree;
@@ -86,6 +87,8 @@ pub(crate) struct ImageLayer {
 /// What a layer is.
 pub(crate) enum LayerKind {
     Image(Box<ImageLayer>),
+    /// A particle system.
+    Particles(Box<particles::ParticleLayer>),
     /// A sound, playing while the engine's sound is on.
     Sound(SoundLayer),
     /// Nothing drawn (yet): keeps the hierarchy and its transforms.
@@ -244,6 +247,11 @@ impl SceneInstance {
         self.bindings.properties.insert(name.to_owned(), value.clone());
         for change in self.bindings.changes(name, value) {
             self.apply(change);
+        }
+        for layer in &mut self.layers {
+            if let LayerKind::Particles(particles) = &mut layer.kind {
+                particles.properties_changed(&self.bindings.properties);
+            }
         }
     }
 

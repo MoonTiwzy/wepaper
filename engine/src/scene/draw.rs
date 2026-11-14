@@ -4,8 +4,12 @@ use crate::gpu::{Blend, Gl, Target, Texture, TextureFormat};
 use crate::math::Mat4;
 use crate::{Engine, Fill};
 
+use super::particles::ParticleLayer;
 use super::shade::{Feed, Shade, TextureRef};
 use super::{FrameInput, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, Step};
+
+/// How far in front of a flat scene its camera is said to be.
+const EYE_DISTANCE: f32 = 1000.0;
 
 /// What is the same for every pass of a frame.
 struct Frame<'a> {
@@ -34,6 +38,8 @@ struct LayerState {
     brightness: f32,
     /// The size shaders are told the layer's buffers have: the authored one.
     authored: [f32; 2],
+    /// `g_RenderVar0` and `g_RenderVar1`, for particles.
+    vars: [[f32; 4]; 2],
 }
 
 /// Where the frame is drawn: a framebuffer (or the current surface) and its size.
@@ -86,7 +92,8 @@ impl SceneInstance {
         for video in &self.videos {
             video.stream.borrow_mut().poll();
         }
-        let dt = (input.time - self.last_time).clamp(0.0, 0.25) as f32;
+        let before = self.last_time;
+        let dt = (input.time - before).clamp(0.0, 0.25) as f32;
         self.last_time = input.time;
         if !self.bindings.animations.is_empty() {
             let mut changes = Vec::new();
@@ -143,6 +150,16 @@ impl SceneInstance {
                 text.refresh(&engine.gl, reach.min(2.0));
             }
         }
+        // Particles live on, and this frame's reach the GPU, before anything is drawn.
+        let stretch = (input.time - before).max(0.0) as f32;
+        let pointer = [input.pointer[0] * self.scene_size[0], (1.0 - input.pointer[1]) * self.scene_size[1]];
+        for layer in &mut self.layers {
+            if let LayerKind::Particles(particles) = &mut layer.kind
+                && layer.shown
+            {
+                particles.update(&engine.gl, stretch, input.time as f32, &layer.world, Some(pointer));
+            }
+        }
         let mut background: Option<Target> = None;
         // The finished pictures of layers that others read, kept until the frame is done.
         let mut pictures: Pictures = Vec::new();
@@ -150,19 +167,25 @@ impl SceneInstance {
             if !layer.shown {
                 continue;
             }
-            if let LayerKind::Image(image) = &layer.kind {
-                let keep = self.provides.contains(&layer.id);
-                draw_image(
-                    engine,
-                    &frame,
-                    layer,
-                    image,
-                    canvas,
-                    &mut background,
-                    &mut pictures,
-                    keep,
-                    density,
-                );
+            match &layer.kind {
+                LayerKind::Image(image) => {
+                    let keep = self.provides.contains(&layer.id);
+                    draw_image(
+                        engine,
+                        &frame,
+                        layer,
+                        image,
+                        canvas,
+                        &mut background,
+                        &mut pictures,
+                        keep,
+                        density,
+                    );
+                }
+                LayerKind::Particles(particles) => {
+                    draw_particles(engine, &frame, layer, particles, canvas, &pictures);
+                }
+                LayerKind::Sound(_) | LayerKind::Group => {}
             }
         }
         if let (Some(staged), Some(bloom)) = (&staged, &self.bloom) {
@@ -173,6 +196,7 @@ impl SceneInstance {
                 alpha: 1.0,
                 brightness: 1.0,
                 authored: frame.screen,
+                vars: [[0.0; 4]; 2],
             };
             let run = |engine: &mut Engine,
                        shade: &super::shade::Shade,
@@ -271,6 +295,53 @@ impl SceneInstance {
     }
 }
 
+/// Where a layer is this frame: its place in the scene, moved by the parallax.
+///
+/// Parallax moves a layer by how far it is from the camera's centre and from the
+/// pointer, scaled by its depth: near layers travel further than far ones.
+fn placed(frame: &Frame<'_>, layer: &Layer) -> Mat4 {
+    match frame.parallax {
+        Some((pointer, amount)) if layer.parallax_depth != [0.0, 0.0] => {
+            let from_center =
+                [layer.world.0[12] - frame.scene_center[0], layer.world.0[13] - frame.scene_center[1]];
+            let shift = [
+                (from_center[0] + pointer[0]) * layer.parallax_depth[0] * amount,
+                (from_center[1] + pointer[1]) * layer.parallax_depth[1] * amount,
+            ];
+            Mat4::translation([shift[0], shift[1], 0.0]).mul(&layer.world)
+        }
+        _ => layer.world,
+    }
+}
+
+/// Draws a particle layer: each of its systems with its own material, straight into the scene.
+fn draw_particles(
+    engine: &mut Engine,
+    frame: &Frame<'_>,
+    layer: &Layer,
+    particles: &ParticleLayer,
+    scene: Canvas,
+    pictures: &Pictures,
+) {
+    let world = placed(frame, layer);
+    scene.bind(&engine.gl);
+    for part in &particles.parts {
+        let Some(mesh) = part.mesh.as_ref().filter(|_| part.vertices > 0) else { continue };
+        let state = LayerState {
+            mvp: frame.view_projection.mul(&world),
+            model: world,
+            color: [1.0; 3],
+            alpha: 1.0,
+            brightness: 1.0,
+            authored: frame.screen,
+            vars: [part.trail, part.sheet],
+        };
+        engine.gl.set_blend(part.blend);
+        apply(&engine.gl, &part.shade, frame, &state, None, &[], None, pictures, engine.white());
+        mesh.draw();
+    }
+}
+
 /// Draws one image layer: its base pass, then each visible effect's steps, the last
 /// of them straight into the scene.
 #[allow(clippy::too_many_arguments)]
@@ -286,20 +357,7 @@ fn draw_image(
     density: f32,
 ) {
     let keep = provides;
-    // Parallax moves a layer by how far it is from the camera's centre and from
-    // the pointer, scaled by its depth: near layers travel further than far ones.
-    let world = match frame.parallax {
-        Some((pointer, amount)) if layer.parallax_depth != [0.0, 0.0] => {
-            let from_center =
-                [layer.world.0[12] - frame.scene_center[0], layer.world.0[13] - frame.scene_center[1]];
-            let shift = [
-                (from_center[0] + pointer[0]) * layer.parallax_depth[0] * amount,
-                (from_center[1] + pointer[1]) * layer.parallax_depth[1] * amount,
-            ];
-            Mat4::translation([shift[0], shift[1], 0.0]).mul(&layer.world)
-        }
-        _ => layer.world,
-    };
+    let world = placed(frame, layer);
     let state = LayerState {
         mvp: frame.view_projection.mul(&world),
         model: world,
@@ -307,6 +365,7 @@ fn draw_image(
         alpha: image.alpha,
         brightness: image.brightness,
         authored: image.size,
+        vars: [[0.0; 4]; 2],
     };
     let steps: Vec<&Step> = image.effects.iter().filter(|e| e.visible).flat_map(|e| &e.steps).collect();
     if steps.is_empty() && image.mode != ImageMode::Normal {
@@ -547,6 +606,7 @@ fn copy_state(state: &LayerState) -> LayerState {
         alpha: state.alpha,
         brightness: state.brightness,
         authored: state.authored,
+        vars: state.vars,
     }
 }
 
@@ -654,6 +714,9 @@ fn apply(
             Feed::Mvp => set(&state.mvp.0),
             Feed::MvpInverse => set(&state.mvp.inverse().0),
             Feed::Model => set(&state.model.0),
+            Feed::ModelInverse => set(&state.model.inverse().0),
+            Feed::Eye => set(&[frame.scene_center[0], frame.scene_center[1], EYE_DISTANCE]),
+            Feed::RenderVar(index) => set(&state.vars[*index & 1]),
             Feed::ViewProjection => set(&frame.view_projection.0),
             Feed::Identity => {
                 if uniform.kind == glow::FLOAT_MAT3 {

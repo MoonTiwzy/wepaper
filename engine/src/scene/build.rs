@@ -15,6 +15,7 @@ use crate::read::Files;
 use crate::{Engine, Fill, LoadError, Viewport};
 
 use super::bindings::{Bindings, SceneField, Slot};
+use super::particles::ParticleLayer;
 use super::shade::{PassInput, Shade, TextureChoice, TextureRef};
 use super::{BufferSpec, Effect, ImageLayer, ImageMode, Layer, LayerKind, SceneInstance, SoundLayer, Step};
 
@@ -35,6 +36,14 @@ impl SceneInstance {
         let scene = Scene::parse(&document);
 
         let mut bindings = Bindings::default();
+        // What is built from a property's value (a particle system's size) needs the
+        // values before the layers exist; what follows a property is set after.
+        for property in project.properties.iter().filter(|property| !property.default.is_null()) {
+            bindings.properties.insert(property.name.clone(), property.default.clone());
+        }
+        for (name, value) in values.iter().filter(|(_, value)| !value.is_null()) {
+            bindings.properties.insert(name.clone(), value.clone());
+        }
         let mut skipped = Vec::new();
         let index_of: HashMap<i64, usize> =
             scene.objects.iter().enumerate().map(|(index, object)| (object.id, index)).collect();
@@ -105,6 +114,17 @@ impl SceneInstance {
                         volume: sound.volume.value.clamp(0.0, 1.0),
                         player: None,
                     })
+                }
+                ObjectKind::Particle(particles) => {
+                    // The object's id as the seed: the same wallpaper plays the same.
+                    match ParticleLayer::build(engine, files, &mut bindings, particles, object.id as u64) {
+                        Ok(layer) => LayerKind::Particles(Box::new(layer)),
+                        Err(why) => {
+                            log::warn!("particles {} ({}) are skipped: {why}", object.name, object.id);
+                            skipped.push(format!("layer {}: {why}", object.name));
+                            LayerKind::Group
+                        }
+                    }
                 }
                 ObjectKind::Unsupported(what) => {
                     skipped.push(format!("layer {}: {what} objects are not drawn", object.name));
@@ -196,13 +216,17 @@ impl SceneInstance {
             }
         };
         for layer in &self.layers {
-            if let LayerKind::Image(image) = &layer.kind {
-                note(&image.base);
-                for step in image.effects.iter().flat_map(|e| &e.steps) {
-                    if let Step::Draw { shade, .. } = step {
-                        note(shade);
+            match &layer.kind {
+                LayerKind::Image(image) => {
+                    note(&image.base);
+                    for step in image.effects.iter().flat_map(|e| &e.steps) {
+                        if let Step::Draw { shade, .. } = step {
+                            note(shade);
+                        }
                     }
                 }
+                LayerKind::Particles(particles) => particles.parts.iter().for_each(|part| note(&part.shade)),
+                _ => {}
             }
         }
         self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
@@ -280,11 +304,11 @@ fn read_doc(files: &Files, path: &str) -> Result<Value, String> {
     wepaper_json::parse(&text).map_err(|e| format!("{path}: {e}"))
 }
 
-fn choices(textures: &[Option<String>]) -> Vec<TextureChoice> {
+pub(super) fn choices(textures: &[Option<String>]) -> Vec<TextureChoice> {
     textures.iter().map(|t| t.clone().map_or(TextureChoice::Default, TextureChoice::Named)).collect()
 }
 
-fn constants(pass: &MaterialPass) -> Vec<(String, Dyn<Value>)> {
+pub(super) fn constants(pass: &MaterialPass) -> Vec<(String, Dyn<Value>)> {
     pass.constants.iter().map(|(name, value)| (name.clone(), Dyn::constant(value.clone()))).collect()
 }
 

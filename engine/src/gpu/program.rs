@@ -23,6 +23,8 @@ pub const ATTRIBUTES: &[(&str, u32)] = &[
     ("a_Tangent4", 10),
     ("a_TexCoordVec3", 11),
     ("a_PositionVec4", 12),
+    ("a_TexCoordVec4C3", 13),
+    ("a_TexCoordC4", 14),
 ];
 
 /// A shader that did not compile or link, with what the driver said.
