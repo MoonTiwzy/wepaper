@@ -140,7 +140,8 @@ else with it.
 - **Unit tests** for everything pure: JSON, LZ4, archives, textures, puppets, documents, the
   shader translator and its repairs, bindings, keyframe animations, particles, scripts, the
   protocol, the server, settings, plugins.
-- **Headless GPU tests**: a context without a display, real programs and targets.
+- **Headless GPU tests**: a context without a display, real programs and targets; and whole
+  scenes put together from Wallpaper Engine's stock pieces, when `WEPAPER_TEST_ASSETS` is set.
 - **Corpus tests** against a real library, when `WEPAPER_TEST_ASSETS` and
   `WEPAPER_TEST_WORKSHOP` are set: every archive, texture, scene, puppet, particle system and
   script.

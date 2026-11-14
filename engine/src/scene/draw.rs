@@ -120,7 +120,7 @@ impl SceneInstance {
         for layer in &mut self.layers {
             if let LayerKind::Image(image) = &mut layer.kind
                 && let Some(puppet) = &mut image.puppet
-                && layer.shown
+                && (layer.shown || layer.read)
             {
                 puppet.update(stretch, &mut self.bindings.values);
             }
@@ -166,7 +166,7 @@ impl SceneInstance {
         for layer in &mut self.layers {
             if let LayerKind::Image(image) = &mut layer.kind
                 && let Some(text) = &mut image.text
-                && layer.shown
+                && (layer.shown || layer.read)
                 && text.dirty
             {
                 // Other text takes another box: the layer is as large as its text.
@@ -196,7 +196,7 @@ impl SceneInstance {
         // The finished pictures of layers that others read, kept until the frame is done.
         let mut pictures: Pictures = Vec::new();
         for layer in self.order.iter().filter_map(|index| self.layers.get(*index)) {
-            if !layer.shown {
+            if !layer.shown && !layer.read {
                 continue;
             }
             match &layer.kind {
@@ -214,9 +214,10 @@ impl SceneInstance {
                         density,
                     );
                 }
-                LayerKind::Particles(particles) => {
+                LayerKind::Particles(particles) if layer.shown => {
                     draw_particles(engine, &frame, layer, particles, canvas, &pictures);
                 }
+                LayerKind::Particles(_) => {}
                 LayerKind::Sound(_) | LayerKind::Group => {}
             }
         }
@@ -312,6 +313,20 @@ impl SceneInstance {
             let layer = &mut self.layers[index];
             layer.world = world;
             layer.shown = shown;
+            layer.read = false;
+        }
+        // A hidden layer that is read may itself read another: until nothing changes.
+        let mut changed = !self.reads.is_empty();
+        while changed {
+            changed = false;
+            for &(reader, read) in &self.reads {
+                let wanted = self.layers[reader].shown || self.layers[reader].read;
+                let layer = &mut self.layers[read];
+                if wanted && !layer.shown && !layer.read {
+                    layer.read = true;
+                    changed = true;
+                }
+            }
         }
     }
 
@@ -637,8 +652,12 @@ fn draw_image(
                 }
             }
         }
-        // The chain ended in a buffer: put its picture into the scene.
-        if !landed && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref()) {
+        // The chain ended in a buffer: put its picture into the scene, unless the layer
+        // is hidden and drawn for its picture alone.
+        if !landed
+            && layer.shown
+            && let Some(result) = chain.current.and_then(|c| chain.ping[c].as_ref())
+        {
             scene.bind(&engine.gl);
             match (&image.blend_pass, &image.puppet) {
                 // The mesh bends the finished picture on its way into the scene. The

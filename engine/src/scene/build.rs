@@ -160,6 +160,7 @@ impl SceneInstance {
                 parallax_depth: object.parallax_depth.value,
                 world: Mat4::IDENTITY,
                 shown: true,
+                read: false,
                 kind,
             });
         }
@@ -180,6 +181,7 @@ impl SceneInstance {
             project,
             bloom,
             provides: std::collections::HashSet::new(),
+            reads: Vec::new(),
             videos: Vec::new(),
             parallax: super::Parallax {
                 enabled: scene.general.parallax.value,
@@ -222,12 +224,18 @@ impl SceneInstance {
         let mut streams: Vec<crate::video::SharedVideo> = Vec::new();
         let mut wants_audio = false;
         let mut provides = std::collections::HashSet::new();
-        let mut note = |shade: &Shade| {
+        let mut reads: Vec<(usize, i64)> = Vec::new();
+        let mut reader = 0;
+        let mut note = |shade: &Shade, reader: usize| {
             wants_audio |= shade.wants_audio;
-            provides.extend(shade.samplers.iter().filter_map(|(_, _, source)| match source {
-                TextureRef::Layer(id) => Some(*id),
-                _ => None,
-            }));
+            for (_, _, source) in &shade.samplers {
+                if let TextureRef::Layer(id) = source {
+                    provides.insert(*id);
+                    if !reads.contains(&(reader, *id)) {
+                        reads.push((reader, *id));
+                    }
+                }
+            }
             for (_, _, source) in &shade.samplers {
                 if let TextureRef::Video(video) = source
                     && !streams.iter().any(|known| std::rc::Rc::ptr_eq(known, video))
@@ -239,20 +247,27 @@ impl SceneInstance {
         for layer in &self.layers {
             match &layer.kind {
                 LayerKind::Image(image) => {
-                    note(&image.base);
+                    note(&image.base, reader);
                     for step in image.effects.iter().flat_map(|e| &e.steps) {
                         if let Step::Draw { shade, .. } = step {
-                            note(shade);
+                            note(shade, reader);
                         }
                     }
                 }
-                LayerKind::Particles(particles) => particles.parts.iter().for_each(|part| note(&part.shade)),
+                LayerKind::Particles(particles) => {
+                    particles.parts.iter().for_each(|part| note(&part.shade, reader));
+                }
                 _ => {}
             }
+            reader += 1;
         }
         self.videos = streams.into_iter().map(crate::video::VideoHold::new).collect();
         self.wants_audio = wants_audio;
         self.provides = provides;
+        self.reads = reads
+            .into_iter()
+            .filter_map(|(reader, id)| Some((reader, self.layers.iter().position(|layer| layer.id == id)?)))
+            .collect();
     }
 }
 

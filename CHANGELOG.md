@@ -19,6 +19,9 @@
   plays them in turn, a `random` one picks a file and waits between two plays; a script, a
   user property or a timeline on a layer's volume moves it. A layer has a player only while
   it is heard: a scene with sixty silent layers used to start sixty players at once.
+- A hidden layer that another layer reads is drawn, into its picture only. Scenes build one
+  picture out of layers nobody is to see as they are (a globe out of a map, its clouds and
+  a mask): the layer that put them together showed a white sheet instead.
 - The daemon cannot be left hanging. Nothing it tells a player waits for the player any
   more, and a player is shut down on a thread of its own. A daemon told to stop is gone in
   three seconds whatever it was doing, and one whose loop stands for half a minute gives up

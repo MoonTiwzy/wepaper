@@ -148,6 +148,9 @@ pub(crate) struct Layer {
     pub(crate) world: Mat4,
     /// Whether it and every parent are visible.
     pub(crate) shown: bool,
+    /// Not shown, but a layer that is reads its picture: it is drawn, into that
+    /// picture only. Scenes build a globe out of a map, its clouds and a mask this way.
+    pub(crate) read: bool,
     pub(crate) kind: LayerKind,
 }
 
@@ -229,6 +232,8 @@ pub struct SceneInstance {
     bloom: Option<Bloom>,
     /// The ids of layers whose finished picture another layer reads.
     provides: std::collections::HashSet<i64>,
+    /// Who reads whose picture: the reading layer, then the layer read, as indices.
+    reads: Vec<(usize, usize)>,
     /// The videos the scene's layers show, held for as long as it plays.
     videos: Vec<crate::video::VideoHold>,
     /// The camera follows the pointer, shifting layers by their depth.
