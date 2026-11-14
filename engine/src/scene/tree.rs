@@ -229,9 +229,10 @@ impl SceneInstance {
                         let LayerKind::Image(image) = &mut layer.kind else {
                             return Err(format!("layer {id} has no constants"));
                         };
-                        if typed_floats(value).is_none()
-                            || !image.base.set_constant(name, value, &mut self.bindings.values)
-                        {
+                        if numbers.is_none() {
+                            return Err("expected a number or several".to_owned());
+                        }
+                        if !image.base.set_constant(name, value, &mut self.bindings.values) {
                             return Err(format!("layer {id} has no constant \"{name}\""));
                         }
                     }
@@ -244,11 +245,13 @@ impl SceneInstance {
                             .ok()
                             .and_then(|n| image.effects.get_mut(n))
                             .ok_or_else(|| format!("layer {id} has no effect {effect}"))?;
+                        if numbers.is_none() {
+                            return Err("expected a number or several".to_owned());
+                        }
                         let mut any = false;
                         for step in &mut found.steps {
                             if let Step::Draw { shade, .. } = step {
-                                any |= typed_floats(value).is_some()
-                                    && shade.set_constant(name, value, &mut self.bindings.values);
+                                any |= shade.set_constant(name, value, &mut self.bindings.values);
                             }
                         }
                         if !any {
