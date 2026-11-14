@@ -52,6 +52,17 @@ impl Rig {
     /// Writes a 4x3 matrix a bone: from where a vertex is in the mesh to where the
     /// pose puts it.
     pub(super) fn pose(&self, animations: &[Animation], layers: &[PlayingLayer], out: &mut Vec<f32>) {
+        out.clear();
+        for (posed, inverse_bind) in self.posed(animations, layers).iter().zip(&self.inverse_bind) {
+            let skin = posed.mul(inverse_bind).0;
+            for column in 0..4 {
+                out.extend_from_slice(&skin[column * 4..column * 4 + 3]);
+            }
+        }
+    }
+
+    /// Every bone where the layers put it, in the space of the mesh.
+    pub(super) fn posed(&self, animations: &[Animation], layers: &[PlayingLayer]) -> Vec<Mat4> {
         // A puppet cut from a sheet of parts is bound where the parts lie in the
         // picture and rests where they are put together: its second pose.
         let mut parts = self.reference.clone();
@@ -76,13 +87,7 @@ impl Rig {
                 },
             )
             .collect();
-        out.clear();
-        for (posed, inverse_bind) in in_layer(&self.parents, &local).iter().zip(&self.inverse_bind) {
-            let skin = posed.mul(inverse_bind).0;
-            for column in 0..4 {
-                out.extend_from_slice(&skin[column * 4..column * 4 + 3]);
-            }
-        }
+        in_layer(&self.parents, &local)
     }
 
     /// Writes how opaque every bone is.

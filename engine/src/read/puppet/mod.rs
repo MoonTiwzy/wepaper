@@ -1,8 +1,9 @@
 //! `.mdl` puppets: the mesh a layer is warped with, its skeleton and its animations.
 //!
 //! There is no documentation of the format. What follows was worked out from the 18
-//! files of a workshop library (`MDLV` 13, 16, 17, 19, 21 and 23) and holds for all of
-//! them; what is a guess says so.
+//! puppets of a workshop library (`MDLV` 13, 16, 17, 19, 21 and 23) and the 3D models
+//! of its scenes with a perspective camera (`MDLV` 23, up to seven meshes in a file),
+//! and holds for all of them; what is a guess says so.
 //!
 //! # The file
 //!
@@ -13,7 +14,9 @@
 //! ```text
 //! "MDLVnnnn\0"
 //! u32      flags: the vertex format of version 13 (0x01800009 skinned, 9 or 0xf not)
-//! u32 u32  1, 1 (unknown)
+//! u32      1 (unknown)
+//! u32      the number of meshes: 1 for a puppet, one a material for a 3D model
+//!          per mesh, everything from here to the parts:
 //! string   the material's path
 //! u32      0 (4 in one file; unknown)
 //! f32 x 6  the bounding box                              version 17 and later
@@ -29,6 +32,7 @@
 //!          (u32 bone, u32 0, u32 first index, u32 index count): the triangles
 //!          grouped by the bone that moves them most         version 21 and later
 //! u32      0 (unknown)                                   version 23
+//!          the next mesh, from its material's path; after the last one,
 //!          sections; a file without any ends with one zero byte
 //! ```
 //!
@@ -86,10 +90,24 @@
 //!   u32      0
 //!   u8       version 4 and later: 1 when the bones' alpha follows, per bone
 //!            u32 0, u32 size, size / 4 floats (one a keyframe)
-//!            then zero bytes: 5 in version 4, 29 in version 5, 30 in version 6
+//!            then zero bytes: 5 in version 4, 29 in version 5, 30 in version 6;
+//!            in version 6 the 24 after the first are six floats where a 3D model
+//!            has them: the box the animation moves the mesh in
 //! ```
 //!
-//! Every file with more than one animation has section version 4, so the lengths of
+//! A model with attachment points has them between the skeleton and the animations,
+//! in a section whose header has no `MDL` in front:
+//!
+//! ```text
+//! "MDAT0001\0"
+//! u32      where the section ends
+//! u16      the number of attachments; per attachment:
+//!   u16      the bone it is on
+//!   string   the name a scene's object attaches by (`"attachment": "Arm"`)
+//!   f32 x 16 where it is on the bone, column-major
+//! ```
+//!
+//! Every puppet with more than one animation has section version 4, so the lengths of
 //! those zero runs for 5 and 6 come from the distance to the section's end in files with
 //! one animation. When they are wrong, or not zero, the animations after the first are
 //! dropped with a warning.
@@ -162,6 +180,7 @@
 //! replaces the quad.
 
 mod animation;
+mod attachments;
 mod bytes;
 mod layers;
 mod mesh;
@@ -171,12 +190,12 @@ mod skeleton;
 use std::fmt;
 
 pub use animation::{Animation, Keyframe, Looping, Track};
+pub use attachments::Attachment;
 pub use layers::{LayerSpec, layers_from_scene};
-pub use mesh::{Part, PuppetVertex};
+pub use mesh::{Part, PuppetVertex, Surface};
 pub use pose::PlayingLayer;
 pub use skeleton::Bone;
 
-#[cfg(doc)]
 use crate::math::Mat4;
 
 use bytes::Reader;
@@ -218,10 +237,14 @@ pub struct Puppet {
     pub indices: Vec<u32>,
     /// The triangles grouped by bone, when the file says; empty before version 21.
     pub parts: Vec<Part>,
+    /// The triangles grouped by material: one run for a puppet, one a mesh for a model.
+    pub surfaces: Vec<Surface>,
     /// The skeleton; empty for a puppet that only replaces the quad with a mesh.
     pub bones: Vec<Bone>,
     /// The animations the skeleton can play.
     pub animations: Vec<Animation>,
+    /// Places on the bones other objects hang from.
+    pub attachments: Vec<Attachment>,
     skinned: bool,
     second_pose: bool,
     rig: Rig,
@@ -235,12 +258,14 @@ impl Puppet {
             Some((b'V', version)) => version,
             _ => return Err(PuppetError::Unknown("no MDLV header".to_owned())),
         };
-        let mesh::Mesh { material, mut vertices, indices, mut parts, skinned } =
+        let mesh::Mesh { mut vertices, indices, mut parts, surfaces, skinned } =
             mesh::read(&mut reader, version)?;
+        let material = surfaces.first().map(|surface| surface.material.clone()).unwrap_or_default();
 
         let mut bones = Vec::new();
         let mut reference = None;
         let mut animations = Vec::new();
+        let mut attachments = Vec::new();
         while let Some((letter, section_version)) = reader.tag() {
             let end = reader.u32()? as usize;
             let mut section = reader.until(end)?;
@@ -251,6 +276,8 @@ impl Puppet {
                     reference = skeleton.reference;
                 }
                 b'A' => animations = animation::read(&mut section, section_version),
+                // A list cut short loses its attachments, not the model.
+                b'T' => attachments = attachments::read(&mut section).unwrap_or_default(),
                 _ => {}
             }
             reader.seek(end)?;
@@ -291,8 +318,10 @@ impl Puppet {
             vertices,
             indices,
             parts,
+            surfaces,
             bones,
             animations,
+            attachments,
             skinned,
             second_pose,
             rig,
@@ -328,6 +357,22 @@ impl Puppet {
     /// animation the puppet does not have is ignored. `out` is cleared first.
     pub fn pose(&self, layers: &[PlayingLayer], out: &mut Vec<f32>) {
         self.rig.pose(&self.animations, layers, out);
+    }
+
+    /// Where each attachment point is in the space of the mesh with the animation
+    /// layers playing at their times: its bone as they pose it, then its offset. `out`
+    /// is cleared first; an attachment on a bone the skeleton does not have is where
+    /// its offset alone puts it.
+    pub fn attachment_places(&self, layers: &[PlayingLayer], out: &mut Vec<Mat4>) {
+        out.clear();
+        if self.attachments.is_empty() {
+            return;
+        }
+        let bones = self.rig.posed(&self.animations, layers);
+        for attachment in &self.attachments {
+            let bone = bones.get(attachment.bone).copied().unwrap_or(Mat4::IDENTITY);
+            out.push(bone.mul(&attachment.offset));
+        }
     }
 
     /// The values for `g_BonesAlpha` (one float a bone, 0 to 1) for the same layers; all

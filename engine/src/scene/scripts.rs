@@ -23,6 +23,8 @@ use super::{FrameInput, LayerKind, SceneInstance};
 struct Attached {
     id: ScriptId,
     slot: Slot,
+    /// The layer whose value it is.
+    layer: usize,
 }
 
 /// The scripts of a scene.
@@ -103,7 +105,7 @@ fn field<'a>(scripted: &'a Scripted) -> Field<'a> {
 }
 
 /// The names scripts know the scene's own values by.
-const SCENE_NAMES: [(&str, SceneField); 11] = [
+const SCENE_NAMES: [(&str, SceneField); 13] = [
     ("camerazoom", SceneField::Zoom),
     ("clearcolor", SceneField::Clear),
     ("bloom", SceneField::Bloom),
@@ -115,6 +117,8 @@ const SCENE_NAMES: [(&str, SceneField); 11] = [
     ("camerashakeamplitude", SceneField::ShakeAmplitude),
     ("camerashakeroughness", SceneField::ShakeRoughness),
     ("camerashakespeed", SceneField::ShakeSpeed),
+    ("ambientcolor", SceneField::Ambient),
+    ("skylightcolor", SceneField::Skylight),
 ];
 
 impl SceneInstance {
@@ -178,8 +182,8 @@ impl SceneInstance {
                 Value::Number(number) => Datum::Number(number),
                 other => datum(&super::shade::value_floats(&other, 3)),
             },
-            Slot::Puppet(index, which, field) => image(index)
-                .and_then(|image| image.puppet.as_ref()?.layers.get(which))
+            Slot::Puppet(index, which, field) => layer(index)
+                .and_then(|layer| layer.skeleton()?.layers.get(which))
                 .map_or(Datum::Null, |animation| match field {
                     PuppetField::Rate => datum(&[animation.rate]),
                     PuppetField::Blend => datum(&[animation.blend]),
@@ -289,7 +293,7 @@ impl SceneInstance {
                     properties: &scripted.script.properties,
                 };
                 match runtime.attach(&scripted.script.source, binding, &mut host) {
-                    Ok(id) => attached.push(Attached { id, slot: scripted.slot }),
+                    Ok(id) => attached.push(Attached { id, slot: scripted.slot, layer: scripted.layer }),
                     // The runtime said why through the host.
                     Err(_) => failed += 1,
                 }
@@ -353,7 +357,8 @@ impl SceneInstance {
     /// `update`, each result written to the value its script drives.
     ///
     /// `passed` are the events keyframe animations passed this frame: each goes to
-    /// the script on the animation's own value.
+    /// every script of the animation's layer, the one on its own value first. A block's
+    /// script on its scale hears the timeline of its position.
     pub(crate) fn run_scripts(
         &mut self,
         engine: &Engine,
@@ -435,16 +440,24 @@ impl SceneInstance {
             }
 
             for (animation, name, frame) in passed {
-                let Some(slot) = host.scene.bindings.animations.get(*animation).map(|playing| playing.slot)
+                let Some((slot, layer)) = host
+                    .scene
+                    .bindings
+                    .animations
+                    .get(*animation)
+                    .map(|playing| (playing.slot, playing.layer))
                 else {
                     continue;
                 };
-                for attached in attached.iter().filter(|attached| attached.slot == slot) {
-                    let value = host.scene.read_slot(slot);
+                let own = attached.iter().filter(|attached| attached.slot == slot);
+                let others =
+                    attached.iter().filter(|attached| attached.slot != slot && attached.layer == layer);
+                for attached in own.chain(others) {
+                    let value = host.scene.read_slot(attached.slot);
                     if let Some(new) =
                         runtime.animation_event(attached.id, name, f64::from(*frame), value, &mut host)
                     {
-                        host.scene.write_slot(slot, &new);
+                        host.scene.write_slot(attached.slot, &new);
                     }
                 }
             }
@@ -499,14 +512,9 @@ impl SceneHost<'_> {
         self.scene.layers.get(layer.0 as usize)
     }
 
-    /// The keyframe animation a script means: the one on its own value, or the one
-    /// of its layer with this name.
-    fn animation(
-        &mut self,
-        layer: LayerId,
-        field: Option<Field<'_>>,
-        name: &Datum,
-    ) -> Option<&mut super::bindings::Playing> {
+    /// The keyframe animation a script means, by its place in the table: the one on
+    /// its own value, or the one of its layer with this name.
+    fn animation(&self, layer: LayerId, field: Option<Field<'_>>, name: &Datum) -> Option<usize> {
         let index = layer.0 as usize;
         let own = field.and_then(|field| self.scene.slot_of(index, field));
         let name = match name {
@@ -519,7 +527,7 @@ impl SceneHost<'_> {
             Some(Field::Named(constant)) => Some((None, constant)),
             _ => None,
         };
-        self.scene.bindings.animations.iter_mut().find(|playing| match (name, own, constant) {
+        self.scene.bindings.animations.iter().position(|playing| match (name, own, constant) {
             (Some(name), ..) => playing.layer == index && playing.animation.name == name,
             (None, Some(slot), _) => playing.slot == slot,
             (None, None, Some((effect, constant))) => {
@@ -528,6 +536,82 @@ impl SceneHost<'_> {
                     && playing.name.as_deref() == Some(constant)
             }
             (None, None, None) => playing.layer == index,
+        })
+    }
+}
+
+impl SceneHost<'_> {
+    /// What a script asks of an animation layer of a puppet or a model
+    /// (`thisLayer.getAnimationLayer("Jump").setFrame(0)`): the layer is named by the
+    /// first argument, by its name or its place.
+    fn animation_layer_call(&mut self, index: usize, method: &str, arguments: &[Datum]) -> Option<Datum> {
+        let action = method.strip_prefix("animationLayer.")?;
+        let number = |at: usize| match arguments.get(at) {
+            Some(Datum::Number(number)) => Some(*number as f32),
+            _ => None,
+        };
+        let key = match arguments.first()? {
+            Datum::Text(name) => name.clone(),
+            Datum::Number(place) if *place >= 0.0 => (*place as usize).to_string(),
+            _ => return None,
+        };
+        let layer = self.scene.layers.get_mut(index)?;
+        let which = layer.skeleton()?.find_layer(&key)?;
+        let id = layer.skeleton()?.layers[which].spec.animation;
+        let puppet = match &layer.kind {
+            LayerKind::Image(image) => &image.puppet.as_ref()?.shared.puppet,
+            LayerKind::Model(model) => &model.shared.model,
+            _ => return None,
+        };
+        let (fps, frames) =
+            puppet.animation(id).map_or((30.0, 0), |animation| (animation.fps, animation.frames));
+        let playing = layer.skeleton_mut()?.layers.get_mut(which)?;
+        Some(match action {
+            "play" => {
+                playing.running = true;
+                Datum::Null
+            }
+            "pause" => {
+                playing.running = false;
+                Datum::Null
+            }
+            "stop" => {
+                playing.running = false;
+                playing.clock = 0.0;
+                Datum::Null
+            }
+            "isPlaying" => Datum::Bool(playing.running),
+            "getFrame" => datum(&[playing.clock * fps]),
+            "setFrame" => {
+                playing.seek(number(1)?, fps);
+                Datum::Null
+            }
+            "get" => match arguments.get(1) {
+                Some(Datum::Text(what)) => match what.as_str() {
+                    "rate" => datum(&[playing.rate]),
+                    "blend" => datum(&[playing.blend]),
+                    "visible" => Datum::Bool(playing.visible),
+                    "fps" => datum(&[fps]),
+                    "frameCount" => datum(&[frames as f32]),
+                    "duration" => datum(&[if fps > 0.0 { frames as f32 / fps } else { 0.0 }]),
+                    "name" => Datum::Text(playing.spec.name.clone()),
+                    _ => return None,
+                },
+                _ => return None,
+            },
+            "set" => match (arguments.get(1), arguments.get(2)) {
+                (Some(Datum::Text(what)), Some(value)) => {
+                    match (what.as_str(), value) {
+                        ("rate", Datum::Number(rate)) => playing.rate = *rate as f32,
+                        ("blend", Datum::Number(blend)) => playing.blend = *blend as f32,
+                        ("visible", Datum::Bool(on)) => playing.visible = *on,
+                        _ => return None,
+                    }
+                    Datum::Null
+                }
+                _ => return None,
+            },
+            _ => return None,
         })
     }
 }
@@ -669,20 +753,18 @@ impl Host for SceneHost<'_> {
                 order.insert(to.min(order.len()), moved);
                 Some(Datum::Null)
             }
-            "getBoneCount" => match &self.layer(layer)?.kind {
+            "getBoneCount" => Some(datum(&[match &self.layer(layer)?.kind {
                 LayerKind::Image(image) => {
-                    Some(datum(&[
-                        image.puppet.as_ref().map_or(0, |puppet| puppet.shared.puppet.bones.len()) as f32
-                    ]))
+                    image.puppet.as_ref().map_or(0, |puppet| puppet.shared.puppet.bones.len())
                 }
-                _ => Some(datum(&[0.0])),
-            },
-            "getAnimationLayerCount" => match &self.layer(layer)?.kind {
-                LayerKind::Image(image) => {
-                    Some(datum(&[image.puppet.as_ref().map_or(0, |puppet| puppet.layers.len()) as f32]))
-                }
-                _ => Some(datum(&[0.0])),
-            },
+                LayerKind::Model(model) => model.shared.model.bones.len(),
+                _ => 0,
+            } as f32])),
+            "getAnimationLayerCount" => {
+                Some(datum(&[
+                    self.layer(layer)?.skeleton().map_or(0, |skeleton| skeleton.layers.len()) as f32
+                ]))
+            }
             "play" | "pause" | "stop" | "isPlaying" => match &mut self.scene.layers.get_mut(index)?.kind {
                 LayerKind::Sound(sound) => Some(match method {
                     "play" => {
@@ -701,39 +783,51 @@ impl Host for SceneHost<'_> {
                 }),
                 _ => None,
             },
+            _ if method.starts_with("animationLayer.") => self.animation_layer_call(index, method, arguments),
             _ => {
                 let action = method.strip_prefix("animation.")?;
                 let name = arguments.first().cloned().unwrap_or(Datum::Null);
-                let playing = self.animation(layer, field, &name)?;
+                let index = self.animation(layer, field, &name)?;
+                let bindings = &mut self.scene.bindings;
+                // What starts, stops or moves an animation does the same to the ones that follow it.
+                let mut control = |action: &mut dyn FnMut(&mut super::bindings::Playing)| {
+                    bindings.control(index, action);
+                    Datum::Null
+                };
+                match action {
+                    "play" => {
+                        return Some(control(&mut |playing| {
+                            // From an end it cannot leave, it starts over at the other one.
+                            if playing.rate >= 0.0 && playing.animation.finished(playing.played) {
+                                playing.played = 0.0;
+                            } else if playing.rate < 0.0 && playing.played <= 0.0 {
+                                playing.played = playing.animation.length;
+                            }
+                            playing.running = true;
+                        }));
+                    }
+                    "pause" => return Some(control(&mut |playing| playing.running = false)),
+                    "stop" => {
+                        return Some(control(&mut |playing| {
+                            playing.running = false;
+                            playing.played = 0.0;
+                            playing.stale = true;
+                        }));
+                    }
+                    "setFrame" => {
+                        let frame = number(1)?;
+                        return Some(control(&mut |playing| {
+                            playing.played = frame.clamp(0.0, playing.animation.length);
+                            playing.stale = true;
+                        }));
+                    }
+                    _ => {}
+                }
+                let playing = bindings.animations.get_mut(index)?;
                 let length = playing.animation.length;
                 Some(match action {
-                    "play" => {
-                        // From an end it cannot leave, it starts over at the other one.
-                        if playing.rate >= 0.0 && playing.animation.finished(playing.played) {
-                            playing.played = 0.0;
-                        } else if playing.rate < 0.0 && playing.played <= 0.0 {
-                            playing.played = length;
-                        }
-                        playing.running = true;
-                        Datum::Null
-                    }
-                    "pause" => {
-                        playing.running = false;
-                        Datum::Null
-                    }
-                    "stop" => {
-                        playing.running = false;
-                        playing.played = 0.0;
-                        playing.stale = true;
-                        Datum::Null
-                    }
                     "isPlaying" => Datum::Bool(playing.running),
                     "getFrame" => datum(&[playing.animation.frame_at(playing.played)]),
-                    "setFrame" => {
-                        playing.played = number(1)?.clamp(0.0, length);
-                        playing.stale = true;
-                        Datum::Null
-                    }
                     "get" => match arguments.get(1) {
                         Some(Datum::Text(what)) => match what.as_str() {
                             "fps" => datum(&[playing.animation.fps]),

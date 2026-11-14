@@ -63,11 +63,13 @@ pub(crate) enum SceneField {
     ShakeAmplitude,
     ShakeRoughness,
     ShakeSpeed,
+    Ambient,
+    Skylight,
 }
 
 impl SceneField {
     /// Every field with its name in the control tree.
-    pub(crate) const ALL: [(&'static str, Self); 11] = [
+    pub(crate) const ALL: [(&'static str, Self); 13] = [
         ("zoom", Self::Zoom),
         ("clear", Self::Clear),
         ("bloom", Self::Bloom),
@@ -79,6 +81,8 @@ impl SceneField {
         ("shake_amplitude", Self::ShakeAmplitude),
         ("shake_roughness", Self::ShakeRoughness),
         ("shake_speed", Self::ShakeSpeed),
+        ("ambient", Self::Ambient),
+        ("skylight", Self::Skylight),
     ];
 
     /// Whether the field is a switch and not a number.
@@ -88,6 +92,21 @@ impl SceneField {
 }
 
 impl Slot {
+    /// What a document calls the field the slot is, among its object's.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::LayerVisible(_) => "visible",
+            Self::LayerAlpha(_) => "alpha",
+            Self::LayerColor(_) => "color",
+            Self::LayerOrigin(_) => "origin",
+            Self::LayerScale(_) => "scale",
+            Self::LayerAngles(_) => "angles",
+            Self::LayerText(_) => "text",
+            Self::LayerVolume(_) => "volume",
+            _ => "",
+        }
+    }
+
     /// Whether the slot holds a switch and not numbers.
     pub(crate) fn is_flag(self) -> bool {
         match self {
@@ -121,6 +140,9 @@ pub(crate) struct Playing {
     pub(crate) effect: Option<usize>,
     /// The value's name, when it is a shader constant.
     pub(crate) name: Option<String>,
+    /// What the value is called among its object's: `origin`, `scale`, a constant's
+    /// name. Animations that follow another name it by this.
+    pub(crate) key: String,
     /// How many frames it has played.
     pub(crate) played: f32,
     /// How fast it plays: 1 is the animation's own speed.
@@ -158,6 +180,10 @@ pub(crate) struct Bindings {
     pub(crate) links: Vec<Binding>,
     /// The current value of every user property.
     pub(crate) properties: HashMap<String, Value>,
+    /// How many lights the scene has: its lit passes are compiled for that many.
+    pub(crate) lights: usize,
+    /// Whether the scene is drawn in a high dynamic range: every pass is compiled for it.
+    pub(crate) hdr: bool,
 }
 
 /// A change a property made, for the scene to apply.
@@ -208,11 +234,52 @@ impl Bindings {
                 layer: self.owner.0,
                 effect: self.owner.1,
                 name: name.map(str::to_owned),
+                key: name.map_or_else(|| slot.key().to_owned(), str::to_owned),
                 played: 0.0,
                 rate: 1.0,
                 running,
                 stale: true,
             });
+        }
+    }
+
+    /// Gives every animation that follows another the start its leader has: one that
+    /// waits for a script waits with it. Run once, when everything is linked.
+    pub(crate) fn settle_followers(&mut self) {
+        for index in 0..self.animations.len() {
+            if let Some(leader) = self.leader(index) {
+                self.animations[index].running = self.animations[leader].running;
+            }
+        }
+    }
+
+    /// The animation that animation `index` follows: of the same layer and effect,
+    /// on the value it names.
+    fn leader(&self, index: usize) -> Option<usize> {
+        let follower = &self.animations[index];
+        let key = follower.animation.follows.as_deref()?;
+        self.animations.iter().position(|leader| {
+            leader.layer == follower.layer && leader.effect == follower.effect && leader.key == key
+        })
+    }
+
+    /// Does `action` to animation `index` and to every animation that follows it, and
+    /// every one that follows those: what a script tells one of them, it tells all.
+    pub(crate) fn control(&mut self, index: usize, action: &mut dyn FnMut(&mut Playing)) {
+        let mut group = vec![index];
+        let mut at = 0;
+        while let Some(&leader) = group.get(at) {
+            for follower in 0..self.animations.len() {
+                if !group.contains(&follower) && self.leader(follower) == Some(leader) {
+                    group.push(follower);
+                }
+            }
+            at += 1;
+        }
+        for index in group {
+            if let Some(playing) = self.animations.get_mut(index) {
+                action(playing);
+            }
         }
     }
 
@@ -385,6 +452,38 @@ mod tests {
         bindings.animate(0.5, &mut changes, &mut events);
         bindings.animate(0.5, &mut changes, &mut events);
         assert_eq!(changes, [Change::Floats(Slot::LayerAlpha(0), vec![0.0])]);
+    }
+
+    #[test]
+    fn an_animation_that_follows_another_waits_for_it_and_does_what_it_does() {
+        let read = |options: &str| {
+            let doc = wepaper_json::parse(&format!(
+                r#"{{"value":"1 1 1","animation":{{"options":{{"fps":10,"length":10,"mode":"single"{options}}},
+                    "c0":[{{"frame":0,"value":0}},{{"frame":10,"value":5}}]}}}}"#
+            ))
+            .unwrap();
+            Dyn::<[f32; 3]>::read(&doc, [1.0; 3])
+        };
+        // The child is linked first, as an object's scale comes before its angles.
+        let mut bindings = Bindings { owner: (4, None), ..Bindings::default() };
+        bindings.link(&read(r#","parent":{"key":"angles"}"#), Slot::LayerScale(4));
+        bindings.link(
+            &read(r#","name":"twirl","startpaused":true,"children":[{"key":"scale"}]"#),
+            Slot::LayerAngles(4),
+        );
+        bindings.owner = (5, None);
+        bindings.link(&read(r#","parent":{"key":"angles"}"#), Slot::LayerScale(5));
+        bindings.settle_followers();
+        assert!(!bindings.animations[0].running, "a child starts as its parent does: paused");
+        assert!(bindings.animations[2].running, "another layer's animation follows nothing here");
+        bindings.control(1, &mut |playing| playing.running = true);
+        assert!(
+            bindings.animations[0].running && bindings.animations[1].running,
+            "playing the parent plays the child"
+        );
+        bindings.control(1, &mut |playing| playing.played = 7.0);
+        assert_eq!(bindings.animations[0].played, 7.0);
+        assert_eq!(bindings.animations[2].played, 0.0);
     }
 
     #[test]

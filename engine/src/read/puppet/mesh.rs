@@ -39,15 +39,29 @@ pub struct Part {
     pub index_count: u32,
 }
 
-/// What the start of the file holds.
+/// A run of triangles drawn with one material: one of the meshes of a model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Surface {
+    /// The material's path.
+    pub material: String,
+    /// Where the run starts in [`Puppet::indices`](super::Puppet::indices).
+    pub first_index: u32,
+    /// How many indices it takes.
+    pub index_count: u32,
+}
+
+/// What the start of the file holds: every mesh, put one after the other.
 pub(super) struct Mesh {
-    pub(super) material: String,
     pub(super) vertices: Vec<PuppetVertex>,
     pub(super) indices: Vec<u32>,
     pub(super) parts: Vec<Part>,
+    pub(super) surfaces: Vec<Surface>,
     /// Whether the vertices carry bones and weights.
     pub(super) skinned: bool,
 }
+
+/// More meshes than this in one file is a number that is not a count.
+const MAX_MESHES: u32 = 4096;
 
 /// What stands between the material's path and the vertices; it changed twice.
 #[derive(Clone, Copy, PartialEq)]
@@ -70,15 +84,50 @@ impl Layout {
     }
 }
 
-/// Reads the file from its `MDLV` header to the end of the triangles and whatever
-/// follows them up to the first section.
+/// Reads the file from its `MDLV` header to the end of the last mesh and whatever
+/// follows it up to the first section.
+///
+/// The header's third number counts the meshes (one for a puppet, one a material for
+/// a model). Each mesh is a material's path and its geometry, as the module's
+/// documentation describes; the next one starts right after the last one's trailer.
 pub(super) fn read(reader: &mut Reader, version: u32) -> Result<Mesh, PuppetError> {
     let flags = reader.u32()?;
-    reader.take(8)?;
-    let material = reader.string()?;
     reader.take(4)?;
-    let start = reader.clone();
+    let count = reader.u32()?;
+    if count == 0 || count > MAX_MESHES {
+        return Err(PuppetError::Corrupt("the number of meshes is not a count"));
+    }
+    let mut mesh = Mesh {
+        vertices: Vec::new(),
+        indices: Vec::new(),
+        parts: Vec::new(),
+        surfaces: Vec::new(),
+        skinned: true,
+    };
+    for index in 0..count {
+        let material = reader.string()?;
+        reader.take(4)?;
+        let last = index + 1 == count;
+        let Mesh { vertices, indices, parts, skinned, .. } = one(reader, flags, version, last)?;
+        let base =
+            u32::try_from(mesh.vertices.len()).map_err(|_| PuppetError::Corrupt("too many vertices"))?;
+        let first_index =
+            u32::try_from(mesh.indices.len()).map_err(|_| PuppetError::Corrupt("too many triangles"))?;
+        mesh.surfaces.push(Surface { material, first_index, index_count: indices.len() as u32 });
+        mesh.parts.extend(
+            parts.into_iter().map(|part| Part { first_index: part.first_index + first_index, ..part }),
+        );
+        mesh.indices.extend(indices.into_iter().map(|i| i + base));
+        mesh.vertices.extend(vertices);
+        // A model whose meshes disagree is drawn without bones.
+        mesh.skinned &= skinned;
+    }
+    Ok(mesh)
+}
 
+/// One mesh's geometry and trailer, from after its material's path.
+fn one(reader: &mut Reader, flags: u32, version: u32, last: bool) -> Result<Mesh, PuppetError> {
+    let start = reader.clone();
     // Versions nobody has shown us may sit on either side of a layout change, so the
     // layout the version suggests is tried first and the others after it.
     let expected = Layout::of(version);
@@ -91,8 +140,8 @@ pub(super) fn read(reader: &mut Reader, version: u32) -> Result<Mesh, PuppetErro
         *reader = start.clone();
         match geometry(reader, flags, layout) {
             Ok((vertices, indices, skinned)) => {
-                let parts = trailer(reader, version);
-                return Ok(Mesh { material, vertices, indices, parts, skinned });
+                let parts = trailer(reader, version, last);
+                return Ok(Mesh { vertices, indices, parts, surfaces: Vec::new(), skinned });
             }
             Err(why) => first_failure = first_failure.or(Some(why)),
         }
@@ -173,12 +222,13 @@ fn geometry(
     Ok((vertices, indices, format & BONES != 0 && format & WEIGHTS != 0))
 }
 
-/// Reads what newer versions put between the triangles and the skeleton, and leaves the
-/// reader at the first section. Returns the parts when the file lists them.
-fn trailer(reader: &mut Reader, version: u32) -> Vec<Part> {
+/// Reads what newer versions put after a mesh's triangles, and leaves the reader at the
+/// next mesh or, after the last, at the first section. Returns the parts when the file
+/// lists them.
+fn trailer(reader: &mut Reader, version: u32, last: bool) -> Vec<Part> {
     let after_triangles = reader.clone();
     let parts = if version >= 21 { parts(reader, version).unwrap_or_default() } else { Vec::new() };
-    if reader.clone().tag().is_none() {
+    if last && reader.clone().tag().is_none() {
         // Not where a section starts: the block was not what we took it for, or the
         // version has one we do not know. The skeleton's header is still findable.
         *reader = after_triangles;

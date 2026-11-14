@@ -171,3 +171,71 @@ fn scalar_and_vector_arguments_get_wrappers() {
     );
     assert!(!text.contains("int wepaper_pow"), "pow has no integer form");
 }
+
+#[test]
+fn the_lighting_a_shader_requires_is_written_in_for_it() {
+    let text = "#include \"common.h\"\n#require LightingV1\nvoid main() { vec3 l = PerformLighting_V1(p, c, n, v, s, f, r, m); }\n";
+    let source = Source::load(Stage::Fragment, text, &include);
+    let definition = source.text.find("vec3 PerformLighting_V1(").expect("the function is defined");
+    assert!(definition < source.text.find("void main").unwrap(), "where the shader asked for it");
+    assert!(!source.text.contains("#require"), "the directive itself is gone");
+    // Without a light count from the scene there is nothing to loop over: no uniforms.
+    let unlit = source.assemble(&Combos::new(), false);
+    assert!(unlit.contains("#define WEPAPER_LIGHTS 0"));
+    let mut combos = Combos::new();
+    combos.insert("WEPAPER_LIGHTS".to_owned(), 2);
+    let lit = source.assemble(&combos, false);
+    assert!(lit.contains("#define WEPAPER_LIGHTS 2\n"));
+    assert!(lit.contains("uniform vec4 g_LightsColorRadius[WEPAPER_LIGHTS];"));
+    assert!(lit.contains("uniform vec4 g_LightsPositionExponent[WEPAPER_LIGHTS];"));
+    assert!(lit.contains("ComputePBRLightShadow(") && lit.contains("ComputePBRLightShadowInfinite("));
+    assert!(lit.contains("isnan("), "a light that is not a number gives none, as HLSL's max() makes it");
+    // Anything else a shader requires is not known: it stays a comment.
+    let other = Source::load(Stage::Fragment, "#require SomethingElse\nvoid main() {}\n", &include);
+    assert!(other.text.contains("// #require SomethingElse"));
+}
+
+#[test]
+fn a_varying_the_stages_declare_differently_takes_the_vertex_stage_type() {
+    let vertex = Source::load(
+        Stage::Vertex,
+        "varying vec4 v_TexCoord;\nvarying vec2 v_Small;\nvarying vec3 v_Same;\nvoid main() { v_TexCoord.xy = a; }\n",
+        &include,
+    );
+    let fragment = Source::load(
+        Stage::Fragment,
+        "varying vec2 v_TexCoord;\nvarying vec4 v_Small;\nvarying vec3 v_Same;\nvoid main() { gl_FragColor = vec4(v_TexCoord, v_Small.zw); }\n",
+        &include,
+    );
+    let fixed = fragment.matching(&vertex);
+    // A wider one is read through its first components, a narrower one is padded with zeros.
+    assert!(
+        fixed.text.contains("varying vec4 v_TexCoord;\n#define v_TexCoord v_TexCoord.xy\n"),
+        "{}",
+        fixed.text
+    );
+    assert!(
+        fixed.text.contains("varying vec2 v_Small;\n#define v_Small vec4(v_Small, 0.0, 0.0)\n"),
+        "{}",
+        fixed.text
+    );
+    assert!(
+        fixed.text.contains("varying vec3 v_Same;\nvarying")
+            || fixed.text.contains("varying vec3 v_Same;\nvoid")
+    );
+    assert!(!fixed.text.contains("#define v_Same"));
+    // Stages that agree come back as they were.
+    assert_eq!(vertex.matching(&vertex).text, vertex.text);
+}
+
+#[test]
+fn a_mask_slot_names_the_combos_of_its_channels() {
+    let text = r#"uniform sampler2D g_Texture2; // {"combo":"PBRMASKS","components":[{"label":"m","combo":"METALLIC_MAP"},{"label":"e","combo":"EMISSIVE_MAP"}]}
+uniform sampler2D g_Texture0; // {"material":"albedo"}
+"#;
+    let declared = Source::load(Stage::Fragment, text, &include).declared;
+    let mask = declared.samplers.iter().find(|s| s.slot == 2).unwrap();
+    assert_eq!(mask.combo.as_deref(), Some("PBRMASKS"));
+    assert_eq!(mask.components, ["METALLIC_MAP", "EMISSIVE_MAP"]);
+    assert!(declared.samplers.iter().find(|s| s.slot == 0).unwrap().components.is_empty());
+}

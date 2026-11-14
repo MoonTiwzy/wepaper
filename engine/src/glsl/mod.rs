@@ -13,10 +13,12 @@
 
 mod declared;
 mod fixups;
+mod lighting;
 mod prelude;
 mod repair;
 mod source;
 mod typed;
+mod varyings;
 
 pub use declared::{ComboDecl, Declared, SamplerDecl, UniformDecl};
 

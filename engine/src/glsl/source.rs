@@ -97,6 +97,10 @@ fn inline(
                     }
                 }
             }
+        } else if let Some(text) =
+            directive.strip_prefix("#require").and_then(|name| super::lighting::required(name.trim()))
+        {
+            out.push_str(text);
         } else if directive.starts_with("#require")
             || directive.starts_with("#version")
             || directive.starts_with("precision ")

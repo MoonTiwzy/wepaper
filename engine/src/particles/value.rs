@@ -17,7 +17,7 @@ pub(crate) fn plain(doc: &Value) -> &Value {
 
 /// The numbers a field holds: a number, or a string such as `"1 0.5 0"`.
 /// Anything that is not a finite number reads as absent.
-fn numbers(doc: &Value) -> ([f32; 3], usize) {
+pub(crate) fn numbers(doc: &Value) -> ([f32; 3], usize) {
     let mut out = [0.0f32; 3];
     let mut count = 0;
     match plain(doc) {

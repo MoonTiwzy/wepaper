@@ -1,7 +1,25 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
+- 3D scenes. A scene with a perspective camera is seen through it, or through its camera
+  object, which parents, timelines and scripts move; parallax and shake move it too. Its
+  model objects are drawn with their materials and Wallpaper Engine's lit shaders: several
+  meshes a model, skeletons with their animation layers, objects attached to a model's
+  bones, point and directional lights, the scene's ambient and sky light, reflections. Such
+  a scene has a depth buffer; no other scene does.
+- Scenes with `hdr` are drawn in half floats from the first layer to the last, with the
+  high dynamic range bloom, and brought into the screen's range at the end. A scene
+  without `hdr` has no float buffer and no extra pass.
+- Shaders that ask for Wallpaper Engine's lighting compile; so do workshop shaders whose
+  two stages declare a varying with different types. Two wallpapers of the library show
+  an effect where they showed a white square.
+- A material's constant can follow a user property, as a layer's values can.
+- An animation that follows another (the editor's linked timelines) starts, stops and
+  seeks with it, and a timeline's events reach every script of its layer.
+- Particles take their colour from a list when their system gives one.
+- Scripts play, pause, stop and seek the animation layers of puppets and models, and read
+  and set their rate, blend and switch.
 - Videos loop without a seam. An MP4 or MOV file plays as a tape of itself: the end of one
   copy runs into the start of the next with no seek, where the picture used to stand still
   for a quarter of a second every time round. Other containers still seek at their end.

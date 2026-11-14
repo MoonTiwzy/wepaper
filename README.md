@@ -41,11 +41,12 @@ wallpaper on screen does not use. Where that comes from is in
 | | |
 |---|---|
 | **Scenes** | image layers with their materials and blend modes, effect chains, compose and fullscreen layers, text, particles, puppet warp, sprite sheets, video textures, sound, camera parallax and shake, bloom, keyframe animations, audio-reactive shaders, SceneScript, user properties |
+| **3D scenes** | the perspective camera and camera objects, 3D models with their materials, skeletons and animations, lights, reflections, the high dynamic range pipeline with its bloom |
 | **Videos** | any video libmpv plays, with cover / contain / stretch, sound, and a frame drawn only when the video has a new one |
 | **Web** | pages with Wallpaper Engine's JavaScript API, through the bundled [`web` plugin](plugins/web) |
 | **Presets** | a preset plays its wallpaper with its values |
 
-What is not there yet (3D model objects, lights, the HDR pipeline) and how every feature
+What is not there yet (shadows, fog, camera paths, among others) and how every feature
 was checked is in [docs/compatibility.md](docs/compatibility.md). `wepaper check` tells you
 about your own library:
 
@@ -107,7 +108,7 @@ outputs/<name>/      size, scale, paused, fill, fps
 outputs/<name>/wallpaper/
     path, kind, title
     properties/<name>                        the user properties
-    scene/                                   zoom, clear, bloom, parallax..., shake...
+    scene/                                   zoom, clear, bloom, parallax..., shake..., ambient, skylight
     layers/<id>/                             visible, origin, scale, angles, alpha, color, text, volume
     layers/<id>/constants/<name>             the constants of the layer's shader
     layers/<id>/effects/<n>/visible

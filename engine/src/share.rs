@@ -45,6 +45,14 @@ impl SharedPuppet {
     }
 }
 
+/// A 3D model, read once and on the GPU once however many objects show it.
+pub struct SharedModel {
+    /// The model as read: its meshes, bones and animations.
+    pub model: Puppet,
+    /// All its meshes in one, drawn a surface at a time.
+    pub mesh: Mesh,
+}
+
 /// What a texture name leads to.
 pub enum Loaded {
     /// A picture on the GPU.
@@ -73,6 +81,7 @@ pub struct Share {
     /// name is not enough, every wallpaper carries its own copies of the effects it
     /// uses and an author may have changed his. Emptied once the wallpaper is loaded.
     shaders: HashMap<(u64, u64), Option<Rc<ShaderPair>>>,
+    models: HashMap<u64, Weak<SharedModel>>,
     white: Option<Rc<SharedTexture>>,
     /// Texture sides above this are met by dropping the largest levels.
     pub max_texture_side: u32,
@@ -92,6 +101,7 @@ impl Share {
             textures: HashMap::new(),
             programs: HashMap::new(),
             puppets: HashMap::new(),
+            models: HashMap::new(),
             shaders: HashMap::new(),
             white: None,
             fonts: HashMap::new(),
@@ -184,6 +194,48 @@ impl Share {
         Ok(puppet)
     }
 
+    /// The 3D model at `path`, read and put on the GPU once however many objects show it.
+    ///
+    /// Its vertices go up as they are: position, texture coordinate, normal and tangent
+    /// for every model, the bones and their weights only for one that is skinned.
+    pub fn model(&mut self, files: &Files, path: &str) -> Result<Rc<SharedModel>, String> {
+        let located = files.locate(path).ok_or_else(|| format!("model {path} is not in the wallpaper"))?;
+        if let Some(model) = self.models.get(&located.key).and_then(Weak::upgrade) {
+            return Ok(model);
+        }
+        let bytes = files.read(path).map_err(|e| e.to_string())?;
+        let model = Puppet::parse(&bytes).map_err(|e| format!("{path}: {e}"))?;
+        let skinned = model.is_skinned();
+        let vertices: Vec<f32> = model
+            .vertices
+            .iter()
+            .flat_map(|v| {
+                let mut out = Vec::with_capacity(16);
+                out.extend_from_slice(&v.position);
+                out.extend_from_slice(&v.uv);
+                out.extend_from_slice(&v.normal);
+                out.extend_from_slice(&v.tangent);
+                if skinned {
+                    out.extend_from_slice(&v.weights);
+                }
+                out
+            })
+            .collect();
+        let mut layout = vec![(0, 3), (1, 2), (9, 3), (10, 4)];
+        if skinned {
+            layout.push((8, 4));
+        }
+        let mut mesh = Mesh::new_indexed(&self.gl, &layout, &vertices, &model.indices)
+            .map_err(|e| format!("{path}: {e}"))?;
+        if skinned {
+            let bones: Vec<[u32; 4]> = model.vertices.iter().map(|v| v.bones).collect();
+            mesh = mesh.with_integers(7, &bones).map_err(|e| format!("{path}: {e}"))?;
+        }
+        let model = Rc::new(SharedModel { model, mesh });
+        self.models.insert(located.key, Rc::downgrade(&model));
+        Ok(model)
+    }
+
     /// Plays the video packed in a texture: unpacked once into the cache, then
     /// played from there by the one decoder everybody shares.
     fn video(&mut self, file: &TextureFile, bytes: &[u8], key: u64) -> Result<SharedVideo, String> {
@@ -260,6 +312,8 @@ impl Share {
         };
         let pair =
             load(Stage::Vertex, "vert").zip(load(Stage::Fragment, "frag")).map(|(vertex, fragment)| {
+                // HLSL lets the stages disagree on a varying's type; GLSL does not.
+                let fragment = fragment.matching(&vertex);
                 let mut declared = fragment.declared.clone();
                 declared.merge(vertex.declared.clone());
                 Rc::new(ShaderPair { vertex, fragment, declared })
@@ -353,6 +407,7 @@ impl Share {
         self.textures.retain(|_, texture| texture.strong_count() > 0);
         self.programs.retain(|_, program| program.strong_count() > 0);
         self.puppets.retain(|_, puppet| puppet.strong_count() > 0);
+        self.models.retain(|_, model| model.strong_count() > 0);
         // Shader sources are for compiling; what is compiled does not need them.
         self.shaders = HashMap::new();
         // A font nobody writes with is megabytes of file.

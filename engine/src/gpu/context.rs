@@ -71,12 +71,24 @@ pub enum Blend {
     Premultiplied,
 }
 
+/// Whether draws test against depth and write it. Only scenes with a perspective
+/// camera ever turn either on; everything else draws with GL's default, both off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Depth {
+    /// Draw only where nothing nearer was drawn.
+    pub test: bool,
+    /// Keep how near what is drawn is.
+    pub write: bool,
+}
+
 #[derive(Default)]
 struct State {
     program: Option<glow::Program>,
     textures: [Option<glow::Texture>; 16],
     unit: u32,
     blend: Option<Blend>,
+    depth: Option<Depth>,
+    cull: Option<bool>,
     framebuffer: Option<Option<glow::Framebuffer>>,
     viewport: (i32, i32),
 }
@@ -346,6 +358,60 @@ impl Gl {
                 }
             }
         }
+    }
+
+    /// Sets how draws use depth.
+    pub fn set_depth(&self, depth: Depth) {
+        let mut state = self.0.state.borrow_mut();
+        // GL starts with both off: a context nobody asked for depth stays untouched.
+        if state.depth.unwrap_or_default() == depth {
+            return;
+        }
+        state.depth = Some(depth);
+        let gl = &self.0.raw;
+        // SAFETY: plain state changes on the current context.
+        unsafe {
+            if depth.test || depth.write {
+                // Writing needs the test on; always passing it is "write only".
+                gl.enable(glow::DEPTH_TEST);
+                gl.depth_func(if depth.test { glow::LEQUAL } else { glow::ALWAYS });
+            } else {
+                gl.disable(glow::DEPTH_TEST);
+            }
+            gl.depth_mask(depth.write);
+        }
+    }
+
+    /// Sets whether triangles facing away are skipped.
+    pub fn set_cull(&self, cull: bool) {
+        let mut state = self.0.state.borrow_mut();
+        if state.cull.unwrap_or(false) == cull {
+            return;
+        }
+        state.cull = Some(cull);
+        // SAFETY: plain state changes on the current context.
+        unsafe {
+            if cull {
+                self.0.raw.enable(glow::CULL_FACE);
+                self.0.raw.cull_face(glow::BACK);
+            } else {
+                self.0.raw.disable(glow::CULL_FACE);
+            }
+        }
+    }
+
+    /// Fills whatever is bound with `color` and resets its depth to the farthest.
+    pub fn clear_with_depth(&self, color: [f32; 4]) {
+        // Depth is only cleared where it may be written.
+        let depth = self.0.state.borrow().depth.unwrap_or_default();
+        self.set_depth(Depth { test: depth.test, write: true });
+        // SAFETY: plain state and a clear on the bound framebuffer.
+        unsafe {
+            self.0.raw.clear_color(color[0], color[1], color[2], color[3]);
+            self.0.raw.clear_depth_f32(1.0);
+            self.0.raw.clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        }
+        self.set_depth(depth);
     }
 
     /// Directs drawing at `framebuffer` (`None`: the current surface) with a viewport of `size`.

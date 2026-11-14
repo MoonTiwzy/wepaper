@@ -31,6 +31,9 @@ pub struct SamplerDecl {
     pub default: Option<String>,
     /// The combo that is switched on when the material binds a texture here.
     pub combo: Option<String>,
+    /// The combos of what the texture's channels hold, for a mask that holds several
+    /// things (metallic, roughness, reflection, emission): switched on with it.
+    pub components: Vec<String>,
 }
 
 /// Everything declared in a shader's comments, both stages merged.
@@ -80,6 +83,11 @@ impl Declared {
                     slot,
                     default: doc.get("default").as_str().filter(|s| !s.is_empty()).map(str::to_owned),
                     combo: doc.get("combo").as_str().map(str::to_owned),
+                    components: doc
+                        .get("components")
+                        .items()
+                        .filter_map(|component| component.get("combo").as_str().map(str::to_owned))
+                        .collect(),
                 });
             } else {
                 declared.uniforms.push(UniformDecl {

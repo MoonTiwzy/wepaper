@@ -218,7 +218,11 @@ fn trailer(reader: &mut Reader, version: u32, animation: &mut Animation) -> Resu
         5 => 29,
         _ => 30,
     };
-    if reader.take(unknown)?.iter().any(|byte| *byte != 0) {
+    let rest = reader.take(unknown)?;
+    // In version 6, bytes 1 to 24 are six floats: the box the animation moves the mesh
+    // in, zero in a puppet and not in a 3D model.
+    let bounds = if version >= 6 { 1..25 } else { 0..0 };
+    if rest.iter().enumerate().any(|(at, byte)| *byte != 0 && !bounds.contains(&at)) {
         return Err(PuppetError::Corrupt("an animation ends with data this reader does not know"));
     }
     Ok(())

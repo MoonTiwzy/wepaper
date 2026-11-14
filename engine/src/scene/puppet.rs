@@ -1,9 +1,8 @@
 //! Puppet layers: an image drawn on a mesh that bones bend.
 //!
 //! The puppet and its mesh are shared ([`crate::share::SharedPuppet`]); what a layer
-//! owns is where each of its animation layers is in its animation, and the bones'
-//! matrices of this frame, which live in the scene's value table like every other
-//! value a shader is fed.
+//! owns is its [`Skeleton`]: where each of its animation layers is in its animation,
+//! and the bones' matrices of this frame.
 
 use std::rc::Rc;
 
@@ -11,24 +10,12 @@ use crate::Engine;
 use crate::doc::MaterialPass;
 use crate::math::Mat4;
 use crate::read::Files;
-use crate::read::puppet::{LayerSpec, PlayingLayer};
+use crate::read::puppet::LayerSpec;
 use crate::share::SharedPuppet;
 
-use super::bindings::{Bindings, PuppetField, Slot};
+use super::bindings::Bindings;
 use super::shade::{PassInput, Shade, TextureChoice};
-
-/// One of the puppet's animation layers as it plays.
-pub(crate) struct AnimationLayer {
-    pub(crate) spec: LayerSpec,
-    /// How fast it plays: 1 is the animation's own speed.
-    pub(crate) rate: f32,
-    /// How much of it shows.
-    pub(crate) blend: f32,
-    pub(crate) visible: bool,
-    /// Where it is in its animation, in seconds: the time played, each stretch at
-    /// the rate it had.
-    pub(crate) clock: f32,
-}
+use super::skeleton::Skeleton;
 
 /// What an image layer has when it is a puppet.
 ///
@@ -42,14 +29,9 @@ pub(crate) struct PuppetState {
     pub(crate) direct: Shade,
     /// The layer's finished buffer, on the mesh.
     pub(crate) warp: Shade,
-    pub(crate) layers: Vec<AnimationLayer>,
-    /// The slot of the value table that holds `g_Bones`.
-    bones: usize,
-    /// The slot that holds `g_BonesAlpha`, when the puppet fades bones.
-    alpha: Option<usize>,
+    pub(crate) skeleton: Skeleton,
     /// Where the mesh's centre is from the layer's origin.
     pub(crate) offset: [f32; 2],
-    playing: Vec<PlayingLayer>,
 }
 
 impl PuppetState {
@@ -66,23 +48,9 @@ impl PuppetState {
         index: usize,
     ) -> Result<Self, String> {
         let puppet = &shared.puppet;
-        let mut rest = Vec::new();
-        puppet.pose(&[], &mut rest);
-        let bones = bindings.value(rest);
-        let alpha = puppet.fades_bones().then(|| bindings.value(vec![1.0; puppet.bones.len()]));
-
+        let mut skeleton = Skeleton::new(bindings, puppet);
         let mut combos = pass.combos.clone();
-        let mut slots = Vec::new();
-        if puppet.is_skinned() {
-            combos.insert("SKINNING".to_owned(), 1);
-            combos.insert("BONECOUNT".to_owned(), puppet.bones.len() as i32);
-            slots.push(("g_Bones", bones));
-            // The shader asks whether this one is defined at all: only when it is needed.
-            if let Some(alpha) = alpha {
-                combos.insert("SKINNING_ALPHA".to_owned(), 1);
-                slots.push(("g_BonesAlpha", alpha));
-            }
-        }
+        let slots = skeleton.inputs(puppet, &mut combos);
         let from_texture = super::build::choices(&pass.textures);
         let mut from_buffer = from_texture.clone();
         match from_buffer.first_mut() {
@@ -107,55 +75,13 @@ impl PuppetState {
         };
         let direct = compile(&from_texture)?;
         let warp = compile(&from_buffer)?;
-
-        let layers = specs
-            .into_iter()
-            .enumerate()
-            .map(|(layer, spec)| {
-                bindings.link(&spec.rate, Slot::Puppet(index, layer, PuppetField::Rate));
-                bindings.link(&spec.blend, Slot::Puppet(index, layer, PuppetField::Blend));
-                bindings.link(&spec.visible, Slot::Puppet(index, layer, PuppetField::Visible));
-                AnimationLayer {
-                    rate: spec.rate.value,
-                    blend: spec.blend.value,
-                    visible: spec.visible.value,
-                    clock: 0.0,
-                    spec,
-                }
-            })
-            .collect();
-        Ok(Self { shared, direct, warp, layers, bones, alpha, offset: [0.0, 0.0], playing: Vec::new() })
-    }
-
-    /// Whether the mesh follows bones; one that does not only replaces the quad.
-    pub(crate) fn skinned(&self) -> bool {
-        self.shared.puppet.is_skinned()
+        skeleton.play(bindings, specs, index);
+        Ok(Self { shared, direct, warp, skeleton, offset: [0.0, 0.0] })
     }
 
     /// Plays the animation layers on by `seconds` and writes this frame's bones.
     pub(crate) fn update(&mut self, seconds: f32, values: &mut [Vec<f32>]) {
-        if !self.skinned() {
-            return;
-        }
-        self.playing.clear();
-        for layer in &mut self.layers {
-            layer.clock += seconds * layer.rate;
-            if layer.visible {
-                self.playing.push(PlayingLayer {
-                    animation: layer.spec.animation,
-                    time: layer.clock,
-                    blend: layer.blend,
-                    additive: layer.spec.additive,
-                });
-            }
-        }
-        let puppet = &self.shared.puppet;
-        if let Some(bones) = values.get_mut(self.bones) {
-            puppet.pose(&self.playing, bones);
-        }
-        if let Some(alpha) = self.alpha.and_then(|slot| values.get_mut(slot)) {
-            puppet.bone_alpha(&self.playing, alpha);
-        }
+        self.skeleton.update(&self.shared.puppet, seconds, values);
     }
 
     /// The matrix that moves the mesh from its own centre to where the layer's origin wants it.

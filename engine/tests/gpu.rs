@@ -1,7 +1,7 @@
 //! The GPU layer on a headless context. Skipped on machines where EGL gives none.
 
 use wepaper_engine::gpu::{
-    Blend, Context, Mesh, Program, Sampling, Target, TargetPool, Texture, TextureFormat,
+    Blend, Context, Depth, Mesh, Program, Sampling, Target, TargetPool, Texture, TextureFormat,
 };
 
 fn context() -> Option<Context> {
@@ -178,4 +178,70 @@ fn memory_stats_follow_allocations() {
     );
     drop(texture);
     assert_eq!(gl.memory().textures, before.textures);
+}
+
+#[test]
+fn a_target_with_depth_keeps_what_is_nearer() {
+    let Some(context) = context() else { return };
+    let gl = context.gl();
+    let mut pool = TargetPool::new(gl);
+    let before = gl.memory().targets;
+    let target = pool.take_with_depth(4, 4, TextureFormat::Rgba8).unwrap();
+    assert_eq!(gl.memory().targets - before, 2 * 4 * 4 * 4, "four bytes a pixel of colour and four of depth");
+    let flat = pool.take(4, 4, TextureFormat::Rgba8).unwrap();
+    assert_ne!(flat.framebuffer(), target.framebuffer(), "a target without depth is another target");
+    target.bind();
+    gl.clear_with_depth([0.0; 4]);
+    gl.set_depth(Depth { test: true, write: true });
+    gl.set_blend(Blend::None);
+    const SOLID: &str = "#version 330 core\nin vec3 a_Position;\nuniform float g_Z;\nvoid main() { gl_Position = vec4(a_Position.xy, g_Z, 1.0); }\n";
+    const PAINT: &str =
+        "#version 330 core\nout vec4 color;\nuniform vec4 g_Tint;\nvoid main() { color = g_Tint; }\n";
+    let program = Program::link(gl, SOLID, PAINT).unwrap();
+    program.bind();
+    // Two triangles with 32-bit indices, drawn one at a time from the same mesh.
+    let quad = Mesh::new_indexed(
+        gl,
+        &[(0, 3)],
+        &[-1.0, -1.0, 0.0, 1.0, -1.0, 0.0, -1.0, 1.0, 0.0, 1.0, 1.0, 0.0],
+        &[0u32, 1, 2, 2, 1, 3],
+    )
+    .unwrap();
+    let paint = |z: f32, tint: [f32; 4]| {
+        program.set(program.uniform("g_Z").unwrap(), &[z]);
+        program.set(program.uniform("g_Tint").unwrap(), &tint);
+        quad.draw_range(0, 3);
+        quad.draw_range(3, 3);
+    };
+    paint(0.5, [1.0, 0.0, 0.0, 1.0]);
+    paint(0.9, [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(&target.read_rgba()[..4], &[255, 0, 0, 255], "what is further away is hidden");
+    target.bind();
+    paint(-0.5, [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(&target.read_rgba()[..4], &[0, 0, 255, 255], "what is nearer is drawn over");
+    gl.set_depth(Depth { test: false, write: false });
+    pool.give(target);
+    pool.give(flat);
+    pool.trim();
+    assert_eq!(gl.memory().targets, before, "the depth buffer is freed with its target");
+}
+
+#[test]
+fn a_mipmapped_target_has_its_smaller_levels_made_from_what_was_drawn() {
+    let Some(context) = context() else { return };
+    let gl = context.gl();
+    let mut pool = TargetPool::new(gl);
+    let before = gl.memory().targets;
+    let target = pool.take_mipmapped(8, 4, TextureFormat::Rgba8).unwrap();
+    assert_eq!(target.levels(), 4, "8x4, 4x2, 2x1 and 1x1");
+    assert_eq!(gl.memory().targets - before, (8 * 4 + 4 * 2 + 2 + 1) * 4);
+    let plain = pool.take(8, 4, TextureFormat::Rgba8).unwrap();
+    assert_eq!(plain.levels(), 1);
+    assert_ne!(plain.framebuffer(), target.framebuffer(), "a mipmapped target is another target");
+    target.clear([0.0, 1.0, 0.0, 1.0]);
+    target.generate_mipmaps();
+    pool.give(target);
+    pool.give(plain);
+    pool.trim();
+    assert_eq!(gl.memory().targets, before);
 }

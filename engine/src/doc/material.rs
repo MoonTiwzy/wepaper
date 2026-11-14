@@ -68,14 +68,34 @@ impl MaterialDoc {
     pub fn parse(doc: &Value) -> Self {
         Self { passes: doc.get("passes").items().map(MaterialPass::parse).collect() }
     }
+
+    /// Reads the material of a 3D model's mesh. What it leaves out is what a solid
+    /// object wants: drawn opaque, front faces only, tested against and written into
+    /// depth. A flat layer's material reads the other way round.
+    pub fn parse_model(doc: &Value) -> Self {
+        Self { passes: doc.get("passes").items().map(|pass| MaterialPass::read(pass, true)).collect() }
+    }
 }
 
 impl MaterialPass {
     /// Reads one pass.
     pub fn parse(doc: &Value) -> Self {
+        Self::read(doc, false)
+    }
+
+    fn read(doc: &Value, solid: bool) -> Self {
+        let switch = |key: &str, on: &str, off: &str| match doc.get(key).as_str() {
+            Some(value) if value == off => false,
+            Some(value) => value == on || on.is_empty(),
+            None => solid,
+        };
         Self {
             shader: doc.get("shader").as_str().unwrap_or("").to_owned(),
-            blending: Blending::from_name(doc.get("blending").as_str().unwrap_or("translucent")),
+            blending: Blending::from_name(doc.get("blending").as_str().unwrap_or(if solid {
+                "normal"
+            } else {
+                "translucent"
+            })),
             textures: texture_slots(doc.get("textures")),
             combos: combos(doc.get("combos")),
             constants: doc
@@ -83,9 +103,9 @@ impl MaterialPass {
                 .members()
                 .map(|(k, v)| (k.to_owned(), v.clone()))
                 .collect(),
-            cull: doc.get("cullmode").as_str() == Some("normal"),
-            depth_test: doc.get("depthtest").as_str().is_some_and(|v| v != "disabled"),
-            depth_write: doc.get("depthwrite").as_str().is_some_and(|v| v != "disabled"),
+            cull: switch("cullmode", "normal", "nocull"),
+            depth_test: switch("depthtest", "", "disabled"),
+            depth_write: switch("depthwrite", "", "disabled"),
         }
     }
 }

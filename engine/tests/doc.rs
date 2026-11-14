@@ -1,7 +1,8 @@
 //! Documents: typed values out of loosely typed JSON.
 
 use wepaper_engine::doc::{
-    Alignment, Blending, Dyn, EffectDoc, Kind, MaterialDoc, ObjectKind, Project, PropertyKind, Scene,
+    Alignment, Blending, Dyn, EffectDoc, Kind, LightKind, MaterialDoc, ObjectKind, Project, PropertyKind,
+    Scene,
 };
 use wepaper_json::parse;
 
@@ -61,8 +62,94 @@ fn image_object_defaults() {
     assert!(
         matches!(&scene.objects[3].kind, ObjectKind::Sound(s) if s.volume.value == 0.5 && s.mode == "loop")
     );
-    assert!(matches!(scene.objects[4].kind, ObjectKind::Unsupported("light")));
+    assert!(matches!(&scene.objects[4].kind, ObjectKind::Light(light) if light.kind == LightKind::Point));
     assert!(matches!(scene.objects[5].kind, ObjectKind::Group));
+}
+
+#[test]
+fn a_perspective_scene_with_models_and_lights() {
+    let scene = Scene::parse(
+        &parse(r#"{"camera": {"center": "0 0.5 6", "eye": "0 0.5 7", "up": "0 1 0"},
+                   "general": {"orthogonalprojection": null, "fov": 35, "nearz": 0.1, "farz": 1000,
+                               "ambientcolor": "0.75 0.75 0.75", "skylightcolor": {"user": "sky", "value": "0.6 0.6 0.6"},
+                               "hdr": true, "bloomhdrstrength": 0.8, "bloomhdrthreshold": 0.62, "bloomhdrfeather": 0.4,
+                               "bloomhdrscatter": 3.0, "bloomhdriterations": 8, "bloomtint": "1 0.5 0.25"},
+                   "objects": [
+                     {"id": 23, "name": "Main Light", "light": "ldirectional", "color": "1 1 1", "intensity": 1.25,
+                      "radius": 15.65, "exponent": 2.0, "castshadow": true, "angles": "0 0.9 -2.25"},
+                     {"id": 24, "light": "point", "color": "0 0.5 0", "intensity": {"script": "x", "value": 6}, "radius": 1000},
+                     {"id": 25, "light": "spot", "radius": 3, "innercone": 20, "outercone": 40},
+                     {"id": 140, "name": "mario", "model": "models/mario/mario.mdl", "scale": "0.012 0.012 0.012",
+                      "animationlayers": [{"animation": 139, "name": "Idle", "rate": 1.0}]},
+                     {"id": 406, "name": "head", "model": "models/head/head.mdl", "parent": 140, "attachment": "Arm"},
+                     {"id": 97, "name": "Cam", "camera": "default", "fov": 25.0, "zoom": 1.5, "origin": "0 3.25 13",
+                      "angles": "-0.24 0 0", "path": "scripts/camera_paths_97.json", "queuemode": "random"}]}"#)
+            .unwrap(),
+    );
+    let general = &scene.general;
+    assert_eq!(general.orthogonal, None);
+    assert_eq!((general.fov.value, general.near, general.far), (35.0, 0.1, 1000.0));
+    assert_eq!(general.ambient.value, [0.75; 3]);
+    assert_eq!(general.skylight.value, [0.6; 3]);
+    assert!(general.skylight.user.is_some(), "the sky's colour can follow a property");
+    assert!(general.hdr);
+    assert_eq!(
+        (
+            general.bloom_hdr.strength.value,
+            general.bloom_hdr.threshold.value,
+            general.bloom_hdr.feather,
+            general.bloom_hdr.scatter,
+            general.bloom_hdr.iterations
+        ),
+        (0.8, 0.62, 0.4, 3.0, 8)
+    );
+    assert_eq!(general.bloom_hdr.tint, [1.0, 0.5, 0.25]);
+    assert_eq!((scene.eye, scene.center), ([0.0, 0.5, 7.0], [0.0, 0.5, 6.0]));
+
+    let ObjectKind::Light(sun) = &scene.objects[0].kind else { panic!("not a light") };
+    assert_eq!(sun.kind, LightKind::Directional, "the editor writes `ldirectional`");
+    assert_eq!(
+        (sun.color.value, sun.intensity.value, sun.radius, sun.exponent),
+        ([1.0; 3], 1.25, 15.65, 2.0)
+    );
+    assert!(sun.cast_shadow);
+    let ObjectKind::Light(lamp) = &scene.objects[1].kind else { panic!("not a light") };
+    assert_eq!((lamp.kind, lamp.intensity.value, lamp.radius), (LightKind::Point, 6.0, 1000.0));
+    assert!(lamp.intensity.is_driven(), "a script drives the intensity");
+    let ObjectKind::Light(spot) = &scene.objects[2].kind else { panic!("not a light") };
+    assert_eq!((spot.kind, spot.inner_cone, spot.outer_cone), (LightKind::Spot, 20.0, 40.0));
+
+    let ObjectKind::Model(mario) = &scene.objects[3].kind else { panic!("not a model") };
+    assert_eq!(mario.file, "models/mario/mario.mdl");
+    assert_eq!(mario.animation_layers.items().count(), 1);
+    assert_eq!(scene.objects[3].attachment, None);
+    assert!(matches!(scene.objects[4].kind, ObjectKind::Model(_)));
+    assert_eq!(scene.objects[4].attachment.as_deref(), Some("Arm"), "it hangs from its parent's arm");
+
+    let ObjectKind::Camera(camera) = &scene.objects[5].kind else { panic!("not a camera") };
+    assert_eq!((camera.name.as_str(), camera.fov, camera.zoom), ("default", 25.0, 1.5));
+    assert_eq!(camera.path.as_deref(), Some("scripts/camera_paths_97.json"));
+    assert_eq!(scene.objects[5].origin.value, [0.0, 3.25, 13.0]);
+}
+
+#[test]
+fn model_materials_are_solid_and_depth_tested_unless_they_say_otherwise() {
+    let plain = MaterialDoc::parse_model(
+        &parse(r#"{"passes": [{"shader": "generic4", "textures": ["models/a"]}]}"#).unwrap(),
+    );
+    let pass = &plain.passes[0];
+    assert_eq!(pass.blending, Blending::Normal);
+    assert!(pass.depth_test && pass.depth_write && pass.cull);
+    let said = MaterialDoc::parse_model(
+        &parse(r#"{"passes": [{"shader": "generic4", "blending": "translucent", "depthwrite": "disabled", "cullmode": "nocull"}]}"#)
+            .unwrap(),
+    );
+    let pass = &said.passes[0];
+    assert_eq!(pass.blending, Blending::Translucent);
+    assert!(pass.depth_test && !pass.depth_write && !pass.cull);
+    // An image's material keeps the defaults of a flat layer.
+    let image = MaterialDoc::parse(&parse(r#"{"passes": [{"shader": "genericimage2"}]}"#).unwrap());
+    assert!(!image.passes[0].depth_test && !image.passes[0].cull);
 }
 
 #[test]

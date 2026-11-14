@@ -48,6 +48,9 @@ pub struct Animation {
     pub relative: bool,
     /// What the timeline tells scripts on its way: the frame, and the event's name.
     pub events: Vec<(f32, String)>,
+    /// The value of the same object whose animation this one plays along with
+    /// (`origin`, `scale`, a shader constant's name), when it is one of its children.
+    pub follows: Option<String>,
 }
 
 impl Animation {
@@ -97,6 +100,7 @@ impl Animation {
                     Some((number(event.get("frame"), 0.0), event.get("name").as_str()?.to_owned()))
                 })
                 .collect(),
+            follows: options.get("parent").get("key").as_str().map(str::to_owned),
         })
     }
 

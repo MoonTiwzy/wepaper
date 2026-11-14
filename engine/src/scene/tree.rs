@@ -73,6 +73,10 @@ impl SceneInstance {
                         .collect();
                     node.insert("effects", Value::Object(effects));
                 }
+                LayerKind::Model(model) => {
+                    node.insert("kind", Value::from("model"));
+                    node.insert("constants", constants(model.passes(), &self.bindings.values));
+                }
                 LayerKind::Sound(sound) => {
                     node.insert("kind", Value::from("sound"));
                     node.insert("volume", Value::from(sound.volume));
@@ -141,7 +145,10 @@ impl SceneInstance {
         match field {
             SceneField::Zoom => Value::from(self.zoom),
             SceneField::Clear => vector(&self.clear),
-            SceneField::Bloom => Value::from(self.bloom.as_ref().is_some_and(|bloom| bloom.enabled)),
+            SceneField::Bloom => Value::from(
+                self.bloom.as_ref().is_some_and(|bloom| bloom.enabled)
+                    || self.hdr_bloom.as_ref().is_some_and(|bloom| bloom.enabled),
+            ),
             SceneField::Parallax => Value::from(self.parallax.enabled),
             SceneField::ParallaxAmount => Value::from(self.parallax.amount),
             SceneField::ParallaxDelay => Value::from(self.parallax.delay),
@@ -150,6 +157,8 @@ impl SceneInstance {
             SceneField::ShakeAmplitude => Value::from(self.shake.amplitude),
             SceneField::ShakeRoughness => Value::from(self.shake.roughness),
             SceneField::ShakeSpeed => Value::from(self.shake.speed),
+            SceneField::Ambient => vector(&self.ambient),
+            SceneField::Skylight => vector(&self.skylight),
         }
     }
 
