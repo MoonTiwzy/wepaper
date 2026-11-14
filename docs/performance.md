@@ -68,7 +68,7 @@ Unplugging the second output gives its 32 MiB back at once.
 
 A flat scene pays nothing for either: no depth buffer, no float buffer, no extra pass, no
 light uniforms, and its shaders compile as they did. A 3D scene draws into a buffer of the
-output's size with a depth buffer (eight bytes a pixel in all, about 16 MiB at 1440p), and
+output's size with a depth buffer (eight bytes a pixel in all, about 28 MiB at 1440p), and
 a scene that reflects copies what is behind its first reflecting layer once a frame, at
 half the size. A scene with `hdr` keeps its frame and its layers' effect buffers in half
 floats, twice the memory of bytes, and its bloom takes a chain of smaller buffers, a third
