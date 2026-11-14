@@ -107,15 +107,39 @@ impl Shade {
 
     /// Sets every constant called `name`; whether there was one.
     pub(crate) fn set_constant(&mut self, name: &str, value: &Value, values: &mut [Vec<f32>]) -> bool {
+        self.write_constant(name, values, |count| value_floats(value, count))
+    }
+
+    /// The same from numbers: as many as the constant takes are used, and the last
+    /// stands for those missing.
+    pub(crate) fn set_constant_floats(
+        &mut self,
+        name: &str,
+        floats: &[f32],
+        values: &mut [Vec<f32>],
+    ) -> bool {
+        self.write_constant(name, values, |count| {
+            let mut new = floats.to_vec();
+            new.resize(count, floats.last().copied().unwrap_or(0.0));
+            new
+        })
+    }
+
+    fn write_constant(
+        &mut self,
+        name: &str,
+        values: &mut [Vec<f32>],
+        new: impl Fn(usize) -> Vec<f32>,
+    ) -> bool {
         let mut found = false;
         for (_, feed) in self.constants.iter().filter(|(constant, _)| constant == name) {
             let Some((uniform, feed)) = self.feeds.get_mut(*feed) else { continue };
             let count = components(uniform.kind) * uniform.count.max(1) as usize;
             match feed {
-                Feed::Const(old) => *old = value_floats(value, count),
+                Feed::Const(old) => *old = new(count),
                 Feed::Value(slot) => {
                     if let Some(old) = values.get_mut(*slot) {
-                        *old = value_floats(value, count);
+                        *old = new(count);
                     }
                 }
                 _ => continue,
@@ -345,7 +369,11 @@ impl Shade {
                 match (constant, declared) {
                     (Some((_, value)), _) if value.is_driven() => {
                         let slot = bindings.value(value_floats(&value.value, count));
-                        bindings.link(value, Slot::Value(slot));
+                        bindings.link_named(
+                            value,
+                            Slot::Value(slot),
+                            declared.and_then(|d| d.material.as_deref()),
+                        );
                         Feed::Value(slot)
                     }
                     (Some((_, value)), _) => Feed::Const(value_floats(&value.value, count)),

@@ -11,6 +11,8 @@ mod build;
 mod draw;
 mod particles;
 mod puppet;
+#[cfg(feature = "script")]
+mod scripts;
 mod shade;
 mod text;
 mod tree;
@@ -51,6 +53,37 @@ pub(crate) struct Effect {
     pub(crate) name: String,
     pub(crate) visible: bool,
     pub(crate) steps: Vec<Step>,
+}
+
+impl Effect {
+    /// The passes of the effect.
+    fn passes(&self) -> impl Iterator<Item = &Shade> {
+        self.steps.iter().filter_map(|step| match step {
+            Step::Draw { shade, .. } => Some(shade),
+            Step::Copy { .. } => None,
+        })
+    }
+
+    /// The current value of the effect's constant `name`.
+    #[cfg_attr(not(feature = "script"), allow(dead_code))]
+    pub(crate) fn constant<'a>(&'a self, name: &str, values: &'a [Vec<f32>]) -> Option<&'a [f32]> {
+        self.passes().find_map(|shade| {
+            let (_, feed) = shade.constants.iter().find(|(constant, _)| constant == name)?;
+            Some(shade.constant(*feed, values))
+        })
+    }
+
+    /// Sets the effect's constant `name` in every pass that has it; whether any did.
+    #[cfg_attr(not(feature = "script"), allow(dead_code))]
+    pub(crate) fn set_constant(&mut self, name: &str, floats: &[f32], values: &mut [Vec<f32>]) -> bool {
+        let mut found = false;
+        for step in &mut self.steps {
+            if let Step::Draw { shade, .. } = step {
+                found |= shade.set_constant_floats(name, floats, values);
+            }
+        }
+        found
+    }
 }
 
 /// A buffer an effect declares, by name.
@@ -163,6 +196,8 @@ pub struct FrameInput {
     pub time: f64,
     /// The pointer over the output, 0 to 1 from the top left.
     pub pointer: [f32; 2],
+    /// Whether the pointer's left button is held.
+    pub pointer_down: bool,
     /// The time of day, 0 (midnight) to 1.
     pub daytime: f32,
 }
@@ -180,7 +215,12 @@ pub struct PropertyValue {
 pub struct SceneInstance {
     project: Project,
     layers: Vec<Layer>,
+    /// The order layers are drawn in: the scene's own, until a script sorts them.
+    order: Vec<usize>,
     bindings: Bindings,
+    /// The scripts attached to the scene's values, when it has any.
+    #[cfg(feature = "script")]
+    scripts: Option<Box<scripts::Scripts>>,
     /// The scene's own size.
     scene_size: [f32; 2],
     clear: [f32; 3],
@@ -256,6 +296,8 @@ impl SceneInstance {
                 particles.properties_changed(&self.bindings.properties);
             }
         }
+        #[cfg(feature = "script")]
+        self.scripts_hear_property(name, value);
     }
 
     fn apply(&mut self, change: Change) {
@@ -368,6 +410,10 @@ impl SceneInstance {
 
     /// Whether the scene reads the audio spectrum, so that somebody has to listen.
     pub fn wants_audio(&self) -> bool {
+        #[cfg(feature = "script")]
+        if self.scripts.as_ref().is_some_and(|scripts| scripts.wants_audio()) {
+            return true;
+        }
         self.wants_audio
     }
 

@@ -120,6 +120,8 @@ pub struct Head {
     pub sheet: Option<Sheet>,
     /// The pointer on the surface, 0 to 1 from the top left; the middle when it is elsewhere.
     pub pointer: [f32; 2],
+    /// Whether the pointer's left button is held over the surface.
+    pub pointer_down: bool,
     /// The output was unplugged.
     pub removed: bool,
 }
@@ -190,6 +192,7 @@ impl Display {
             integer_scale: 1,
             sheet: None,
             pointer: [0.5, 0.5],
+            pointer_down: false,
             removed: false,
         });
     }
@@ -385,6 +388,9 @@ impl Dispatch<wl_seat::WlSeat, ()> for Display {
     }
 }
 
+/// The left button, as the kernel numbers it (`BTN_LEFT`).
+const LEFT_BUTTON: u32 = 0x110;
+
 impl Dispatch<wl_pointer::WlPointer, ()> for Display {
     fn event(
         state: &mut Self,
@@ -415,7 +421,18 @@ impl Dispatch<wl_pointer::WlPointer, ()> for Display {
                 place(state, surface_x, surface_y);
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => place(state, surface_x, surface_y),
-            wl_pointer::Event::Leave { .. } => state.pointer_on = None,
+            wl_pointer::Event::Leave { .. } => {
+                // A button let go of elsewhere is never heard of: it counts as let go.
+                if let Some(head) = state.pointer_on.take().and_then(|id| state.head(id)) {
+                    head.pointer_down = false;
+                }
+            }
+            wl_pointer::Event::Button { button: LEFT_BUTTON, state: pressed, .. } => {
+                let down = matches!(pressed, WEnum::Value(wl_pointer::ButtonState::Pressed));
+                if let Some(head) = state.pointer_on.and_then(|id| state.head(id)) {
+                    head.pointer_down = down;
+                }
+            }
             _ => {}
         }
     }

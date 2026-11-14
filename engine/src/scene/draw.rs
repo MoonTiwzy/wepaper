@@ -95,13 +95,20 @@ impl SceneInstance {
         let before = self.last_time;
         let dt = (input.time - before).clamp(0.0, 0.25) as f32;
         self.last_time = input.time;
+
+        // What the timelines passed this frame, for the scripts on the same values.
+        let mut passed = Vec::new();
         if !self.bindings.animations.is_empty() {
             let mut changes = Vec::new();
-            self.bindings.animate(dt, &mut changes);
+            self.bindings.animate(dt, &mut changes, &mut passed);
             for change in changes {
                 self.apply(change);
             }
         }
+        #[cfg(feature = "script")]
+        self.run_scripts(engine, input, dt, &passed);
+        #[cfg(not(feature = "script"))]
+        let _ = passed;
         self.update_transforms();
         // Puppets play on: this frame's bones go into the value table shaders read.
         let stretch = (input.time - before).max(0.0) as f32;
@@ -172,7 +179,7 @@ impl SceneInstance {
         let mut background: Option<Target> = None;
         // The finished pictures of layers that others read, kept until the frame is done.
         let mut pictures: Pictures = Vec::new();
-        for layer in &self.layers {
+        for layer in self.order.iter().filter_map(|index| self.layers.get(*index)) {
             if !layer.shown {
                 continue;
             }

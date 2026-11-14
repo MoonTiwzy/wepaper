@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use wepaper_json::Value;
 
-use crate::doc::{Animation, AsFloats, Dyn, FromDoc, UserLink};
+use crate::doc::{Animation, AsFloats, Dyn, FromDoc, Repeat, Script, UserLink};
 
 use super::shade::value_floats;
 
@@ -34,6 +34,9 @@ pub(crate) enum Slot {
     Scene(SceneField),
     /// A value of one animation layer of a puppet: the scene layer, then which of its layers.
     Puppet(usize, usize, PuppetField),
+    /// A value of a particle layer's instance override: the scene layer, then which
+    /// of the override's scripted values.
+    Instance(usize, usize),
 }
 
 /// A value of a puppet's animation layer.
@@ -110,16 +113,41 @@ pub(crate) struct Playing {
     /// The value written in the document: what the curves offset when they are
     /// relative, and what the components without a curve keep.
     pub(crate) base: Vec<f32>,
+    /// The layer the value belongs to.
+    pub(crate) layer: usize,
+    /// The effect of that layer it belongs to, when it is an effect's.
+    pub(crate) effect: Option<usize>,
+    /// The value's name, when it is a shader constant.
+    pub(crate) name: Option<String>,
     /// How many frames it has played.
     pub(crate) played: f32,
+    /// How fast it plays: 1 is the animation's own speed.
+    pub(crate) rate: f32,
     pub(crate) running: bool,
     /// Its value has to reach the slot even though it is not running.
     pub(crate) stale: bool,
 }
 
+/// A script attached to a value.
+#[derive(Debug, Clone)]
+pub(crate) struct Scripted {
+    pub(crate) slot: Slot,
+    pub(crate) script: Script,
+    /// The layer the value belongs to: the script's `thisLayer`.
+    pub(crate) layer: usize,
+    /// The effect of that layer it belongs to, when it is an effect's.
+    pub(crate) effect: Option<usize>,
+    /// The value's name, when it is a shader constant or an instance override.
+    pub(crate) name: Option<String>,
+}
+
 /// The table of driven values and what drives them.
 #[derive(Default)]
 pub(crate) struct Bindings {
+    /// The scripts attached to values, in the order the scene was read.
+    pub(crate) scripted: Vec<Scripted>,
+    /// The layer, and its effect, whose values are being linked.
+    pub(crate) owner: (usize, Option<usize>),
     /// The keyframe animations.
     pub(crate) animations: Vec<Playing>,
     /// The driven shader constants.
@@ -147,8 +175,23 @@ impl Bindings {
 
     /// Registers whatever drives `value` as a writer of `slot`.
     pub(crate) fn link<T: AsFloats>(&mut self, value: &Dyn<T>, slot: Slot) {
+        self.link_named(value, slot, None);
+    }
+
+    /// The same for a value scripts know by `name`: a shader constant.
+    pub(crate) fn link_named<T: AsFloats>(&mut self, value: &Dyn<T>, slot: Slot, name: Option<&str>) {
         if let Some(link) = &value.user {
             self.links.push(Binding { link: link.clone(), slot });
+        }
+        if let Some(script) = &value.script {
+            let (layer, effect) = self.owner;
+            self.scripted.push(Scripted {
+                slot,
+                script: script.clone(),
+                layer,
+                effect,
+                name: name.map(str::to_owned),
+            });
         }
         if let Some(animation) = &value.animation {
             let base = match slot {
@@ -157,35 +200,61 @@ impl Bindings {
             };
             let running = !animation.start_paused;
             self.animations.push(Playing {
-                animation: animation.clone(),
+                animation: (**animation).clone(),
                 slot,
                 base,
+                layer: self.owner.0,
+                effect: self.owner.1,
+                name: name.map(str::to_owned),
                 played: 0.0,
+                rate: 1.0,
                 running,
                 stale: true,
             });
         }
     }
 
-    /// Plays the animations on by `seconds` and returns what they changed.
-    pub(crate) fn animate(&mut self, seconds: f32, changes: &mut Vec<Change>) {
+    /// Plays the animations on by `seconds`: what they changed goes to `changes`, and
+    /// the events their timelines passed to `events`, as the animation's place in
+    /// the table, the event's name and its frame.
+    pub(crate) fn animate(
+        &mut self,
+        seconds: f32,
+        changes: &mut Vec<Change>,
+        events: &mut Vec<(usize, String, f32)>,
+    ) {
         let mut sample = Vec::new();
-        for playing in &mut self.animations {
+        for (index, playing) in self.animations.iter_mut().enumerate() {
             if !playing.running && !playing.stale {
                 continue;
             }
+            let before = playing.played;
             if playing.running && !playing.stale {
-                playing.played += seconds * playing.animation.fps;
+                playing.played += seconds * playing.animation.fps * playing.rate;
             }
             playing.stale = false;
-            playing.animation.sample(playing.animation.frame_at(playing.played), &mut sample);
+            let animation = &playing.animation;
+            if animation.repeat == Repeat::Once {
+                // A timeline that plays once stops at whichever end it runs into.
+                let ended = (playing.rate >= 0.0 && playing.played >= animation.length)
+                    || (playing.rate < 0.0 && playing.played <= 0.0);
+                playing.played = playing.played.clamp(0.0, animation.length);
+                if ended {
+                    playing.running = false;
+                }
+            } else {
+                playing.played = playing.played.max(0.0);
+            }
+            events.extend(
+                animation
+                    .events_between(before, playing.played)
+                    .map(|(frame, name)| (index, name.clone(), *frame)),
+            );
+            animation.sample(animation.frame_at(playing.played), &mut sample);
             let mut value = playing.base.clone();
             value.resize(value.len().max(sample.len()), 0.0);
             for (component, curve) in value.iter_mut().zip(&sample) {
-                *component = if playing.animation.relative { *component + curve } else { *curve };
-            }
-            if playing.animation.finished(playing.played) {
-                playing.running = false;
+                *component = if animation.relative { *component + curve } else { *curve };
             }
             changes.push(match playing.slot {
                 slot if slot.is_flag() => Change::Flag(slot, value.first().is_some_and(|v| *v > 0.5)),
@@ -279,16 +348,17 @@ mod tests {
         bindings.link(&origin, Slot::LayerOrigin(2));
         let mut changes = Vec::new();
         // The first frame shows where the animation starts, whatever time has passed.
-        bindings.animate(0.3, &mut changes);
+        let mut events = Vec::new();
+        bindings.animate(0.3, &mut changes, &mut events);
         assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![10.0, 21.0, 0.0])]);
         changes.clear();
-        bindings.animate(0.5, &mut changes);
+        bindings.animate(0.5, &mut changes, &mut events);
         assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![12.5, 21.0, 0.0])]);
         changes.clear();
-        bindings.animate(5.0, &mut changes);
+        bindings.animate(5.0, &mut changes, &mut events);
         assert_eq!(changes, [Change::Floats(Slot::LayerOrigin(2), vec![15.0, 21.0, 0.0])]);
         changes.clear();
-        bindings.animate(1.0, &mut changes);
+        bindings.animate(1.0, &mut changes, &mut events);
         assert!(changes.is_empty(), "a finished animation changes nothing more");
     }
 
@@ -302,9 +372,9 @@ mod tests {
         let alpha: Dyn<f32> = Dyn::read(&doc, 1.0);
         let mut bindings = Bindings::default();
         bindings.link(&alpha, Slot::LayerAlpha(0));
-        let mut changes = Vec::new();
-        bindings.animate(0.5, &mut changes);
-        bindings.animate(0.5, &mut changes);
+        let (mut changes, mut events) = (Vec::new(), Vec::new());
+        bindings.animate(0.5, &mut changes, &mut events);
+        bindings.animate(0.5, &mut changes, &mut events);
         assert_eq!(changes, [Change::Floats(Slot::LayerAlpha(0), vec![0.0])]);
     }
 

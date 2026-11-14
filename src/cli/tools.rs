@@ -160,7 +160,7 @@ pub fn check(args: lexopt::Parser) -> Result<(), Failure> {
             Ok(mut wallpaper) => {
                 wallpaper.draw(
                     &mut engine,
-                    &FrameInput { time: 1.0, pointer: [0.5, 0.5], daytime: 0.5 },
+                    &FrameInput { time: 1.0, pointer: [0.5, 0.5], pointer_down: false, daytime: 0.5 },
                     Some(frame.framebuffer()),
                     (1280, 720),
                     true,

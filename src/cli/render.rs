@@ -94,7 +94,7 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     let drawing = std::time::Instant::now();
     for index in 0..frames {
         let moment = (time - f64::from(frames - 1 - index) / 60.0).max(0.0);
-        let input = FrameInput { time: moment, pointer: [0.5, 0.5], daytime: 0.5 };
+        let input = FrameInput { time: moment, pointer: [0.5, 0.5], pointer_down: false, daytime: 0.5 };
         wallpaper.draw(&mut engine, &input, Some(frame.framebuffer()), size, true);
     }
     let pixels = frame.read_rgba();

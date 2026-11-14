@@ -72,6 +72,7 @@ impl SceneInstance {
             .and_then(|bloom| bloom.inspect_err(|why| log::warn!("bloom: {why}")).ok());
         let mut layers = Vec::with_capacity(scene.objects.len());
         for (index, object) in scene.objects.iter().enumerate() {
+            bindings.owner = (index, None);
             let kind = match &object.kind {
                 ObjectKind::Image(image) => {
                     match build_image(
@@ -119,7 +120,14 @@ impl SceneInstance {
                 }
                 ObjectKind::Particle(particles) => {
                     // The object's id as the seed: the same wallpaper plays the same.
-                    match ParticleLayer::build(engine, files, &mut bindings, particles, object.id as u64) {
+                    match ParticleLayer::build(
+                        engine,
+                        files,
+                        &mut bindings,
+                        particles,
+                        index,
+                        object.id as u64,
+                    ) {
                         Ok(layer) => LayerKind::Particles(Box::new(layer)),
                         Err(why) => {
                             log::warn!("particles {} ({}) are skipped: {why}", object.name, object.id);
@@ -151,8 +159,11 @@ impl SceneInstance {
         }
 
         let mut instance = Self {
+            order: (0..layers.len()).collect(),
             layers,
             bindings,
+            #[cfg(feature = "script")]
+            scripts: None,
             scene_size: scene_size.unwrap_or([1920.0, 1080.0]),
             clear: scene.general.clear_color.value,
             zoom: scene.general.zoom.value.max(0.01),
@@ -193,6 +204,8 @@ impl SceneInstance {
                 instance.set_property(name, value);
             }
         }
+        #[cfg(feature = "script")]
+        instance.attach_scripts(files);
         Ok(instance)
     }
 }
@@ -485,7 +498,9 @@ fn build_effects(
 ) -> (Vec<Effect>, Vec<BufferSpec>) {
     let mut buffers: Vec<BufferSpec> = Vec::new();
     let mut effects = Vec::new();
-    for effect_use in uses {
+    for (effect_index, effect_use) in uses.iter().enumerate() {
+        // What scripts and animations the effect's values carry belongs to it.
+        bindings.owner.1 = Some(effect_index);
         // Scenes rarely name their effects: the effect's folder does.
         let name = if effect_use.name.is_empty() {
             effect_use.file.rsplit('/').nth(1).unwrap_or(&effect_use.file).to_owned()
@@ -500,6 +515,7 @@ fn build_effects(
             }
         }
     }
+    bindings.owner.1 = None;
     (effects, buffers)
 }
 

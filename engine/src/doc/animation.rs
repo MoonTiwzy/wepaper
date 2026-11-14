@@ -46,6 +46,8 @@ pub struct Animation {
     pub start_paused: bool,
     /// The curves are offsets from the value written in the document.
     pub relative: bool,
+    /// What the timeline tells scripts on its way: the frame, and the event's name.
+    pub events: Vec<(f32, String)>,
 }
 
 impl Animation {
@@ -88,6 +90,13 @@ impl Animation {
             wrap: options.get("wraploop").as_bool().unwrap_or(false),
             start_paused: options.get("startpaused").as_bool().unwrap_or(false),
             relative: doc.get("relative").as_bool().unwrap_or(false),
+            events: options
+                .get("events")
+                .items()
+                .filter_map(|event| {
+                    Some((number(event.get("frame"), 0.0), event.get("name").as_str()?.to_owned()))
+                })
+                .collect(),
         })
     }
 
@@ -107,6 +116,34 @@ impl Animation {
     /// Whether playing on from `played` frames can still change anything.
     pub fn finished(&self, played: f32) -> bool {
         self.repeat == Repeat::Once && played >= self.length
+    }
+
+    /// The events between two moments of playing, `from` and `to` in frames played,
+    /// in the order they are passed. Playing forwards passes an event on reaching its
+    /// frame, and the one on the last frame when the timeline ends there; playing
+    /// backwards the same the other way round.
+    pub fn events_between(&self, from: f32, to: f32) -> impl Iterator<Item = &(f32, String)> {
+        let forwards = to >= from;
+        // On a timeline that repeats, the stretch is looked at within one round.
+        let within = |played: f32| match self.repeat {
+            Repeat::Once => played.clamp(0.0, self.length),
+            _ => self.frame_at(played),
+        };
+        let (start, end) = (within(from), within(to));
+        let wrapped = self.repeat != Repeat::Once && forwards && end < start;
+        let ends = self.repeat == Repeat::Once;
+        self.events.iter().filter(move |(frame, _)| {
+            let frame = *frame;
+            if from == to {
+                false
+            } else if wrapped {
+                frame >= start || frame < end
+            } else if forwards {
+                (frame >= start && frame < end) || (ends && end >= self.length && frame >= self.length)
+            } else {
+                (frame <= start && frame > end) || (ends && end <= 0.0 && frame <= 0.0)
+            }
+        })
     }
 
     /// The value of every component at `frame` of the timeline.
@@ -233,6 +270,31 @@ mod tests {
         assert!(at(&a, 6.0) < 0.05, "{}", at(&a, 6.0));
         assert!((at(&a, 30.0) - 0.5).abs() < 1e-3);
         assert!(at(&a, 54.0) > 0.95);
+    }
+
+    #[test]
+    fn events_are_passed_once_on_the_way() {
+        fn names(animation: &Animation, from: f32, to: f32) -> Vec<&str> {
+            animation.events_between(from, to).map(|(_, name)| name.as_str()).collect()
+        }
+        let text = LINEAR.replace(
+            r#""name":"fade"}"#,
+            r#""name":"fade","events":[{"frame":0,"name":"start"},{"frame":29,"name":"half"},{"frame":120,"name":"end"}]}"#,
+        );
+        let mut a = animation(&text);
+        a.repeat = Repeat::Once;
+        assert_eq!(names(&a, 0.0, 1.0), ["start"]);
+        assert!(names(&a, 1.0, 2.0).is_empty() && names(&a, 5.0, 5.0).is_empty());
+        assert_eq!(names(&a, 28.0, 30.0), ["half"]);
+        assert_eq!(names(&a, 110.0, 120.0), ["end"], "the last frame's event comes when the timeline ends");
+        assert_eq!(names(&a, 0.0, 500.0), ["start", "half", "end"]);
+        // And backwards, the other way round.
+        assert_eq!(names(&a, 30.0, 28.0), ["half"]);
+        assert_eq!(names(&a, 10.0, 0.0), ["start"]);
+        // A loop passes its last frame and its first again every time it comes round.
+        a.repeat = Repeat::Loop;
+        assert_eq!(names(&a, 118.0, 121.0), ["start", "end"]);
+        assert!(names(&a, 121.0, 125.0).is_empty());
     }
 
     #[test]

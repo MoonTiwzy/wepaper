@@ -10,7 +10,7 @@ use crate::doc::{FromDoc, PropertyKind};
 
 use super::bindings::{Change, SceneField, Slot};
 use super::shade::{Shade, value_floats};
-use super::{Effect, LayerKind, SceneInstance, Step};
+use super::{LayerKind, SceneInstance, Step};
 
 fn vector(values: &[f32]) -> Value {
     Value::Array(values.iter().map(|v| Value::from(*v)).collect())
@@ -22,14 +22,6 @@ fn number_or_vector(values: &[f32]) -> Value {
         [one] => Value::from(*one),
         many => vector(many),
     }
-}
-
-/// The passes of an effect.
-fn passes(effect: &Effect) -> impl Iterator<Item = &Shade> {
-    effect.steps.iter().filter_map(|step| match step {
-        Step::Draw { shade, .. } => Some(shade),
-        Step::Copy { .. } => None,
-    })
 }
 
 /// The constants of some passes, by name. A name several passes share is one node.
@@ -75,7 +67,7 @@ impl SceneInstance {
                         .iter()
                         .enumerate()
                         .map(|(index, effect)| {
-                            let node = obj! { "name" => &effect.name, "visible" => effect.visible, "constants" => constants(passes(effect), &self.bindings.values) };
+                            let node = obj! { "name" => &effect.name, "visible" => effect.visible, "constants" => constants(effect.passes(), &self.bindings.values) };
                             (index.to_string(), node)
                         })
                         .collect();
@@ -143,7 +135,7 @@ impl SceneInstance {
     }
 
     /// The current value of one of the scene's own fields.
-    fn scene_value(&self, field: SceneField) -> Value {
+    pub(super) fn scene_value(&self, field: SceneField) -> Value {
         match field {
             SceneField::Zoom => Value::from(self.zoom),
             SceneField::Clear => vector(&self.clear),

@@ -9,14 +9,14 @@ use std::rc::Rc;
 use wepaper_json::{Map, Value};
 
 use crate::Engine;
-use crate::doc::{Blending, MaterialDoc, ParticleObject};
+use crate::doc::{AsFloats, Blending, MaterialDoc, ParticleObject, Script};
 use crate::gpu::{Blend, Gl, Mesh};
 use crate::math::Mat4;
 use crate::particles::{Environment, ParticleDef, ParticleSystem, Renderer, View};
 use crate::read::Files;
 use crate::share::Loaded;
 
-use super::bindings::Bindings;
+use super::bindings::{Bindings, Scripted, Slot};
 use super::shade::{PassInput, Shade};
 
 /// How deep child systems may nest: a document that names itself stops here.
@@ -50,6 +50,8 @@ pub(crate) struct ParticleLayer {
     overrides: Value,
     /// Whether any value in `overrides` follows a user property.
     follows_properties: bool,
+    /// The values of the override a script computes: their names and what they are now.
+    scripted: Vec<(String, Vec<f32>)>,
     scratch: Vec<f32>,
 }
 
@@ -192,6 +194,7 @@ impl ParticleLayer {
         files: &Files,
         bindings: &mut Bindings,
         object: &ParticleObject,
+        index: usize,
         seed: u64,
     ) -> Result<Self, String> {
         let mut def = read_def(files, &object.file)?;
@@ -207,12 +210,30 @@ impl ParticleLayer {
             parts.push(part(engine, files, bindings, system)?);
         }
         let follows_properties = object.overrides.members().any(|(_, value)| !value.get("user").is_null());
+        let mut scripted = Vec::new();
+        for (name, value) in object.overrides.members() {
+            let Some(source) = value.get("script").as_str() else { continue };
+            let script =
+                Script { source: source.to_owned(), properties: value.get("scriptproperties").clone() };
+            let slot = Slot::Instance(index, scripted.len());
+            bindings.scripted.push(Scripted {
+                slot,
+                script,
+                layer: index,
+                effect: None,
+                name: Some(name.to_owned()),
+            });
+            // What the script starts from: the value written, or 1, which changes nothing.
+            let written = value.get("value").as_floats();
+            scripted.push((name.to_owned(), if written.is_empty() { vec![1.0] } else { written }));
+        }
         Ok(Self {
             environment: Environment::of(&def),
             system,
             parts,
             overrides: object.overrides.clone(),
             follows_properties,
+            scripted,
             scratch: Vec::new(),
         })
     }
@@ -221,6 +242,42 @@ impl ParticleLayer {
     pub(crate) fn properties_changed(&mut self, properties: &HashMap<String, Value>) {
         if self.follows_properties {
             self.system.apply_override(&resolved(&self.overrides, properties));
+        }
+    }
+
+    /// What the override's scripted value `which` is now.
+    #[cfg_attr(not(feature = "script"), allow(dead_code))]
+    pub(crate) fn scripted(&self, which: usize) -> &[f32] {
+        self.scripted.get(which).map_or(&[], |(_, value)| value.as_slice())
+    }
+
+    /// A script computed the override's value `which` anew: a control point moves,
+    /// anything else is applied to the playing system.
+    #[cfg_attr(not(feature = "script"), allow(dead_code))]
+    pub(crate) fn set_scripted(&mut self, which: usize, floats: &[f32]) {
+        let Some((name, value)) = self.scripted.get_mut(which) else { return };
+        if value.as_slice() == floats {
+            return;
+        }
+        *value = floats.to_vec();
+        let point = name.strip_prefix("controlpoint").and_then(|number| number.parse::<usize>().ok());
+        match point {
+            Some(point) => {
+                if let Some(placed) = self.environment.control_points.get_mut(point) {
+                    for (to, from) in placed.iter_mut().zip(floats) {
+                        *to = *from;
+                    }
+                }
+            }
+            None => {
+                let written = match floats {
+                    [one] => Value::from(*one),
+                    many => Value::from(many.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(" ")),
+                };
+                let mut change = Map::new();
+                change.insert(name.as_str(), written);
+                self.system.apply_override(&Value::Object(change));
+            }
         }
     }
 

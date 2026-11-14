@@ -566,7 +566,12 @@ impl Daemon {
         let frame =
             Target::new(self.engine.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
         frame.clear([0.0, 0.0, 0.0, 1.0]);
-        let input = wepaper_engine::scene::FrameInput { time: slot.clock, pointer, daytime: daytime() };
+        let input = wepaper_engine::scene::FrameInput {
+            time: slot.clock,
+            pointer,
+            pointer_down: false,
+            daytime: daytime(),
+        };
         wallpaper.draw(&mut self.engine, &input, Some(frame.framebuffer()), size, true);
         crate::cli::render::write_png(file, size.0, size.1, &frame.read_rgba())
     }

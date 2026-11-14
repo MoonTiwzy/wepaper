@@ -32,7 +32,7 @@ pub struct Dyn<T> {
     /// The script that computes it.
     pub script: Option<Script>,
     /// The keyframe animation that plays on it.
-    pub animation: Option<Animation>,
+    pub animation: Option<Box<Animation>>,
 }
 
 impl<T> Dyn<T> {
@@ -68,7 +68,7 @@ impl<T: FromDoc> Dyn<T> {
             source: source.to_owned(),
             properties: doc.get("scriptproperties").clone(),
         });
-        let animation = Animation::read(doc.get("animation"));
+        let animation = Animation::read(doc.get("animation")).map(Box::new);
         Self { value: T::from_doc(doc.get("value")).unwrap_or(default), user, script, animation }
     }
 }

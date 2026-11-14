@@ -540,7 +540,12 @@ impl Daemon {
                 continue;
             }
             self.context.disable_vsync();
-            let input = FrameInput { time: slot.clock, pointer: head.pointer, daytime: control::daytime() };
+            let input = FrameInput {
+                time: slot.clock,
+                pointer: head.pointer,
+                pointer_down: head.pointer_down,
+                daytime: control::daytime(),
+            };
             let size = sheet.pixels();
             let shaded = self.shaders.iter().any(|(_, pass)| pass.enabled);
             if shaded {
