@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 wepaper-json.workspace = true
+wepaper-ipc.workspace = true
 # v4_12 brings in v4_10, where the bindings keep the accessibility interface that
 # WebKit's view implements; without it webkit6 does not build.
 gtk4 = { version = "0.11", features = ["v4_12"] }

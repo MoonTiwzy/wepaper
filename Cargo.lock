@@ -1292,6 +1292,7 @@ dependencies = [
  "gtk4-layer-shell",
  "lexopt",
  "webkit6",
+ "wepaper-ipc",
  "wepaper-json",
 ]
 

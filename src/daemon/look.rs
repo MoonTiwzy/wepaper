@@ -7,6 +7,7 @@
 //! The mirror and the colours are one pass over the frame, and an output without them
 //! has no such pass and no buffer for it.
 
+use wepaper_engine::Fill;
 use wepaper_engine::post::PostPass;
 use wepaper_json::{Value, obj};
 
@@ -83,6 +84,18 @@ impl Look {
     /// This look with the part shown taken from a snapshot's framing.
     pub fn framed(&self, framing: wepaper_ipc::Framing) -> Self {
         Self { zoom: framing.zoom, shift: [framing.shift_x, framing.shift_y], ..*self }
+    }
+
+    /// What a renderer plugin drawing for a device is told of the part it shows:
+    /// it cuts the device's frames from the page itself.
+    pub fn plugin_frame(&self, fill: Fill) -> Value {
+        obj! {
+            "cmd" => "frame",
+            "fill" => fill.name(),
+            "zoom" => self.zoom,
+            "shift_x" => self.shift[0],
+            "shift_y" => self.shift[1],
+        }
     }
 
     /// The part shown, as a snapshot's framing.
@@ -215,6 +228,16 @@ mod tests {
         assert!(!Look { hue: 30.0, ..Look::default() }.plain_picture());
         // The zoom and the shifts frame the wallpaper itself: no pass for them either.
         assert!(Look { zoom: 2.0, shift: [0.3, -0.1], ..Look::default() }.plain_picture());
+    }
+
+    #[test]
+    fn a_plugin_drawing_for_a_device_is_told_the_fill_and_the_part_shown() {
+        let look = Look { zoom: 2.5, shift: [0.2, -0.1], hue: 40.0, ..Look::default() };
+        assert_eq!(
+            look.plugin_frame(Fill::Contain).to_json(),
+            obj! { "cmd" => "frame", "fill" => "contain", "zoom" => 2.5f32, "shift_x" => 0.2f32, "shift_y" => -0.1f32 }
+                .to_json()
+        );
     }
 
     #[test]

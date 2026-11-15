@@ -411,12 +411,18 @@ impl Daemon {
             }
             ["outputs", name, "look", key] => {
                 for id in self.targets(Some(name))? {
+                    let device = self.devices.iter().any(|device| device.id == id);
                     let Some(slot) = self.slots.get_mut(&id) else { continue };
                     slot.shown.look.set(key, value)?;
                     slot.stale = true;
                     if let Some(wallpaper) = &mut slot.wallpaper {
                         wallpaper.set_rate(slot.shown.look.rate);
                         wallpaper.set_frame(slot.shown.look.frame());
+                    }
+                    if let (true, Some(renderer)) = (device, &mut slot.renderer) {
+                        renderer.send(
+                            &slot.shown.look.plugin_frame(slot.shown.fill.unwrap_or(self.settings.fill)),
+                        );
                     }
                 }
                 self.apply_sound();
@@ -434,11 +440,15 @@ impl Daemon {
                     ),
                 };
                 for id in self.targets(Some(name))? {
+                    let device = self.devices.iter().any(|device| device.id == id);
                     if let Some(slot) = self.slots.get_mut(&id) {
                         slot.shown.fill = fill;
                         slot.stale = true;
                         if let Some(wallpaper) = &mut slot.wallpaper {
                             wallpaper.set_fill(fill.unwrap_or(self.settings.fill));
+                        }
+                        if let (true, Some(renderer)) = (device, &mut slot.renderer) {
+                            renderer.send(&slot.shown.look.plugin_frame(fill.unwrap_or(self.settings.fill)));
                         }
                     }
                 }
@@ -721,7 +731,36 @@ impl Daemon {
         // A device has no pointer: its wallpaper sees it in the middle.
         let pointer =
             self.display.heads.iter().find(|head| head.id == id).map_or([0.5, 0.5], |head| head.pointer);
+        let device = self.devices.iter().any(|device| device.id == id);
+        let stage_file = self.socket.with_file_name(format!("stage-{id}.rgba"));
+        let fill = self.slots.get(&id).and_then(|slot| slot.shown.fill).unwrap_or(self.settings.fill);
         let slot = self.slots.get_mut(&id).ok_or("the output is gone")?;
+        // A device a plugin draws for (a web page): the plugin writes its page while
+        // snapshots are asked for, and the snapshot is cut from it as the plugin cuts
+        // the device's frames.
+        if slot.wallpaper.is_none()
+            && device
+            && let Some(renderer) = &mut slot.renderer
+        {
+            if slot.stage.is_none() {
+                renderer.send(&obj! { "cmd" => "stage", "file" => stage_file.to_string_lossy().as_ref() });
+            }
+            slot.stage =
+                Some((stage_file.clone(), std::time::Instant::now() + std::time::Duration::from_secs(3)));
+            let drawn = look.unwrap_or_else(|| slot.shown.look.framing());
+            let page =
+                std::fs::read(&stage_file).map_err(|_| "the page has not been drawn for a snapshot yet")?;
+            let side =
+                |at: usize| page.get(at..at + 4).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            let (width, height) = (side(0), side(4));
+            if width == 0 || height == 0 || page.len() != 8 + width as usize * height as usize * 4 {
+                return Err("the page written for a snapshot is broken".to_owned());
+            }
+            let fit = wepaper_ipc::Fit::from_name(fill.name()).unwrap_or_default();
+            let rgba = wepaper_ipc::Cut::new((width, height), size, fit, drawn).apply(&page[8..]);
+            write_snapshot(file, size, &rgba, raw)?;
+            return Ok(drawn);
+        }
         let wallpaper = slot.wallpaper.as_mut().ok_or("no wallpaper is shown there")?;
         let frame =
             Target::new(self.engine.gl(), size.0, size.1, TextureFormat::Rgba8).map_err(|e| e.to_string())?;
@@ -741,15 +780,7 @@ impl Daemon {
         if drawn.flip {
             super::look::mirror_rows(&mut rgba, size.0 as usize);
         }
-        if raw {
-            // Written beside and moved in place: a reader never sees half a frame.
-            let part = file.with_extension(format!("{}.part", std::process::id()));
-            std::fs::write(&part, &rgba)
-                .and_then(|()| std::fs::rename(&part, file))
-                .map_err(|e| format!("{}: {e}", file.display()))?;
-        } else {
-            crate::cli::render::write_png(file, size.0, size.1, &rgba)?;
-        }
+        write_snapshot(file, size, &rgba, raw)?;
         Ok(drawn.framing())
     }
 
@@ -758,5 +789,18 @@ impl Daemon {
         if self.server.has_watchers() {
             self.server.broadcast(&obj! { "event" => "changed", "what" => what, "value" => value });
         }
+    }
+}
+
+/// A snapshot written out: raw RGBA (moved in place, so a reader never sees half a
+/// frame) or a PNG.
+fn write_snapshot(file: &Path, size: (u32, u32), rgba: &[u8], raw: bool) -> Result<(), String> {
+    if raw {
+        let part = file.with_extension(format!("{}.part", std::process::id()));
+        std::fs::write(&part, rgba)
+            .and_then(|()| std::fs::rename(&part, file))
+            .map_err(|e| format!("{}: {e}", file.display()))
+    } else {
+        crate::cli::render::write_png(file, size.0, size.1, rgba)
     }
 }

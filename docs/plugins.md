@@ -119,6 +119,18 @@ Either way it is told what changes on its standard input, one JSON object per li
 {"cmd":"quit"}
 ```
 
+For a device, two more. `frame` is the part of the wallpaper the device shows: its `fill`
+and look (`zoom`, `shift_x`, `shift_y`, as `outputs/<name>/look` has them), sent at the start
+and whenever they change; the web plugin lays the page out as a monitor would and cuts the
+device's frames from it like the engine frames a scene. `stage` asks for the whole page,
+written to that file with every frame (its width and height as two little-endian 32-bit
+numbers, then RGBA), while snapshots of the device are asked for; `null` stops it.
+
+```
+{"cmd":"frame","fill":"cover","zoom":1.5,"shift_x":0.1,"shift_y":0}
+{"cmd":"stage","file":"/run/user/1000/stage-1073741824.rgba"}  {"cmd":"stage","file":null}
+```
+
 It exits on `quit` or when its input closes. If it dies, the output is left empty and
 `outputs/<name>/error` says so. The bundled [`web`](../plugins/web) plugin is the reference
 implementation.

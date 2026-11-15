@@ -18,6 +18,13 @@ pub struct Framing {
     pub shift_y: f32,
 }
 
+/// As the fill has it: not enlarged, not moved.
+impl Default for Framing {
+    fn default() -> Self {
+        Self { zoom: 1.0, shift_x: 0.0, shift_y: 0.0 }
+    }
+}
+
 impl Framing {
     /// The range a snapshot's framing is held to.
     const ZOOM: (f32, f32) = (0.01, 20.0);

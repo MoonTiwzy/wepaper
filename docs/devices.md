@@ -76,10 +76,12 @@ ffmpeg -f rawvideo -pix_fmt rgb24 -s "${WEPAPER_WIDTH}x${WEPAPER_HEIGHT}" -r "$W
 
 - There is no pointer on a device: its wallpaper sees the pointer in the middle.
 - A wallpaper a renderer plugin draws (a web wallpaper) is drawn for a device by the plugin:
-  the daemon starts the device's program and hands its input to the plugin, which draws at
-  the device's size without a surface anybody sees and writes the frames itself
-  ([plugins.md](plugins.md)). The device's `fill` and `look` do not apply to it: a page lays
-  itself out for the size it is given.
+  the daemon starts the device's program and hands its input to the plugin, which draws
+  without a surface anybody sees and writes the frames itself ([plugins.md](plugins.md)).
+  The page is laid out as large as a monitor would have it (the monitor's shape, at most
+  Full HD), and the device gets the part of it the device's `fill`, `look/zoom` and shifts
+  frame, as with a scene; the page is drawn only as finely as that part needs. A snapshot
+  of such a device is cut from the page the plugin writes while snapshots are asked for.
 - Under `contain`, the bars have the scene's own background colour, as on a monitor
   (`outputs/<name>/wallpaper/scene/clear` changes it).
 - A wallpaper that is on a monitor too is heard there, not twice.

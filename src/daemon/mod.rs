@@ -77,6 +77,9 @@ struct Slot {
     error: Option<String>,
     /// The plugin process that draws this output's wallpaper, when the engine does not.
     renderer: Option<plugins::Renderer>,
+    /// The file a plugin drawing for a device writes its page to while snapshots
+    /// of the device are asked for, and until when they are.
+    stage: Option<(PathBuf, Instant)>,
     /// How many wallpapers were loaded here so far.
     loads: u64,
     /// Where the frame is drawn before output shaders run over it.
@@ -101,6 +104,7 @@ impl Slot {
             error: None,
             title: String::new(),
             renderer: None,
+            stage: None,
             loads: 0,
             staging: None,
             frames: (now, 0, 0),
@@ -648,6 +652,13 @@ impl Daemon {
                         if slot.paused {
                             renderer.send(&wepaper_json::obj! { "cmd" => "pause" });
                         }
+                        // A device's plugin cuts its frames from the page itself.
+                        if self.devices.iter().any(|device| device.id == id) {
+                            renderer.send(
+                                &slot.shown.look.plugin_frame(slot.shown.fill.unwrap_or(self.settings.fill)),
+                            );
+                        }
+                        slot.stage = None;
                         slot.wallpaper = None;
                         slot.renderer = Some(renderer);
                         // Our own surface goes blank under the plugin's: a new one has nothing on it.
@@ -721,6 +732,19 @@ impl Daemon {
                 {
                     slot.error = Some(why.to_owned());
                     log::error!("{why}");
+                }
+            }
+            // A device's page is written for snapshots only while they are asked for.
+            for slot in self.slots.values_mut() {
+                if slot.stage.as_ref().is_some_and(|(_, until)| now >= *until)
+                    && let Some((file, _)) = slot.stage.take()
+                {
+                    if let Some(renderer) = &mut slot.renderer {
+                        renderer.send(
+                            &wepaper_json::obj! { "cmd" => "stage", "file" => wepaper_json::Value::Null },
+                        );
+                    }
+                    let _ = std::fs::remove_file(file);
                 }
             }
             // A renderer plugin that died leaves its output empty, and says so.

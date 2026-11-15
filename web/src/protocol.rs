@@ -4,6 +4,7 @@
 //! daemon's bug, never a reason to stop showing the wallpaper: the caller logs it and
 //! reads on.
 
+use wepaper_ipc::{Fit, Framing};
 use wepaper_json::{Map, Value, obj};
 
 /// How many bands of the spectrum each channel carries.
@@ -29,6 +30,12 @@ pub enum Command {
     Mute(bool),
     /// One frame of the audio spectrum: the left channel's bands, then the right's.
     Audio(Vec<f32>),
+    /// A device's fill and look: which part of the page, laid out as a monitor would
+    /// have it, the device shows.
+    Frame(Fit, Framing),
+    /// Write the page as laid out (the stage) to this file with every frame, for a
+    /// snapshot of the device; `None` stops.
+    Stage(Option<String>),
     /// Leave, with exit code 0.
     Quit,
 }
@@ -72,6 +79,38 @@ impl Command {
                 }
                 Ok(Self::Audio(samples))
             }
+            "frame" => {
+                let fit = match message.get("fill") {
+                    Value::Null => Fit::Cover,
+                    fill => fill
+                        .as_str()
+                        .and_then(Fit::from_name)
+                        .ok_or("frame: \"fill\" is cover, contain or stretch")?,
+                };
+                let number = |key: &str, default: f32| match message.get(key) {
+                    Value::Null => Ok(default),
+                    v => v
+                        .as_f64()
+                        .filter(|n| n.is_finite())
+                        .map(|n| n as f32)
+                        .ok_or(format!("frame: \"{key}\" is a number")),
+                };
+                Ok(Self::Frame(
+                    fit,
+                    Framing {
+                        zoom: number("zoom", 1.0)?,
+                        shift_x: number("shift_x", 0.0)?,
+                        shift_y: number("shift_y", 0.0)?,
+                    },
+                ))
+            }
+            "stage" => match message.get("file") {
+                Value::Null => Ok(Self::Stage(None)),
+                file => file
+                    .as_str()
+                    .map(|f| Self::Stage(Some(f.to_owned())))
+                    .ok_or_else(|| "stage: \"file\" is a path or null".to_owned()),
+            },
             "quit" => Ok(Self::Quit),
             other => Err(format!("unknown command \"{other}\"")),
         }
@@ -116,6 +155,25 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_is_told_its_framing_and_where_to_put_the_stage() {
+        let framed =
+            Command::decode(r#"{"cmd":"frame","fill":"contain","zoom":2.5,"shift_x":0.2,"shift_y":-0.1}"#);
+        assert_eq!(
+            framed,
+            Ok(Command::Frame(Fit::Contain, Framing { zoom: 2.5, shift_x: 0.2, shift_y: -0.1 }))
+        );
+        let plain = Command::decode(r#"{"cmd":"frame"}"#);
+        assert_eq!(plain, Ok(Command::Frame(Fit::Cover, Framing { zoom: 1.0, shift_x: 0.0, shift_y: 0.0 })));
+        assert!(Command::decode(r#"{"cmd":"frame","fill":"sideways"}"#).is_err());
+        assert!(Command::decode(r#"{"cmd":"frame","zoom":"big"}"#).is_err());
+        assert_eq!(
+            Command::decode(r#"{"cmd":"stage","file":"/run/x.rgba"}"#),
+            Ok(Command::Stage(Some("/run/x.rgba".into())))
+        );
+        assert_eq!(Command::decode(r#"{"cmd":"stage","file":null}"#), Ok(Command::Stage(None)));
+    }
 
     #[test]
     fn commands_without_arguments_decode() {

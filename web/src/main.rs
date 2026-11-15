@@ -135,11 +135,18 @@ fn run(args: Args) -> Result<u8, Fatal> {
         audio_wanted: Cell::new(false),
         crashes: Cell::new(0),
         frames_paused: Rc::new(Cell::new(false)),
+        device_look: Rc::new(RefCell::new(frames::Look::default())),
+        stage: RefCell::new(None),
     });
     session.page.set_muted(args.muted);
 
     let window = match args.frames {
-        Some(frames) => frames::hidden_window(&monitor, frames.size, session.page.widget()),
+        Some(frames) => {
+            let stage = frames::Stage::new(&monitor, frames.size, session.page.widget());
+            let window = stage.window().clone();
+            *session.stage.borrow_mut() = Some(stage);
+            window
+        }
         None => surface::create(
             &SurfaceOptions {
                 monitor: &monitor,
@@ -153,12 +160,19 @@ fn run(args: Args) -> Result<u8, Fatal> {
     // A device's frames: taken from the page for as long as the session lasts.
     let _capture = args.frames.map(|frames| {
         let weak = Rc::downgrade(&session);
-        let paused = session.frames_paused.clone();
-        frames::Capture::start(session.page.widget(), frames, args.fps.unwrap_or(30), paused, move || {
-            if let Some(session) = weak.upgrade() {
-                session.stop_with(Fatal::new("the device's program stopped taking frames"));
-            }
-        })
+        let (paused, look) = (session.frames_paused.clone(), session.device_look.clone());
+        frames::Capture::start(
+            session.page.widget(),
+            frames,
+            args.fps.unwrap_or(30),
+            paused,
+            look,
+            move || {
+                if let Some(session) = weak.upgrade() {
+                    session.stop_with(Fatal::new("the device's program stopped taking frames"));
+                }
+            },
+        )
     });
 
     let weak = Rc::downgrade(&session);
@@ -293,6 +307,10 @@ struct Session {
     crashes: Cell<u32>,
     /// For a device: no frames are taken while the wallpaper is paused.
     frames_paused: Rc<Cell<bool>>,
+    /// For a device: the part of the page it shows, and the snapshot's file.
+    device_look: Rc<RefCell<frames::Look>>,
+    /// For a device: the page's hidden window, drawn as finely as the look needs.
+    stage: RefCell<Option<frames::Stage>>,
 }
 
 impl Session {
@@ -336,6 +354,18 @@ impl Session {
                 if self.audio_wanted.get() && !self.state.borrow().paused {
                     self.page.run(&bridge::audio(&samples));
                 }
+            }
+            Command::Frame(fit, framing) => {
+                let mut look = self.device_look.borrow_mut();
+                (look.fit, look.framing, look.once) = (fit, framing, true);
+                if let Some(stage) = &*self.stage.borrow() {
+                    stage.frame(fit, framing.zoom);
+                }
+            }
+            Command::Stage(file) => {
+                let mut look = self.device_look.borrow_mut();
+                look.once = file.is_some();
+                look.stage = file;
             }
             Command::Quit => self.stop(),
         }

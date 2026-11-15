@@ -22,7 +22,9 @@
 //! ```
 
 mod client;
+mod cut;
 mod request;
 
 pub use client::{Client, Error, default_socket};
+pub use cut::{Cut, Fit, sample};
 pub use request::{Framing, PROTOCOL, Request, error, ok, split_path};

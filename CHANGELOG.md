@@ -2,6 +2,14 @@
 
 ## 0.3.2
 
+- A web wallpaper on a device is framed like a scene: the page is laid out as large as a
+  monitor would have it (its shape, at most Full HD) and the device gets the part its
+  `fill`, `look/zoom` and shifts say, where before the page was laid out at the device's own
+  size and the device's look did nothing. The page is drawn only as finely as that part
+  needs (between half and all of its pixels), so a small device stays cheap. A snapshot of
+  such a device works now too, cut from the page the plugin writes while snapshots are asked
+  for (`frame` and `stage` in the plugin protocol).
+
 - `snapshot` takes an optional `size` (`[width, height]`): the frame is drawn at that size
   instead of the output's, so an editor showing it gets it sharp at the size it shows it,
   without scaling. `version` lists the feature as `snapshot-size`.
