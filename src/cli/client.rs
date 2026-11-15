@@ -129,7 +129,13 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
         "reset" => Request::Reset { path: word(0, "which path")? },
         "snapshot" => {
             let file = std::path::absolute(word(0, "into which file")?).map_err(|e| e.to_string())?;
-            Request::Snapshot { output, file: file.to_string_lossy().into_owned(), look: None }
+            Request::Snapshot {
+                output,
+                file: file.to_string_lossy().into_owned(),
+                look: None,
+                size: None,
+                raw: false,
+            }
         }
         "watch" => Request::Watch,
         "reload" => Request::Reload,

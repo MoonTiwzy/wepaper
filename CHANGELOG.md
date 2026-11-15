@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2
+
+- `snapshot` takes an optional `size` (`[width, height]`): the frame is drawn at that size
+  instead of the output's, so an editor showing it gets it sharp at the size it shows it,
+  without scaling. `version` lists the feature as `snapshot-size`.
+
+- `snapshot` writes raw RGBA with `"format": "rgba"`: four bytes a pixel, rows from the top,
+  nothing else. Compressing a PNG was most of a snapshot's cost, paid on the thread that
+  draws: an editor showing a device at 30 snapshots a second slowed the device down.
+  (`snapshot-rgba`)
+
 ## 0.3.1
 
 - `snapshot` takes an optional `look` (`zoom`, `shift_x`, `shift_y`): that one frame is drawn

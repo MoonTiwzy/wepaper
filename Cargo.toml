@@ -4,7 +4,7 @@ members = ["engine", "ipc", "json", "web"]
 default-members = [".", "engine", "ipc", "json"]
 
 [workspace.package]
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 rust-version = "1.90"
 license = "MIT"
@@ -12,9 +12,9 @@ repository = "https://github.com/MoonTiwzy/wepaper"
 authors = ["MoonTiwzy"]
 
 [workspace.dependencies]
-wepaper-engine = { path = "engine", version = "0.3.1" }
-wepaper-ipc = { path = "ipc", version = "0.3.1" }
-wepaper-json = { path = "json", version = "0.3.1" }
+wepaper-engine = { path = "engine", version = "0.3.2" }
+wepaper-ipc = { path = "ipc", version = "0.3.2" }
+wepaper-json = { path = "json", version = "0.3.2" }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

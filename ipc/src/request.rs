@@ -50,6 +50,17 @@ impl Framing {
     }
 }
 
+/// A snapshot's `size`: `[width, height]`, each a whole number from 1 to 8192.
+fn snapshot_size(value: &Value) -> Result<(u32, u32), String> {
+    let side =
+        |v: &Value| v.as_f64().filter(|n| n.fract() == 0.0 && (1.0..=8192.0).contains(n)).map(|n| n as u32);
+    match value.as_array() {
+        Some([width, height]) => side(width).zip(side(height)),
+        _ => None,
+    }
+    .ok_or_else(|| "snapshot: \"size\" is [width, height], each from 1 to 8192".to_owned())
+}
+
 /// What a client asks of the daemon.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -112,6 +123,13 @@ pub enum Request {
         /// Drawn with this framing instead of the output's look, for this one
         /// frame: what the output shows is not changed.
         look: Option<Framing>,
+        /// Drawn at this size instead of the output's (width, height): an editor
+        /// that shows the frame wants it at the size it shows it.
+        size: Option<(u32, u32)>,
+        /// Written as raw RGBA (`"format": "rgba"`: four bytes a pixel, rows from
+        /// the top) instead of a PNG: for a program that shows it at once, many
+        /// times a second, compressing it is the most of the work.
+        raw: bool,
     },
     /// Turns this connection into a stream of events.
     Watch,
@@ -162,10 +180,18 @@ impl Request {
             Request::Hide { output } => obj! { "cmd" => "hide", "output" => on(output) },
             Request::Pause { output } => obj! { "cmd" => "pause", "output" => on(output) },
             Request::Resume { output } => obj! { "cmd" => "resume", "output" => on(output) },
-            Request::Snapshot { output, file, look } => {
+            Request::Snapshot { output, file, look, size, raw } => {
                 let mut message = obj! { "cmd" => "snapshot", "output" => on(output), "file" => file };
-                if let (Some(look), Value::Object(map)) = (look, &mut message) {
-                    map.insert("look", look.to_value());
+                if let Value::Object(map) = &mut message {
+                    if let Some(look) = look {
+                        map.insert("look", look.to_value());
+                    }
+                    if let Some((width, height)) = size {
+                        map.insert("size", Value::Array(vec![Value::from(*width), Value::from(*height)]));
+                    }
+                    if *raw {
+                        map.insert("format", Value::from("rgba"));
+                    }
                 }
                 message
             }
@@ -220,6 +246,18 @@ impl Request {
                 look: match message.get("look") {
                     Value::Null => None,
                     look => Some(Framing::parse(look)?),
+                },
+                size: match message.get("size") {
+                    Value::Null => None,
+                    size => Some(snapshot_size(size)?),
+                },
+                raw: match message.get("format") {
+                    Value::Null => false,
+                    format => match format.as_str() {
+                        Some("png") => false,
+                        Some("rgba") => true,
+                        _ => return Err("snapshot: \"format\" is \"png\" or \"rgba\"".to_owned()),
+                    },
                 },
             },
             "watch" => Request::Watch,

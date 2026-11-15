@@ -205,7 +205,7 @@ impl Daemon {
             Request::Version => Ok(obj! {
                 "version" => env!("CARGO_PKG_VERSION"),
                 "protocol" => PROTOCOL,
-                "features" => vec![Value::from("scene"), Value::from("video"), Value::from("snapshot-look")],
+                "features" => vec![Value::from("scene"), Value::from("video"), Value::from("snapshot-look"), Value::from("snapshot-size"), Value::from("snapshot-rgba")],
                 "gpu" => &self.context.description,
             }),
             Request::Get { path } => {
@@ -272,9 +272,9 @@ impl Daemon {
             }),
             Request::Pause { output } => self.pause(output.as_deref(), true),
             Request::Resume { output } => self.pause(output.as_deref(), false),
-            Request::Snapshot { output, file, look } => {
-                self.snapshot(output.as_deref(), Path::new(&file), look).map(|drawn| drawn.to_value())
-            }
+            Request::Snapshot { output, file, look, size, raw } => self
+                .snapshot(output.as_deref(), Path::new(&file), look, size, raw)
+                .map(|drawn| drawn.to_value()),
             Request::Watch => {
                 self.server.watch(client);
                 Ok(Value::Null)
@@ -701,20 +701,23 @@ impl Daemon {
     }
 
     /// Writes what the output shows to `file`; with `look`, that one frame is drawn
-    /// with that framing instead, and the output goes on as it was. Returns the
-    /// framing drawn.
+    /// with that framing instead, and with `size` at that size (best of the
+    /// output's shape), and the output goes on as it was; `raw` writes the pixels
+    /// as they are instead of a PNG. Returns the framing drawn.
     fn snapshot(
         &mut self,
         output: Option<&str>,
         file: &Path,
         look: Option<wepaper_ipc::Framing>,
+        size: Option<(u32, u32)>,
+        raw: bool,
     ) -> Result<wepaper_ipc::Framing, String> {
         use wepaper_engine::gpu::{Target, TextureFormat};
         let id = *self.targets(output)?.first().ok_or("there are no outputs")?;
-        let size = {
+        let size = size.unwrap_or_else(|| {
             let viewport = self.viewport(id);
             (viewport.width, viewport.height)
-        };
+        });
         // A device has no pointer: its wallpaper sees it in the middle.
         let pointer =
             self.display.heads.iter().find(|head| head.id == id).map_or([0.5, 0.5], |head| head.pointer);
@@ -738,7 +741,15 @@ impl Daemon {
         if drawn.flip {
             super::look::mirror_rows(&mut rgba, size.0 as usize);
         }
-        crate::cli::render::write_png(file, size.0, size.1, &rgba)?;
+        if raw {
+            // Written beside and moved in place: a reader never sees half a frame.
+            let part = file.with_extension(format!("{}.part", std::process::id()));
+            std::fs::write(&part, &rgba)
+                .and_then(|()| std::fs::rename(&part, file))
+                .map_err(|e| format!("{}: {e}", file.display()))?;
+        } else {
+            crate::cli::render::write_png(file, size.0, size.1, &rgba)?;
+        }
         Ok(drawn.framing())
     }
 

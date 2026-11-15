@@ -91,7 +91,7 @@ values over its own; a `show` without them starts it as it was left.
 | `show` | `wallpaper` (a folder or a workshop id), `output`?, `properties`? (an object; absent: the values it was left with) | `null` once it shows; an error, and the old wallpaper stays, when it cannot |
 | `hide` | `output`? | `null` |
 | `pause`, `resume` | `output`? | `null` |
-| `snapshot` | `file`, `output`?, `look`? (`{zoom, shift_x, shift_y}`, as `look/zoom` and the shifts take them) | `{zoom, shift_x, shift_y}`, the framing drawn; what the output shows right now is written as a PNG. With `look`, that one frame is drawn with that framing, and the output itself goes on as it was (feature `snapshot-look`) |
+| `snapshot` | `file`, `output`?, `look`? (`{zoom, shift_x, shift_y}`, as `look/zoom` and the shifts take them), `size`? (`[width, height]`: drawn at that size, best of the output's shape; feature `snapshot-size`), `format`? (`"png"`, or `"rgba"`: the pixels as they are, four bytes each, rows from the top; feature `snapshot-rgba`) | `{zoom, shift_x, shift_y}`, the framing drawn; what the output shows right now is written as a PNG. With `look`, that one frame is drawn with that framing, and the output itself goes on as it was (feature `snapshot-look`) |
 | `watch` | | `null`, and from then on the connection carries events |
 | `reload` | | `null`; the config file is read again and what was set over the socket is forgotten |
 | `quit` | | `null`; the daemon stops (`wepaper quit` waits until it is gone, and stops one that does not answer as a process) |

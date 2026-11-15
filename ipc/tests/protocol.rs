@@ -23,11 +23,19 @@ fn every_request_round_trips() {
         Request::Hide { output: None },
         Request::Pause { output: Some("HDMI-A-1".into()) },
         Request::Resume { output: None },
-        Request::Snapshot { output: Some("DP-1".into()), file: "/tmp/x.png".into(), look: None },
+        Request::Snapshot {
+            output: Some("DP-1".into()),
+            file: "/tmp/x.png".into(),
+            look: None,
+            size: None,
+            raw: false,
+        },
         Request::Snapshot {
             output: Some("LC III".into()),
             file: "/tmp/x.png".into(),
             look: Some(Framing { zoom: 0.725, shift_x: 0.15, shift_y: -0.05 }),
+            size: Some((420, 420)),
+            raw: true,
         },
         Request::Watch,
         Request::Reload,
@@ -53,8 +61,31 @@ fn snapshot_look_is_checked() {
             output: None,
             file: "/tmp/x.png".into(),
             look: Some(Framing { zoom: 0.5, shift_x: 0.0, shift_y: 0.0 }),
+            size: None,
+            raw: false,
         })
     );
+}
+
+#[test]
+fn snapshot_format_is_png_or_rgba() {
+    let with = |format: &str| {
+        Request::parse(&parse(&format!(r#"{{"cmd":"snapshot","file":"/tmp/x","format":{format}}}"#)).unwrap())
+    };
+    assert!(matches!(with("\"rgba\""), Ok(Request::Snapshot { raw: true, .. })));
+    assert!(matches!(with("\"png\""), Ok(Request::Snapshot { raw: false, .. })));
+    assert!(with("\"jpeg\"").unwrap_err().contains("format"));
+}
+
+#[test]
+fn snapshot_size_is_checked() {
+    let at = |size: &str| {
+        Request::parse(&parse(&format!(r#"{{"cmd":"snapshot","file":"/tmp/x.png","size":{size}}}"#)).unwrap())
+    };
+    assert!(matches!(at("[420, 236]"), Ok(Request::Snapshot { size: Some((420, 236)), .. })));
+    for wrong in ["[0, 10]", "[10]", "[9000, 10]", "\"big\"", "[1.5, 2]"] {
+        assert!(at(wrong).unwrap_err().contains("size"), "{wrong}");
+    }
 }
 
 #[test]
