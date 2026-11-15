@@ -5,7 +5,13 @@
 - `snapshot` takes an optional `look` (`zoom`, `shift_x`, `shift_y`): that one frame is drawn
   with that framing, and what the output shows does not change. It answers with the framing
   drawn. An editor can show more of the wallpaper than a device sees, around it, without
-  the device noticing. `version` lists the feature as `snapshot-look`.
+  the device noticing. `version` lists the feature as `snapshot-look`. A snapshot of a
+  mirrored output is mirrored, as the output shows it. `wepaper snapshot` prints the framing
+  only with `--json`.
+
+- A device keeps its frame rate when its look changes. Each change drew and sent a frame at
+  once: an editor turning a wheel over a 30 fps device had it drawn and fed 70 times a second.
+  A change now shows with the device's next frame.
 
 ## 0.3.0
 

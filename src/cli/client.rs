@@ -151,7 +151,8 @@ pub fn run(command: &str, mut args: lexopt::Parser) -> Result<(), Failure> {
     let value = client.call(&request).map_err(|e| e.to_string())?;
     if command == "status" && !json {
         println!("{}", summary(&value));
-    } else if !value.is_null() {
+    } else if !value.is_null() && (json || !matches!(request, Request::Snapshot { .. })) {
+        // A snapshot's framing is for programs: at a terminal the PNG is the answer.
         println!("{}", show(&value, json));
     }
     Ok(())

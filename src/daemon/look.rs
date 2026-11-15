@@ -47,6 +47,19 @@ impl Default for Look {
     }
 }
 
+/// Mirrors an RGBA picture `width` pixels wide left to right, in place: what the
+/// look's pass does to a mirrored output's frame, for a snapshot, which has no pass.
+pub fn mirror_rows(rgba: &mut [u8], width: usize) {
+    for row in rgba.chunks_exact_mut(width * 4) {
+        for x in 0..width / 2 {
+            let (left, right) = (x * 4, (width - 1 - x) * 4);
+            for c in 0..4 {
+                row.swap(left + c, right + c);
+            }
+        }
+    }
+}
+
 /// The names of a look's values, as the control tree has them.
 pub const KEYS: [&str; 10] =
     ["rate", "volume", "flip", "zoom", "shift_x", "shift_y", "brightness", "contrast", "saturation", "hue"];
@@ -202,6 +215,15 @@ mod tests {
         assert!(!Look { hue: 30.0, ..Look::default() }.plain_picture());
         // The zoom and the shifts frame the wallpaper itself: no pass for them either.
         assert!(Look { zoom: 2.0, shift: [0.3, -0.1], ..Look::default() }.plain_picture());
+    }
+
+    #[test]
+    fn a_mirrored_snapshot_is_mirrored_row_by_row() {
+        // Two rows of three pixels: 1 2 3 / 4 5 6.
+        let mut rgba: Vec<u8> = (1..=6).flat_map(|p| [p, p, p, 255]).collect();
+        mirror_rows(&mut rgba, 3);
+        let firsts: Vec<u8> = rgba.chunks(4).map(|p| p[0]).collect();
+        assert_eq!(firsts, [3, 2, 1, 6, 5, 4]);
     }
 
     #[test]

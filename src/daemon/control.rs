@@ -700,7 +700,6 @@ impl Daemon {
         }
     }
 
-    /// Writes what an output shows right now to a PNG.
     /// Writes what the output shows to `file`; with `look`, that one frame is drawn
     /// with that framing instead, and the output goes on as it was. Returns the
     /// framing drawn.
@@ -735,7 +734,11 @@ impl Daemon {
         wallpaper.set_frame(drawn.frame());
         wallpaper.draw(&mut self.engine, &input, Some(frame.framebuffer()), size, true);
         wallpaper.set_frame(own.frame());
-        crate::cli::render::write_png(file, size.0, size.1, &frame.read_rgba())?;
+        let mut rgba = frame.read_rgba();
+        if drawn.flip {
+            super::look::mirror_rows(&mut rgba, size.0 as usize);
+        }
+        crate::cli::render::write_png(file, size.0, size.1, &rgba)?;
         Ok(drawn.framing())
     }
 
