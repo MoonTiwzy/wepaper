@@ -29,6 +29,14 @@ pub const FIRST_ID: u32 = 0x4000_0000;
 const DEFAULT_FPS: u32 = 30;
 const MAX_SIDE: f64 = 8192.0;
 
+/// Whether a device draws a frame `now`: when its rate says it is `due`, and when
+/// paused only to show a change (`stale`). A change does not jump the rate: an
+/// editor turning a wheel would otherwise get a frame drawn and sent for every
+/// step, far above the device's rate.
+pub fn due(paused: bool, stale: bool, now: Instant, due: Instant) -> bool {
+    (!paused || stale) && now + Duration::from_millis(1) >= due
+}
+
 /// What a device is, as the config file and `devices/<name>` have it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Spec {
@@ -463,6 +471,22 @@ impl Device {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_device_draws_at_its_own_rate_whatever_changed() {
+        let now = Instant::now();
+        let later = now + Duration::from_millis(20);
+        // Not due yet: it waits, also when its look changed (stale) a moment ago.
+        assert!(!due(false, false, now, later));
+        assert!(!due(false, true, now, later));
+        // Due: it draws.
+        assert!(due(false, false, later, later));
+        assert!(due(false, true, later, later));
+        // Paused, it draws only a change, and that at its rate too.
+        assert!(!due(true, false, later, later));
+        assert!(!due(true, true, now, later));
+        assert!(due(true, true, later, later));
+    }
 
     fn parse(text: &str) -> Value {
         wepaper_json::parse(text).unwrap()

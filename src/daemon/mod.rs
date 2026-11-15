@@ -882,11 +882,10 @@ impl Daemon {
             let (id, size) = (device.id, device.spec.size);
             let Some(slot) = self.slots.get_mut(&id) else { continue };
             let Some(wallpaper) = slot.wallpaper.as_mut() else { continue };
-            if slot.paused && !slot.stale {
-                continue;
-            }
-            if !slot.stale && now + Duration::from_millis(1) < slot.due {
-                wake = Some(wake.map_or(slot.due, |at| at.min(slot.due)));
+            if !device::due(slot.paused, slot.stale, now, slot.due) {
+                if !slot.paused || slot.stale {
+                    wake = Some(wake.map_or(slot.due, |at| at.min(slot.due)));
+                }
                 continue;
             }
             let interval = Duration::from_secs_f64(1.0 / f64::from(device.spec.fps.max(1)));
