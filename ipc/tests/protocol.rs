@@ -1,6 +1,6 @@
 //! The wire format: every request survives the trip, and bad ones say why.
 
-use wepaper_ipc::{Request, error, ok, split_path};
+use wepaper_ipc::{Framing, Request, error, ok, split_path};
 use wepaper_json::{Value, obj, parse};
 
 #[test]
@@ -23,7 +23,12 @@ fn every_request_round_trips() {
         Request::Hide { output: None },
         Request::Pause { output: Some("HDMI-A-1".into()) },
         Request::Resume { output: None },
-        Request::Snapshot { output: Some("DP-1".into()), file: "/tmp/x.png".into() },
+        Request::Snapshot { output: Some("DP-1".into()), file: "/tmp/x.png".into(), look: None },
+        Request::Snapshot {
+            output: Some("LC III".into()),
+            file: "/tmp/x.png".into(),
+            look: Some(Framing { zoom: 0.725, shift_x: 0.15, shift_y: -0.05 }),
+        },
         Request::Watch,
         Request::Reload,
         Request::Quit,
@@ -33,6 +38,23 @@ fn every_request_round_trips() {
         assert!(!wire.contains('\n'), "a request is one line: {wire}");
         assert_eq!(Request::parse(&parse(&wire).unwrap()), Ok(request), "{wire}");
     }
+}
+
+#[test]
+fn snapshot_look_is_checked() {
+    let bad =
+        Request::parse(&parse(r#"{"cmd":"snapshot","file":"/tmp/x.png","look":{"zoom":"big"}}"#).unwrap());
+    assert!(bad.unwrap_err().contains("look"));
+    let half =
+        Request::parse(&parse(r#"{"cmd":"snapshot","file":"/tmp/x.png","look":{"zoom":0.5}}"#).unwrap());
+    assert_eq!(
+        half,
+        Ok(Request::Snapshot {
+            output: None,
+            file: "/tmp/x.png".into(),
+            look: Some(Framing { zoom: 0.5, shift_x: 0.0, shift_y: 0.0 }),
+        })
+    );
 }
 
 #[test]

@@ -5,6 +5,51 @@ use wepaper_json::{Value, obj};
 /// The protocol's version. It only grows: a client of an older version keeps working.
 pub const PROTOCOL: u32 = 1;
 
+/// A framing for one snapshot, in the units of an output's look (`look/zoom`,
+/// `look/shift_x`, `look/shift_y`): 1 as the fill has it, shifts in widths and
+/// heights of the output, right and up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Framing {
+    /// 1 as the fill has it, 2 twice as large.
+    pub zoom: f32,
+    /// Moved right, in widths of the output.
+    pub shift_x: f32,
+    /// Moved up, in heights of the output.
+    pub shift_y: f32,
+}
+
+impl Framing {
+    /// The range a snapshot's framing is held to.
+    const ZOOM: (f32, f32) = (0.01, 20.0);
+    const SHIFT: (f32, f32) = (-40.0, 40.0);
+
+    /// As the wire has it.
+    pub fn to_value(self) -> Value {
+        obj! { "zoom" => self.zoom, "shift_x" => self.shift_x, "shift_y" => self.shift_y }
+    }
+
+    /// `{"zoom", "shift_x", "shift_y"}`, each a number; a missing zoom is 1, a
+    /// missing shift 0.
+    pub fn parse(value: &Value) -> Result<Self, String> {
+        if value.as_object().is_none() {
+            return Err("\"look\" is an object: zoom, shift_x, shift_y".to_owned());
+        }
+        let number = |key: &str, default: f32, range: (f32, f32)| match value.get(key) {
+            Value::Null => Ok(default),
+            other => other
+                .as_f64()
+                .filter(|n| n.is_finite())
+                .map(|n| (n as f32).clamp(range.0, range.1))
+                .ok_or_else(|| format!("\"look\": {key} is a number")),
+        };
+        Ok(Self {
+            zoom: number("zoom", 1.0, Self::ZOOM)?,
+            shift_x: number("shift_x", 0.0, Self::SHIFT)?,
+            shift_y: number("shift_y", 0.0, Self::SHIFT)?,
+        })
+    }
+}
+
 /// What a client asks of the daemon.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Request {
@@ -64,6 +109,9 @@ pub enum Request {
         output: Option<String>,
         /// Where to write the PNG.
         file: String,
+        /// Drawn with this framing instead of the output's look, for this one
+        /// frame: what the output shows is not changed.
+        look: Option<Framing>,
     },
     /// Turns this connection into a stream of events.
     Watch,
@@ -114,8 +162,12 @@ impl Request {
             Request::Hide { output } => obj! { "cmd" => "hide", "output" => on(output) },
             Request::Pause { output } => obj! { "cmd" => "pause", "output" => on(output) },
             Request::Resume { output } => obj! { "cmd" => "resume", "output" => on(output) },
-            Request::Snapshot { output, file } => {
-                obj! { "cmd" => "snapshot", "output" => on(output), "file" => file }
+            Request::Snapshot { output, file, look } => {
+                let mut message = obj! { "cmd" => "snapshot", "output" => on(output), "file" => file };
+                if let (Some(look), Value::Object(map)) = (look, &mut message) {
+                    map.insert("look", look.to_value());
+                }
+                message
             }
             Request::Watch => obj! { "cmd" => "watch" },
             Request::Reload => obj! { "cmd" => "reload" },
@@ -162,7 +214,14 @@ impl Request {
             "hide" => Request::Hide { output: output()? },
             "pause" => Request::Pause { output: output()? },
             "resume" => Request::Resume { output: output()? },
-            "snapshot" => Request::Snapshot { output: output()?, file: text("file")? },
+            "snapshot" => Request::Snapshot {
+                output: output()?,
+                file: text("file")?,
+                look: match message.get("look") {
+                    Value::Null => None,
+                    look => Some(Framing::parse(look)?),
+                },
+            },
             "watch" => Request::Watch,
             "reload" => Request::Reload,
             "quit" => Request::Quit,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- `snapshot` takes an optional `look` (`zoom`, `shift_x`, `shift_y`): that one frame is drawn
+  with that framing, and what the output shows does not change. It answers with the framing
+  drawn. An editor can show more of the wallpaper than a device sees, around it, without
+  the device noticing. `version` lists the feature as `snapshot-look`.
+
 ## 0.3.0
 
 - Web wallpapers can `fetch` their own files. WebKit's `fetch` does not read local files, and

@@ -205,7 +205,7 @@ impl Daemon {
             Request::Version => Ok(obj! {
                 "version" => env!("CARGO_PKG_VERSION"),
                 "protocol" => PROTOCOL,
-                "features" => vec![Value::from("scene"), Value::from("video")],
+                "features" => vec![Value::from("scene"), Value::from("video"), Value::from("snapshot-look")],
                 "gpu" => &self.context.description,
             }),
             Request::Get { path } => {
@@ -272,8 +272,8 @@ impl Daemon {
             }),
             Request::Pause { output } => self.pause(output.as_deref(), true),
             Request::Resume { output } => self.pause(output.as_deref(), false),
-            Request::Snapshot { output, file } => {
-                self.snapshot(output.as_deref(), Path::new(&file)).map(|()| Value::Null)
+            Request::Snapshot { output, file, look } => {
+                self.snapshot(output.as_deref(), Path::new(&file), look).map(|drawn| drawn.to_value())
             }
             Request::Watch => {
                 self.server.watch(client);
@@ -701,7 +701,15 @@ impl Daemon {
     }
 
     /// Writes what an output shows right now to a PNG.
-    fn snapshot(&mut self, output: Option<&str>, file: &Path) -> Result<(), String> {
+    /// Writes what the output shows to `file`; with `look`, that one frame is drawn
+    /// with that framing instead, and the output goes on as it was. Returns the
+    /// framing drawn.
+    fn snapshot(
+        &mut self,
+        output: Option<&str>,
+        file: &Path,
+        look: Option<wepaper_ipc::Framing>,
+    ) -> Result<wepaper_ipc::Framing, String> {
         use wepaper_engine::gpu::{Target, TextureFormat};
         let id = *self.targets(output)?.first().ok_or("there are no outputs")?;
         let size = {
@@ -722,8 +730,13 @@ impl Daemon {
             pointer_down: false,
             daytime: daytime(),
         };
+        let own = slot.shown.look;
+        let drawn = look.map_or(own, |framing| own.framed(framing));
+        wallpaper.set_frame(drawn.frame());
         wallpaper.draw(&mut self.engine, &input, Some(frame.framebuffer()), size, true);
-        crate::cli::render::write_png(file, size.0, size.1, &frame.read_rgba())
+        wallpaper.set_frame(own.frame());
+        crate::cli::render::write_png(file, size.0, size.1, &frame.read_rgba())?;
+        Ok(drawn.framing())
     }
 
     /// Tells the watchers that something changed.

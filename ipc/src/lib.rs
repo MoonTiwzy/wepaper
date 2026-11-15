@@ -25,4 +25,4 @@ mod client;
 mod request;
 
 pub use client::{Client, Error, default_socket};
-pub use request::{PROTOCOL, Request, error, ok, split_path};
+pub use request::{Framing, PROTOCOL, Request, error, ok, split_path};

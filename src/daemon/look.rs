@@ -67,6 +67,16 @@ impl Look {
         wepaper_engine::Frame { zoom: self.zoom, shift: [self.shift[0] * side, self.shift[1]] }
     }
 
+    /// This look with the part shown taken from a snapshot's framing.
+    pub fn framed(&self, framing: wepaper_ipc::Framing) -> Self {
+        Self { zoom: framing.zoom, shift: [framing.shift_x, framing.shift_y], ..*self }
+    }
+
+    /// The part shown, as a snapshot's framing.
+    pub fn framing(&self) -> wepaper_ipc::Framing {
+        wepaper_ipc::Framing { zoom: self.zoom, shift_x: self.shift[0], shift_y: self.shift[1] }
+    }
+
     /// The value called `key`, `None` for a name that is not one of [`KEYS`].
     pub fn get(&self, key: &str) -> Option<Value> {
         Some(match key {
@@ -192,6 +202,16 @@ mod tests {
         assert!(!Look { hue: 30.0, ..Look::default() }.plain_picture());
         // The zoom and the shifts frame the wallpaper itself: no pass for them either.
         assert!(Look { zoom: 2.0, shift: [0.3, -0.1], ..Look::default() }.plain_picture());
+    }
+
+    #[test]
+    fn a_snapshot_framing_replaces_only_the_part_shown() {
+        let look = Look { flip: true, zoom: 1.5, shift: [0.25, -0.5], hue: 90.0, ..Look::default() };
+        let framed = look.framed(wepaper_ipc::Framing { zoom: 0.5, shift_x: 0.25, shift_y: 0.1 });
+        assert_eq!(framed, Look { zoom: 0.5, shift: [0.25, 0.1], ..look });
+        // Mirrored, the wallpaper is moved the other way, as for the output itself.
+        assert_eq!(framed.frame(), wepaper_engine::Frame { zoom: 0.5, shift: [-0.25, 0.1] });
+        assert_eq!(framed.framing(), wepaper_ipc::Framing { zoom: 0.5, shift_x: 0.25, shift_y: 0.1 });
     }
 
     #[test]
