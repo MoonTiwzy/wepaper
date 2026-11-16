@@ -299,6 +299,11 @@ pub fn run(mut args: lexopt::Parser) -> Result<(), Failure> {
     result
 }
 
+unsafe extern "C" {
+    /// libwayland-client: dispatches what waits on a display's default queue, without reading.
+    fn wl_display_dispatch_pending(display: *mut std::ffi::c_void) -> std::ffi::c_int;
+}
+
 impl Daemon {
     fn run(&mut self, queue: &mut EventQueue<Display>) -> Result<(), Failure> {
         self.watch.working();
@@ -306,6 +311,12 @@ impl Daemon {
             queue
                 .dispatch_pending(&mut self.display)
                 .map_err(|e| format!("the compositor went away: {e}"))?;
+            // Our objects live on a queue of their own; what a library made on the
+            // connection's first queue (the driver's buffers, since it stopped keeping a
+            // queue for them) is read by nobody unless it is read here, and every event
+            // sent to it would stay in memory for good. None of it has a listener.
+            // SAFETY: the display is the live one of `self.connection`, used on this thread only.
+            unsafe { wl_display_dispatch_pending(self.connection.backend().display_ptr().cast()) };
             self.follow_outputs();
             self.follow_devices();
             for incoming in self.server.receive() {
@@ -893,6 +904,21 @@ impl Daemon {
                 && let Err(error) = self.context.present(egl)
             {
                 log::warn!("{error}");
+            }
+            // Where the driver's library keeps a buffer release for every frame shown, a
+            // surface that has shown its share gives way to a new one: the releases go
+            // with it. The buffers are sized again before the next frame is drawn.
+            if self.context.hoards_releases()
+                && let Some(sheet) = self
+                    .display
+                    .heads
+                    .iter_mut()
+                    .find(|head| head.id == id)
+                    .and_then(|head| head.sheet.as_mut())
+                && sheet.shown_one()
+                && self.context.make_current(None).is_ok()
+            {
+                sheet.renew();
             }
         }
         self.draw_devices(now, wake)

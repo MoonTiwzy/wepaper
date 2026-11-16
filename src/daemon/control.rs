@@ -46,9 +46,18 @@ fn descend<'a>(tree: &'a Value, path: &[&str]) -> Option<&'a Value> {
     })
 }
 
+/// Whether the answer to a request for `path` holds the allocator's count.
+fn asks_heap(path: &[&str]) -> bool {
+    path.iter().zip(["memory", "heap"]).all(|(part, known)| *part == known)
+}
+
 /// The allocator's own count of the process's memory: what is in use, what it holds
 /// free for the next request, and what it took from the system in blocks of their own.
 /// Tells a leak (in use grows) from a heap that is only not given back (free grows).
+///
+/// Counting walks every free block of the heap, on the thread that draws: a third of a
+/// second in a heap of two gigabytes. It is done for who asks for it, not for every
+/// answer the tree gives.
 #[cfg(target_env = "gnu")]
 fn heap() -> Value {
     // SAFETY: reads the allocator's statistics; no preconditions.
@@ -105,8 +114,8 @@ fn output_node(slot: &super::Slot, size: (u32, u32), scale: f64, device: bool) -
 }
 
 impl Daemon {
-    /// Everything the daemon knows, as one tree.
-    fn tree(&mut self) -> Value {
+    /// Everything the daemon knows, as one tree; the allocator's count only `with_heap`.
+    fn tree(&mut self, with_heap: bool) -> Value {
         let mut outputs = Map::new();
         for head in &self.display.heads {
             let (Some(name), Some(slot)) = (&head.name, self.slots.get(&head.id)) else { continue };
@@ -172,7 +181,7 @@ impl Daemon {
                 "optimising" => self.optimising,
                 "listening" => self.engine.listening(),
                 "peak_effect_buffers" => self.engine.peak_buffers(),
-                "heap" => heap(),
+                "heap" => if with_heap { heap() } else { Value::Null },
             },
         }
     }
@@ -209,13 +218,13 @@ impl Daemon {
                 "gpu" => &self.context.description,
             }),
             Request::Get { path } => {
-                let tree = self.tree();
-                descend(&tree, &split_path(&path))
-                    .cloned()
-                    .ok_or_else(|| format!("there is nothing at \"{path}\""))
+                let parts = split_path(&path);
+                let tree = self.tree(asks_heap(&parts));
+                descend(&tree, &parts).cloned().ok_or_else(|| format!("there is nothing at \"{path}\""))
             }
             Request::List { path } => {
-                let tree = self.tree();
+                // The names under a path: none of them takes counting the heap.
+                let tree = self.tree(false);
                 match descend(&tree, &split_path(&path)) {
                     Some(Value::Object(map)) => {
                         Ok(Value::Array(map.iter().map(|(key, _)| Value::from(key)).collect()))
@@ -802,5 +811,22 @@ fn write_snapshot(file: &Path, size: (u32, u32), rgba: &[u8], raw: bool) -> Resu
             .map_err(|e| format!("{}: {e}", file.display()))
     } else {
         crate::cli::render::write_png(file, size.0, size.1, rgba)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::asks_heap;
+
+    #[test]
+    fn the_heap_is_counted_for_who_asks_for_it_only() {
+        for path in [&[][..], &["memory"], &["memory", "heap"], &["memory", "heap", "used"]] {
+            assert!(asks_heap(path), "{path:?}");
+        }
+        for path in
+            [&["outputs"][..], &["memory", "optimising"], &["config", "fps"], &["outputs", "DP-1", "fps"]]
+        {
+            assert!(!asks_heap(path), "{path:?}");
+        }
     }
 }

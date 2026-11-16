@@ -42,7 +42,13 @@ pub struct Sheet {
     // The EGL surface goes before the window it draws to.
     pub egl: Option<gpu::Surface>,
     window: Option<WlEglSurface>,
+    /// The frames the EGL surface has shown since it was made.
+    shown: u32,
 }
+
+/// The frames a surface shows before it is made anew, where the driver's library
+/// keeps a buffer release for each: two minutes at 60 a second, a megabyte and a half.
+const RENEW_AFTER: u32 = 7200;
 
 impl Sheet {
     /// The size of its buffers in device pixels.
@@ -88,6 +94,25 @@ impl Sheet {
         }
         self.resized = false;
         true
+    }
+}
+
+impl Sheet {
+    /// Counts a frame shown. `true` when the surface has shown so many that it is time
+    /// to make it anew.
+    pub fn shown_one(&mut self) -> bool {
+        self.shown += 1;
+        self.shown >= RENEW_AFTER
+    }
+
+    /// Drops the EGL surface and its window, and with them what the driver's library
+    /// held for them; the next [`fit`](Self::fit) makes new ones. The surface must not
+    /// be the one the context draws to. What is on screen stays until the next frame.
+    pub fn renew(&mut self) {
+        self.egl = None;
+        self.window = None;
+        self.shown = 0;
+        self.resized = true;
     }
 }
 
@@ -246,6 +271,7 @@ impl Display {
             closed: false,
             egl: None,
             window: None,
+            shown: 0,
         });
     }
 

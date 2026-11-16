@@ -2,6 +2,16 @@
 
 ## 0.3.2
 
+- A daemon that had run for hours stuttered, and no longer does. Two things made it. NVIDIA's
+  library for Wayland surfaces (egl-wayland2, up to 1.0.2) keeps every buffer release the
+  compositor sends when the compositor has explicit sync: 224 bytes a frame, for as long as
+  the surface lives. And every `get` counted the allocator's heap, which takes walking it: a
+  third of a second on the thread that draws once the heap had grown to two gigabytes, paid
+  several times every few seconds for a frontend that polls. Now the heap is counted for
+  `memory/heap` only; a surface on such a library is made anew every 7200 frames, and the
+  releases go with it; and the connection's default queue is read, which is where the
+  library leaves the releases from 1.0.3 on.
+
 - A web wallpaper on a device is framed like a scene: the page is laid out as large as a
   monitor would have it (its shape, at most Full HD) and the device gets the part its
   `fill`, `look/zoom` and shifts say, where before the page was laid out at the device's own

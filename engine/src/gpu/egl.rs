@@ -23,6 +23,8 @@ pub struct Context {
     gl: Gl,
     /// A human-readable note on what the context runs on.
     pub description: String,
+    /// Window surfaces are to be made anew now and then: see [`Context::hoards_releases`].
+    hoards_releases: bool,
 }
 
 /// A window the context can draw to.
@@ -69,7 +71,22 @@ impl Context {
         // SAFETY: the caller vouches for `wl_display`.
         let display = unsafe { egl.get_platform_display(PLATFORM_WAYLAND, wl_display, &[egl::ATTRIB_NONE]) }
             .map_err(|e| fail("no EGL display for the Wayland connection", e))?;
-        Self::on_display(egl, display, true, "wayland".to_owned())
+        let mut context = Self::on_display(egl, display, true, "wayland".to_owned())?;
+        // The library is in the process by now: making the display loaded it.
+        context.hoards_releases = std::fs::read_to_string("/proc/self/maps")
+            .is_ok_and(|maps| maps.lines().filter_map(nvidia_surfaces).any(version_hoards));
+        Ok(context)
+    }
+
+    /// Whether a window surface keeps every buffer release the compositor sends for as
+    /// long as it lives, so that one that lives long must be made anew now and then.
+    ///
+    /// NVIDIA's library for Wayland surfaces, up to 1.0.2, gives each surface a queue for
+    /// the releases and never reads it when the compositor has explicit sync: 224 bytes a
+    /// frame, two gigabytes after a day on two monitors. Destroying the surface is the one
+    /// thing that empties the queue.
+    pub fn hoards_releases(&self) -> bool {
+        self.hoards_releases
     }
 
     fn on_display(egl: Rc<Egl>, display: egl::Display, window: bool, name: String) -> Result<Self, GpuError> {
@@ -130,7 +147,7 @@ impl Context {
             Box::new(move |name| name.to_str().map_or(std::ptr::null(), &lookup)),
         );
         let description = format!("{} ({}, {name})", gl.caps().renderer, gl.caps().version);
-        Ok(Self { egl, display, config, context, gl, description })
+        Ok(Self { egl, display, config, context, gl, description, hoards_releases: false })
     }
 
     /// The handle everything else draws through.
@@ -195,6 +212,24 @@ impl Drop for Surface {
     }
 }
 
+/// The version in the name of NVIDIA's library for Wayland surfaces, when a line of
+/// `/proc/self/maps` names it: `1.0.2` of `/usr/lib/libnvidia-egl-wayland2.so.1.0.2`.
+fn nvidia_surfaces(line: &str) -> Option<&str> {
+    let version = line.rsplit('/').next()?.strip_prefix("libnvidia-egl-wayland2.so")?;
+    Some(version.trim_start_matches('.').split(' ').next().unwrap_or_default())
+}
+
+/// Whether the library of this version keeps the releases: every one up to 1.0.2 does.
+/// A name that does not say the version counts as one that does: a surface made anew
+/// for nothing costs a few buffers, the queue costs the memory of the machine.
+fn version_hoards(version: &str) -> bool {
+    let parts: Vec<Option<u32>> = version.split('.').map(|part| part.parse().ok()).collect();
+    match parts[..] {
+        [Some(major), Some(minor), Some(patch), ..] => (major, minor, patch) <= (1, 0, 2),
+        _ => true,
+    }
+}
+
 /// The displays a headless context can be made on, most specific first.
 fn headless_displays(egl: &Egl, wanted: Option<&str>) -> Vec<(egl::Display, String)> {
     type QueryDevices = unsafe extern "system" fn(egl::Int, *mut *mut c_void, *mut egl::Int) -> egl::Boolean;
@@ -255,4 +290,27 @@ fn same_gpu(a: &str, b: &str) -> bool {
         std::fs::canonicalize(std::path::Path::new("/sys/class/drm").join(name).join("device")).ok()
     };
     a == b || (device(a).is_some() && device(a) == device(b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{nvidia_surfaces, version_hoards};
+
+    #[test]
+    fn the_library_that_keeps_releases_is_told_by_its_file() {
+        let line = |file: &str| format!("7f9bb81bf000-7f9bb81c1000 r--p 0000c000 00:24 103361    {file}");
+        let hoards = |file: &str| nvidia_surfaces(&line(file)).map(version_hoards);
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland2.so.1.0.2"), Some(true));
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland2.so.1.0.2 (deleted)"), Some(true));
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland2.so.1.0.0"), Some(true));
+        assert_eq!(
+            hoards("/nix/store/abc-egl-wayland2-1.0.3/lib/libnvidia-egl-wayland2.so.1.0.3"),
+            Some(false)
+        );
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland2.so.1.1.0"), Some(false));
+        // No version in the name: taken for one that keeps them.
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland2.so.1"), Some(true));
+        assert_eq!(hoards("/usr/lib/libnvidia-egl-wayland.so.1.1.24"), None);
+        assert_eq!(hoards("/usr/lib/libEGL_mesa.so.0.0.0"), None);
+    }
 }
